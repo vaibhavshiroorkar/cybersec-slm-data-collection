@@ -30,6 +30,15 @@ def try_import(name: str):
         return None
 
 
+# ------------------------------------------------------------- .env loading ---
+# Load a project .env (if present) so API keys land in os.environ before any
+# stage reads them. python-dotenv is optional; without it, keys must be exported
+# in the shell. Existing environment variables are never overridden.
+_dotenv = try_import("dotenv")
+if _dotenv is not None:
+    _dotenv.load_dotenv(_dotenv.find_dotenv(usecwd=True))
+
+
 # ---------------------------------------------------------------- paths ------
 def data_root() -> str:
     return os.environ.get("CYBERSEC_SLM_DATA_ROOT") or os.getcwd()

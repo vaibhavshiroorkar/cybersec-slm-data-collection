@@ -6,9 +6,11 @@ response parsing are split so the parser can be unit-tested against a captured
 payload without any network or credentials.
 
 Credentials (both required for a live search):
-    GOOGLE_API_KEY   an API key with the Custom Search API enabled
-    GOOGLE_CSE_ID    the Programmable Search Engine id (the ``cx`` value),
-                     configured to "Search the entire web"
+    GOOGLE_SEARCH_API_KEY    an API key with the Custom Search API enabled
+                             (legacy alias: GOOGLE_API_KEY)
+    GOOGLE_SEARCH_ENGINE_ID  the Programmable Search Engine id (the ``cx`` value),
+                             configured to "Search the entire web"
+                             (legacy alias: GOOGLE_CSE_ID)
 
 Free tier is 100 queries/day; the client keeps requests modest (<=10 results
 per query, which is one API call).
@@ -64,12 +66,14 @@ def google_search(query: str, *, api_key: str | None = None,
     ``client`` is an optional ``httpx.Client`` (handy for tests / connection
     reuse); if omitted a short-lived one is created.
     """
-    api_key = api_key or os.environ.get("GOOGLE_API_KEY")
-    cse_id = cse_id or os.environ.get("GOOGLE_CSE_ID")
+    api_key = (api_key or os.environ.get("GOOGLE_SEARCH_API_KEY")
+               or os.environ.get("GOOGLE_API_KEY"))
+    cse_id = (cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+              or os.environ.get("GOOGLE_CSE_ID"))
     if not api_key or not cse_id:
         raise SearchError(
-            "Google search needs GOOGLE_API_KEY and GOOGLE_CSE_ID. Create an "
-            "API key with the Custom Search API enabled and a Programmable "
+            "Google search needs GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID. "
+            "Create an API key with the Custom Search API enabled and a Programmable "
             "Search Engine (cx) set to search the entire web.")
 
     params = {"key": api_key, "cx": cse_id, "q": query,

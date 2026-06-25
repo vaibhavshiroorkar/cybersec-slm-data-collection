@@ -76,8 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="discover + write CSV but do not append to the sheet")
     d.add_argument("--out", default=None,
                    help="path for the candidate CSV (default: logs/discovered/)")
-    d.add_argument("--api-key", default=None, help="Google API key (env: GOOGLE_API_KEY)")
-    d.add_argument("--cse-id", default=None, help="Programmable Search id (env: GOOGLE_CSE_ID)")
+    d.add_argument("--api-key", default=None,
+                   help="Google API key (env: GOOGLE_SEARCH_API_KEY)")
+    d.add_argument("--cse-id", default=None,
+                   help="Programmable Search id (env: GOOGLE_SEARCH_ENGINE_ID)")
     d.add_argument("--creds", default=None,
                    help="service-account JSON for append (env: GOOGLE_SHEETS_CREDENTIALS)")
 
@@ -121,8 +123,10 @@ def main(argv: list[str] | None = None) -> None:
             args.sheet_url, domains=args.domains,
             per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
             dry_run=args.dry_run, out_csv=args.out,
-            api_key=args.api_key or os.environ.get("GOOGLE_API_KEY"),
-            cse_id=args.cse_id or os.environ.get("GOOGLE_CSE_ID"),
+            api_key=(args.api_key or os.environ.get("GOOGLE_SEARCH_API_KEY")
+                     or os.environ.get("GOOGLE_API_KEY")),
+            cse_id=(args.cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+                    or os.environ.get("GOOGLE_CSE_ID")),
             creds_path=args.creds or os.environ.get("GOOGLE_SHEETS_CREDENTIALS"))
         print(f"discover: {summary['found']} hits, {summary['new']} new, "
               f"{summary['appended']} appended -> {summary['csv']}")
