@@ -7,7 +7,8 @@ stages that you can run on their own or back to back:
 - **Extraction** — pull data from each source (datasets, PDFs, feeds, a few
   crawlable sites) and normalize everything to JSONL.
 - **Cleaning** — take that raw JSONL and sanitize it, check it for anomalies,
-  drop duplicates, strip out PII, and filter to English.
+  drop duplicates, strip out PII, and normalize the language to English
+  (translating non-English text rather than dropping it).
 
 It's packaged as a proper installable package (`cybersec_slm`) with a single
 CLI, so you don't have to remember which script lives where.

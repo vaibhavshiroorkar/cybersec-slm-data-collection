@@ -8,8 +8,6 @@ Individual stages:
     cybersec-slm extract  [scrape|fetch|html|nvd|all|table] [--nvd-key KEY]
     cybersec-slm clean    [all|sanitize|dedup|pii|lang|report|balance] [--limit N] [--cap N]
     cybersec-slm run      [--sources X.xlsx] [--workers N]   # parallel streaming fetch+clean
-    cybersec-slm chunk    [--chunk-size N] [--overlap N]
-    cybersec-slm split    [--ratio 0.8 0.1 0.1] [--seed 42]
     cybersec-slm validate
     cybersec-slm discover [--domains ...] [--dry-run]        # search engines -> tracking sheet
 """
@@ -43,22 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cap records per file (smoke test)")
     c.add_argument("--cap", type=int, default=None,
                    help="max records per domain (balance action)")
-
-    # ── chunk ─────────────────────────────────────────────────────────────────
-    ch = sub.add_parser("chunk",
-                        help="split cleaned records into training windows -> chunked/")
-    ch.add_argument("--chunk-size", type=int, default=4000,
-                    help="target chunk size in characters (default 4000 ≈ 1024 tokens)")
-    ch.add_argument("--overlap", type=int, default=200,
-                    help="overlap between consecutive chunks in characters (default 200)")
-
-    # ── split ─────────────────────────────────────────────────────────────────
-    sp = sub.add_parser("split",
-                        help="stratified train/val/test split -> train/ val/ test/")
-    sp.add_argument("--ratio", type=float, nargs=3, default=[0.8, 0.1, 0.1],
-                    metavar=("TRAIN", "VAL", "TEST"),
-                    help="split ratios, must sum to 1.0 (default: 0.8 0.1 0.1)")
-    sp.add_argument("--seed", type=int, default=42)
 
     # ── validate ──────────────────────────────────────────────────────────────
     sub.add_parser("validate",
@@ -100,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="service-account JSON for append (env: GOOGLE_SHEETS_CREDENTIALS)")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    sub.add_parser("all", help="extract -> clean -> chunk -> split (full pipeline)")
+    sub.add_parser("all", help="extract -> clean (full pipeline)")
     return p
 
 
@@ -129,14 +111,6 @@ def main(argv: list[str] | None = None) -> None:
                                keep_raw=args.keep_raw,
                                final_dedup=not args.no_final_dedup)
 
-    elif args.stage == "chunk":
-        from .chunking.chunker import run_chunking
-        run_chunking(chunk_chars=args.chunk_size, overlap_chars=args.overlap)
-
-    elif args.stage == "split":
-        from .splitting.split import run_split
-        run_split(ratio=tuple(args.ratio))  # type: ignore[arg-type]
-
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
@@ -156,12 +130,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "all":
         from .extraction import run as extraction
         from .cleaning import run as cleaning
-        from .chunking.chunker import run_chunking
-        from .splitting.split import run_split
         extraction.run("all")
         cleaning.run("all")
-        run_chunking()
-        run_split()
 
 
 if __name__ == "__main__":
