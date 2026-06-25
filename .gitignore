@@ -2,8 +2,15 @@
 .env
 .venv
 venv
-raw_data
-cleaned_data
+
+# Credentials — never commit keys (defensive; real creds live in ~/.kaggle, env vars, etc.)
+credentials.json
+*-credentials.json
+service-account*.json
+gcp-*.json
+kaggle.json
+access_token
+secrets/
 
 # Python
 __pycache__

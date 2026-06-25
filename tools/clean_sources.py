@@ -35,7 +35,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 PROJECT = r"c:/Users/vaibh/Documents/Main/Projects/cybersec-slm-data-pipeline"
-XLSX = os.path.join(PROJECT, "sources", "Sources (1).xlsx")
+XLSX = os.path.join(PROJECT, "sources", "Sources.xlsx")
 DEFAULT_SHEET = "Finalized"
 RESULTS_JSON = os.path.join(PROJECT, "logs", "clean_sources_results.json")
 
@@ -223,49 +223,78 @@ def clean_dir_for(descriptor: dict) -> str:
     return os.path.join(core.CLEAN_DATA, domain, sub)
 
 
-def has_records(d: str) -> bool:
-    if not os.path.isdir(d):
-        return False
-    for root, _dirs, files in os.walk(d):
-        for fn in files:
-            if not fn.endswith(".jsonl"):
-                continue
-            try:
-                with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as f:
-                    if any(line.strip() for line in f):
-                        return True
-            except OSError:
-                pass
-    return False
+def clean_stats(d: str) -> tuple[float, int]:
+    """(total .jsonl size in MB, total non-empty lines) under a clean_data/ folder.
+
+    A row counts as cleaned when this returns lines > 0; the size/line figures are
+    written straight into the spreadsheet's Cleaned Size (MB) / Cleaned Lines cells.
+    """
+    total_bytes = lines = 0
+    if os.path.isdir(d):
+        for root, _dirs, files in os.walk(d):
+            for fn in files:
+                if not fn.endswith(".jsonl"):
+                    continue
+                p = os.path.join(root, fn)
+                try:
+                    total_bytes += os.path.getsize(p)
+                    with open(p, encoding="utf-8", errors="replace") as f:
+                        lines += sum(1 for line in f if line.strip())
+                except OSError:
+                    pass
+    return round(total_bytes / (1024 * 1024), 3), lines
 
 
-def mark_spreadsheet(sheet: str, excel_rows: set[int]) -> None:
-    """Set Cleaned?=Yes for the given Excel row numbers in `sheet`."""
-    if not excel_rows:
+def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]]) -> None:
+    """For each Excel row in `stats`, set Cleaned?=Yes and write the cleaned
+    output's Cleaned Size (MB) and Cleaned Lines back into the sheet."""
+    if not stats:
         print("[mark] nothing to mark (no source produced records)", flush=True)
         return
     from openpyxl import load_workbook
     wb = load_workbook(XLSX)                  # full load preserves other sheets
     ws = wb[sheet]
     header = {norm_header(c.value): c.column for c in ws[1] if c.value is not None}
-    col = header.get("cleaned?")
-    if col is None:
+    col_flag = header.get("cleaned?")
+    col_size = header.get("cleaned_size_(mb)")
+    col_lines = header.get("cleaned_lines")
+    if col_flag is None:
         print(f"[mark] WARNING: no 'Cleaned?' column in sheet '{sheet}'; skipping", flush=True)
         return
     n = 0
     for row in ws.iter_rows(min_row=2):
-        if row[0].row in excel_rows:
-            cur = str(row[col - 1].value).strip().lower()
-            if cur not in ("yes", "y"):
-                ws.cell(row=row[0].row, column=col, value="Yes")
-                n += 1
+        er = row[0].row
+        if er not in stats:
+            continue
+        size_mb, lines = stats[er]
+        if str(row[col_flag - 1].value).strip().lower() not in ("yes", "y"):
+            ws.cell(row=er, column=col_flag, value="Yes")
+            n += 1
+        if col_size is not None:
+            ws.cell(row=er, column=col_size, value=size_mb)
+        if col_lines is not None:
+            ws.cell(row=er, column=col_lines, value=lines)
     try:
         wb.save(XLSX)
-        print(f"[mark] set Cleaned?=Yes for {n} rows in {os.path.basename(XLSX)}", flush=True)
+        print(f"[mark] updated {len(stats)} rows ({n} newly Cleaned?=Yes) "
+              f"in {os.path.basename(XLSX)}", flush=True)
     except PermissionError:
         alt = XLSX.replace(".xlsx", ".cleaned.xlsx")
         wb.save(alt)
         print(f"[mark] {XLSX} is locked (open in Excel?); wrote {alt} instead", flush=True)
+
+
+def collect_stats(rows) -> dict[int, tuple[float, int]]:
+    """Map each mappable row's Excel-row number -> (cleaned MB, lines), keeping
+    only rows whose clean_data/ folder actually holds records (lines > 0)."""
+    stats: dict[int, tuple[float, int]] = {}
+    for r in rows:
+        if not r["descriptor"]:
+            continue
+        size_mb, lines = clean_stats(clean_dir_for(r["descriptor"]))
+        if lines > 0:
+            stats[r["excel_row"]] = (size_mb, lines)
+    return stats
 
 
 # ------------------------------------------------------------------ actions ---
@@ -286,10 +315,9 @@ def dryrun(sheet: str, subdomain: str | None):
 def mark_only(sheet: str, subdomain: str | None):
     """No fetching — just mark rows whose clean_data/ folder already has records."""
     rows = load_rows(sheet, subdomain)
-    hit = {r["excel_row"] for r in rows
-           if r["descriptor"] and has_records(clean_dir_for(r["descriptor"]))}
-    print(f"[mark] {len(hit)} rows have records under clean_data/", flush=True)
-    mark_spreadsheet(sheet, hit)
+    stats = collect_stats(rows)
+    print(f"[mark] {len(stats)} rows have records under clean_data/", flush=True)
+    mark_spreadsheet(sheet, stats)
 
 
 def run(sheet: str, subdomain: str | None, workers: int | None,
@@ -357,10 +385,10 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
     with open(RESULTS_JSON, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    # ground-truth marking: any selected row whose clean_data/ folder has records
-    cleaned_rows = {r["excel_row"] for r in rows
-                    if r["descriptor"] and has_records(clean_dir_for(r["descriptor"]))}
-    mark_spreadsheet(sheet, cleaned_rows)
+    # ground-truth marking: every row whose clean_data/ folder holds records is
+    # written back with Cleaned?=Yes + its Cleaned Size (MB) and Cleaned Lines.
+    cleaned_stats = collect_stats(rows)
+    mark_spreadsheet(sheet, cleaned_stats)
 
     ok = [v for v in results.values() if v["status"] == "ok" and v["out"] > 0]
     zero = [v for v in results.values() if v["status"] == "ok" and v["out"] == 0]
@@ -370,7 +398,7 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
     print(f"ok but 0 records     : {len(zero)}", flush=True)
     print(f"failed/skipped       : {len(fail)}", flush=True)
     print(f"already Yes (skipped): {len(already)}", flush=True)
-    print(f"rows marked Cleaned? : {len(cleaned_rows)}", flush=True)
+    print(f"rows marked Cleaned? : {len(cleaned_stats)}", flush=True)
     print(f"results -> {RESULTS_JSON}", flush=True)
 
 
