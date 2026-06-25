@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """Per-Sub-Domain search keywords and snippet-classification vocabulary.
 
-``DOMAIN_KEYWORDS`` is the curated input to the crawler: each Sub-Domain (the
-exact label used in the tracking sheet's ``Sub-Domain`` column) maps to a list
-of search phrases. The domain that a phrase belongs to is the *default*
-Sub-Domain assigned to whatever the phrase surfaces.
+Two keyword catalogs feed the crawler, selected by ``mode``:
 
-``DOMAIN_VOCAB`` is the fallback signal: when a result is ambiguous, the text of
-its title + snippet is scored against each domain's vocabulary and, if some
-other domain scores strictly higher than the default, the result is reassigned.
+* ``DOMAIN_KEYWORDS`` (mode ``datasets``) — phrases that hunt for usable corpora
+  (datasets / repos / annotated collections), biased by ``QUERY_QUALIFIER``.
+* ``DOMAIN_TEXT_KEYWORDS`` (mode ``text``) — prose-oriented phrases that surface
+  articles, docs, tutorials, and writeups for general SLM training text, biased
+  by ``TEXT_QUERY_QUALIFIER``.
+
+Mode ``both`` runs each domain through both catalogs. Use :func:`keyword_sets`
+to get the ``(keywords, qualifier)`` pairs for a mode.
+
+The domain a phrase belongs to is the *default* Sub-Domain assigned to whatever
+the phrase surfaces. ``DOMAIN_VOCAB`` is the tie-breaker: when a result is
+ambiguous, the text of its title + snippet is scored against each domain's
+vocabulary and, if some other domain scores strictly higher than the default,
+the result is reassigned.
 
 Sub-Domain labels are kept in sync with ``extraction.sources.CATEGORY_TO_DOMAIN``
 so discovered rows file under the same folders the rest of the pipeline uses.
@@ -16,9 +24,10 @@ so discovered rows file under the same folders the rest of the pipeline uses.
 
 from __future__ import annotations
 
-# A qualifier appended to every query to bias results toward usable corpora
-# (datasets / repos / docs) rather than marketing pages.
+# Qualifiers appended to every query to bias results toward the kind of page the
+# mode wants: structured corpora for ``datasets``, readable prose for ``text``.
 QUERY_QUALIFIER = "dataset OR github OR repository OR corpus"
+TEXT_QUERY_QUALIFIER = "guide OR tutorial OR explained OR documentation OR writeup"
 
 DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "Application Security": [
@@ -26,72 +35,264 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "secure code review dataset",
         "SAST static analysis labeled dataset",
         "OWASP code vulnerability dataset",
+        "CWE annotated source code dataset",
+        "software vulnerability commit dataset",
+        "web application attack payload dataset",
+        "code security bug dataset github",
     ],
     "Network Security": [
         "network intrusion detection dataset",
         "network traffic pcap labeled dataset",
         "IDS flow dataset cybersecurity",
         "DDoS attack network dataset",
+        "botnet traffic dataset",
+        "NetFlow anomaly detection dataset",
+        "packet capture malware traffic dataset",
+        "firewall log dataset",
     ],
     "Cloud Security": [
         "cloud security misconfiguration dataset",
         "kubernetes security dataset",
         "cloud CSPM findings dataset",
         "AWS Azure GCP security best practices dataset",
+        "container image vulnerability dataset",
+        "cloud audit log dataset security",
+        "terraform IaC misconfiguration dataset",
+        "S3 bucket exposure dataset",
     ],
     "Identity Access and Management": [
         "identity access management dataset",
         "authentication logs dataset security",
         "privileged access abuse dataset",
         "IAM policy misconfiguration dataset",
+        "account takeover dataset",
+        "OAuth SAML token dataset",
+        "insider threat access dataset",
+        "RBAC permissions dataset",
     ],
     "Incident Response and Forensics": [
         "digital forensics dataset",
         "incident response playbook dataset",
         "memory forensics dataset",
         "DFIR investigation dataset",
+        "disk image forensic dataset",
+        "Windows event log forensic dataset",
+        "timeline analysis artifact dataset",
+        "malware incident case dataset",
     ],
     "Data Security and Privacy": [
         "PII detection dataset",
         "data loss prevention dataset",
         "data privacy compliance dataset",
         "sensitive data classification dataset",
+        "GDPR data subject dataset",
+        "de-identification anonymization dataset",
+        "data breach records dataset",
+        "credential leak dataset",
     ],
     "Penetration Testing and Vulnerability Management": [
         "penetration testing dataset",
         "exploit proof of concept dataset",
         "CVE exploit dataset",
         "vulnerability scan results dataset",
+        "exploit database github",
+        "red team TTP dataset",
+        "web pentest report dataset",
+        "CVSS vulnerability dataset",
     ],
     "Governance, Risk and Compliance": [
         "security compliance controls dataset",
         "GRC risk register dataset",
         "NIST CSF mapping dataset",
         "ISO 27001 controls dataset",
+        "security policy document dataset",
+        "audit findings dataset cybersecurity",
+        "control framework mapping dataset",
+        "regulatory compliance dataset security",
     ],
     "Cryptography": [
         "cryptography dataset",
         "cipher cryptanalysis dataset",
         "TLS certificate dataset security",
         "encryption algorithms labeled dataset",
+        "side channel attack dataset",
+        "hash function dataset",
+        "key exchange protocol dataset",
+        "crypto CTF challenge dataset",
     ],
     "Security Operations": [
         "SOC alert triage dataset",
         "SIEM log dataset",
         "security operations detection rules dataset",
         "threat hunting dataset",
+        "Sigma rules dataset",
+        "security alert labeled dataset",
+        "log anomaly detection dataset",
+        "EDR telemetry dataset",
     ],
     "Malware Analysis": [
         "malware analysis dataset",
         "malware samples labeled dataset",
         "ransomware behavior dataset",
         "PE binary malware dataset",
+        "API call sequence malware dataset",
+        "Android malware dataset",
+        "malware family classification dataset",
+        "YARA rules dataset",
     ],
     "Threat Intelligence": [
         "threat intelligence dataset",
         "IOC indicators of compromise dataset",
         "MITRE ATT&CK technique dataset",
         "phishing URL dataset",
+        "APT report dataset",
+        "malicious domain dataset",
+        "threat actor TTP dataset",
+        "CTI feed dataset",
+    ],
+    "Quantum": [
+        "post-quantum cryptography dataset",
+        "quantum-safe algorithm dataset",
+        "quantum key distribution dataset",
+        "lattice-based cryptography dataset",
+        "NIST PQC candidate dataset",
+        "quantum random number dataset",
+        "quantum computing security dataset",
+        "quantum-resistant signature dataset",
+    ],
+}
+
+# Prose-oriented catalog (mode "text"): articles, docs, tutorials, writeups.
+DOMAIN_TEXT_KEYWORDS: dict[str, list[str]] = {
+    "Application Security": [
+        "OWASP top 10 explained",
+        "secure coding best practices",
+        "SQL injection prevention guide",
+        "cross-site scripting XSS walkthrough",
+        "threat modeling tutorial",
+        "application security testing guide",
+        "API security best practices",
+        "common web vulnerabilities explained",
+    ],
+    "Network Security": [
+        "network intrusion detection explained",
+        "firewall configuration best practices",
+        "DDoS mitigation guide",
+        "network segmentation tutorial",
+        "packet analysis with wireshark guide",
+        "zero trust network architecture explained",
+        "VPN security best practices",
+        "network protocol attacks explained",
+    ],
+    "Cloud Security": [
+        "AWS security best practices guide",
+        "kubernetes security hardening tutorial",
+        "cloud misconfiguration explained",
+        "cloud IAM least privilege guide",
+        "container security best practices",
+        "cloud incident response guide",
+        "securing S3 buckets tutorial",
+        "cloud security posture management explained",
+    ],
+    "Identity Access and Management": [
+        "identity and access management explained",
+        "multi-factor authentication guide",
+        "OAuth 2.0 explained",
+        "SAML single sign-on tutorial",
+        "privileged access management best practices",
+        "zero trust identity guide",
+        "RBAC vs ABAC explained",
+        "preventing account takeover guide",
+    ],
+    "Incident Response and Forensics": [
+        "incident response process explained",
+        "digital forensics tutorial",
+        "memory forensics with volatility guide",
+        "DFIR investigation walkthrough",
+        "malware incident handling guide",
+        "windows event log analysis tutorial",
+        "forensic artifact analysis explained",
+        "ransomware incident response playbook",
+    ],
+    "Data Security and Privacy": [
+        "data protection best practices",
+        "GDPR compliance guide",
+        "preventing data loss guide",
+        "PII handling best practices",
+        "data encryption at rest explained",
+        "data classification tutorial",
+        "privacy by design explained",
+        "responding to a data breach guide",
+    ],
+    "Penetration Testing and Vulnerability Management": [
+        "penetration testing methodology guide",
+        "exploit development tutorial",
+        "vulnerability management process explained",
+        "red team operations guide",
+        "web application pentest walkthrough",
+        "CVSS scoring explained",
+        "privilege escalation techniques explained",
+        "bug bounty writeup",
+    ],
+    "Governance, Risk and Compliance": [
+        "cybersecurity risk management guide",
+        "NIST cybersecurity framework explained",
+        "ISO 27001 implementation guide",
+        "security policy writing best practices",
+        "governance risk compliance explained",
+        "security audit checklist",
+        "third party risk management guide",
+        "compliance frameworks compared",
+    ],
+    "Cryptography": [
+        "cryptography explained",
+        "how TLS works explained",
+        "public key cryptography tutorial",
+        "AES encryption explained",
+        "digital signatures explained",
+        "hash functions explained",
+        "common cryptographic attacks explained",
+        "key management best practices",
+    ],
+    "Security Operations": [
+        "security operations center explained",
+        "SIEM best practices guide",
+        "threat hunting guide",
+        "writing detection rules tutorial",
+        "alert triage process explained",
+        "MITRE ATT&CK for detection guide",
+        "SOC analyst workflow explained",
+        "incident escalation best practices",
+    ],
+    "Malware Analysis": [
+        "malware analysis tutorial",
+        "static malware analysis guide",
+        "dynamic malware analysis explained",
+        "reverse engineering malware tutorial",
+        "ransomware analysis writeup",
+        "YARA rule writing guide",
+        "malware sandbox analysis explained",
+        "PE file format explained",
+    ],
+    "Threat Intelligence": [
+        "cyber threat intelligence explained",
+        "MITRE ATT&CK explained",
+        "indicators of compromise guide",
+        "threat actor profiling explained",
+        "phishing analysis writeup",
+        "APT campaign analysis",
+        "threat intelligence lifecycle explained",
+        "OSINT for threat intelligence guide",
+    ],
+    "Quantum": [
+        "post-quantum cryptography explained",
+        "quantum computing threat to encryption explained",
+        "quantum key distribution explained",
+        "NIST post-quantum standards guide",
+        "Shor's algorithm explained",
+        "lattice-based cryptography explained",
+        "migrating to quantum-safe cryptography guide",
+        "quantum-resistant algorithms explained",
     ],
 }
 
@@ -124,7 +325,29 @@ DOMAIN_VOCAB: dict[str, set[str]] = {
                          "sandbox", "reverse engineering", "yara"},
     "Threat Intelligence": {"threat intelligence", "ioc", "indicator",
                             "mitre att&ck", "phishing", "apt", "campaign"},
+    "Quantum": {"post-quantum", "quantum", "pqc", "lattice", "kyber",
+                "dilithium", "qkd", "quantum-safe", "shor", "quantum-resistant"},
 }
 
-# Canonical Sub-Domain labels (the keys above), exposed for CLI validation.
+# mode name -> (keyword catalog, query qualifier)
+_KEYWORD_SETS = {
+    "datasets": (DOMAIN_KEYWORDS, QUERY_QUALIFIER),
+    "text": (DOMAIN_TEXT_KEYWORDS, TEXT_QUERY_QUALIFIER),
+}
+MODES: tuple[str, ...] = ("datasets", "text", "both")
+
+
+def keyword_sets(mode: str = "datasets") -> list[tuple[dict[str, list[str]], str]]:
+    """Return the ``(keywords, qualifier)`` pairs to run for ``mode``.
+
+    ``both`` returns the datasets pair followed by the text pair.
+    """
+    if mode == "both":
+        return [_KEYWORD_SETS["datasets"], _KEYWORD_SETS["text"]]
+    if mode in _KEYWORD_SETS:
+        return [_KEYWORD_SETS[mode]]
+    raise ValueError(f"unknown mode {mode!r}; valid: {MODES}")
+
+
+# Canonical Sub-Domain labels (shared by both catalogs), exposed for CLI validation.
 DOMAINS: tuple[str, ...] = tuple(DOMAIN_KEYWORDS)

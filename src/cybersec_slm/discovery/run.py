@@ -46,12 +46,15 @@ def _write_csv(rows: list[dict[str, str]], path: str) -> None:
 
 def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
              per_keyword: int = 5, max_per_domain: int | None = None,
-             dry_run: bool = False, out_csv: str | None = None,
-             api_key: str | None = None, cse_id: str | None = None,
-             creds_path: str | None = None, client=None) -> dict:
+             mode: str = "datasets", dry_run: bool = False,
+             out_csv: str | None = None, api_key: str | None = None,
+             cse_id: str | None = None, creds_path: str | None = None,
+             client=None) -> dict:
     """Run discovery and return a summary dict.
 
-    ``client`` is an optional shared ``httpx.Client`` (search reuses it).
+    ``mode`` selects the keyword catalog: ``datasets`` (corpora/repos), ``text``
+    (articles/docs/writeups), or ``both``. ``client`` is an optional shared
+    ``httpx.Client`` (search reuses it).
     Returns ``{"found", "new", "appended", "csv", "by_domain"}``.
     """
     sheet_url = sheet_url or DEFAULT_SHEET_URL
@@ -75,26 +78,29 @@ def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
 
     for domain in selected:
         added_here = 0
-        for keyword in kw.DOMAIN_KEYWORDS[domain]:
+        for kwset, qualifier in kw.keyword_sets(mode):
             if max_per_domain is not None and added_here >= max_per_domain:
                 break
-            query = f"{keyword} {kw.QUERY_QUALIFIER}"
-            try:
-                results = google_search(query, api_key=api_key, cse_id=cse_id,
-                                        num=min(per_keyword, 10), client=client)
-            except SearchError as e:
-                logger.error(f"discover: search failed for {query!r}: {e}")
-                raise
-            for res in results:
-                found += 1
-                norm = normalize_url(res.link)
-                if not norm or norm in seen:
-                    continue
-                seen.add(norm)                     # also dedup within this run
-                new_rows.append(build_row(res, domain, today=today))
-                added_here += 1
+            for keyword in kwset.get(domain, []):
                 if max_per_domain is not None and added_here >= max_per_domain:
                     break
+                query = f"{keyword} {qualifier}".strip()
+                try:
+                    results = google_search(query, api_key=api_key, cse_id=cse_id,
+                                            num=min(per_keyword, 10), client=client)
+                except SearchError as e:
+                    logger.error(f"discover: search failed for {query!r}: {e}")
+                    raise
+                for res in results:
+                    found += 1
+                    norm = normalize_url(res.link)
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)                 # also dedup within this run
+                    new_rows.append(build_row(res, domain, today=today))
+                    added_here += 1
+                    if max_per_domain is not None and added_here >= max_per_domain:
+                        break
         by_domain[domain] = added_here
         logger.info(f"discover: {domain}: {added_here} new")
 

@@ -68,6 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="tracking sheet URL/id (default: the finalized sheet)")
     d.add_argument("--domains", nargs="*", default=None,
                    help="limit to these Sub-Domains (default: all)")
+    d.add_argument("--mode", choices=["datasets", "text", "both"], default="datasets",
+                   help="keyword catalog: datasets (corpora/repos), text "
+                        "(articles/docs), or both (default: datasets)")
     d.add_argument("--per-keyword", type=int, default=5,
                    help="results to request per keyword (<=10, default 5)")
     d.add_argument("--max-per-domain", type=int, default=None,
@@ -122,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
         summary = discovery.discover(
             args.sheet_url, domains=args.domains,
             per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
-            dry_run=args.dry_run, out_csv=args.out,
+            mode=args.mode, dry_run=args.dry_run, out_csv=args.out,
             api_key=(args.api_key or os.environ.get("GOOGLE_SEARCH_API_KEY")
                      or os.environ.get("GOOGLE_API_KEY")),
             cse_id=(args.cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
