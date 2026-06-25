@@ -49,7 +49,11 @@ LOGS = os.path.join(DATA_ROOT, "logs")
 def _make_logger():
     loguru = try_import("loguru")
     os.makedirs(LOGS, exist_ok=True)
-    log_file = os.path.join(LOGS, "pipeline.log")
+    # One log file per process. With ProcessPoolExecutor under spawn (Windows),
+    # every worker re-imports this module and opens its own file sink; a shared
+    # path makes loguru's rotation os.rename() fail with WinError 32 because
+    # other processes still hold the file open. PID-scoped paths avoid that.
+    log_file = os.path.join(LOGS, f"pipeline.{os.getpid()}.log")
     if loguru is not None:
         lg = loguru.logger
         lg.remove()

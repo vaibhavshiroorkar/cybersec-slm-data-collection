@@ -25,13 +25,14 @@ from .common import (LOGS, OUT_CLEAN_DATA, OUT_CLEANED, OUT_DROPPED, OUT_FLAGGED
 from .dedup import Deduper
 from .langfilter import LangFilter
 from .pii import Redactor
+from .translate import Translator
 
 DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.pkl")
 
 REPORT_COLS = ["sub_domain", "source", "file", "in", "mapped_text",
                "excluded_no_text", "sanitized", "struct_fixed", "struct_dropped",
                "behavioral_flagged", "exact_dups", "near_dups", "pii_redacted",
-               "non_en_dropped", "out"]
+               "translated", "non_en_dropped", "out"]
 
 
 def _annotate(rec, sub, source, relfile, stage, reason):
@@ -48,15 +49,15 @@ def _new_counts():
     return {k: 0 for k in REPORT_COLS[3:]}
 
 
-def clean_files(files, *, deduper, redactor, langf, out_cleaned, out_flagged,
-                out_dropped, limit: int | None = None,
+def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
+                out_flagged, out_dropped, limit: int | None = None,
                 checkpoint_path: str | None = None) -> list[dict]:
     """Run the cleaning stages over `files` into the given output roots.
 
     `files` is an iterable of (abs_path, sub_domain, source, rel) as produced by
-    `find_input_files`. The three stateful objects (deduper/redactor/langf) are
-    passed in so callers control sharing — one global deduper for `run_all`, a
-    disabled per-source deduper for `clean_one_source`. Returns report rows.
+    `find_input_files`. The stateful objects (deduper/redactor/langf/translator)
+    are passed in so callers control sharing — one global deduper for `run_all`,
+    a disabled per-source deduper for `clean_one_source`. Returns report rows.
     """
     rows: list[dict] = []
     for ap, sub, source, rel in files:
@@ -116,12 +117,20 @@ def clean_files(files, *, deduper, redactor, langf, out_cleaned, out_flagged,
                     c["pii_redacted"] += 1
                     rec2["text"] = new_text
 
-                if not langf.is_allowed(text_of(rec2)):
-                    c["non_en_dropped"] += 1
-                    lang = langf.detect(text_of(rec2))
-                    dw.write(_annotate(rec2, sub, source, rel, "langfilter",
-                                       f"non-allowed language: {lang}"))
-                    continue
+                lang = langf.detect(text_of(rec2))
+                if not langf.lang_allowed(lang):
+                    # Confidently non-allowed: translate into English and keep,
+                    # rather than dropping. Drop only if translation is impossible.
+                    translated, ok = translator.translate(text_of(rec2), src=lang)
+                    if ok:
+                        c["translated"] += 1
+                        rec2["text"] = translated
+                        rec2["_orig_lang"] = lang
+                    else:
+                        c["non_en_dropped"] += 1
+                        dw.write(_annotate(rec2, sub, source, rel, "langfilter",
+                                           f"non-allowed language (untranslatable): {lang}"))
+                        continue
 
                 cw.write(rec2)
                 c["out"] += 1
@@ -150,9 +159,10 @@ def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
         deduper.load_state(DEDUP_CKPT)
     redactor = Redactor()
     langf = LangFilter()
+    translator = Translator()
     logger.info(f"cleaning input: {input_dir}")
     logger.info(f"backends -> dedup:{deduper.backend} pii:{redactor.engine} "
-                f"lang:{langf.backend}")
+                f"lang:{langf.backend} translate:{translator.backend}")
 
     files = list(find_input_files(input_dir))
     if not files:
@@ -161,9 +171,9 @@ def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
         return []
 
     rows = clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
-                       out_cleaned=OUT_CLEANED, out_flagged=OUT_FLAGGED,
-                       out_dropped=OUT_DROPPED, limit=limit,
-                       checkpoint_path=DEDUP_CKPT)
+                       translator=translator, out_cleaned=OUT_CLEANED,
+                       out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
+                       limit=limit, checkpoint_path=DEDUP_CKPT)
     _write_report(rows)
     return rows
 
@@ -187,9 +197,11 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     deduper = Deduper(enabled=False)
     redactor = Redactor()
     langf = LangFilter()
+    translator = Translator()
     return clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
-                       out_cleaned=clean_data_dir, out_flagged=OUT_FLAGGED,
-                       out_dropped=OUT_DROPPED, limit=limit)
+                       translator=translator, out_cleaned=clean_data_dir,
+                       out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
+                       limit=limit)
 
 
 def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA) -> dict:
@@ -259,7 +271,7 @@ def _write_report(rows: list[dict]) -> str:
     logger.info("TOTAL " + " ".join(f"{k}={totals[k]}" for k in
                 ("in", "out", "mapped_text", "excluded_no_text", "struct_dropped",
                  "behavioral_flagged", "exact_dups", "near_dups", "pii_redacted",
-                 "non_en_dropped")))
+                 "translated", "non_en_dropped")))
     return path
 
 
@@ -275,6 +287,7 @@ def run_single_stage(stage: str, input_dir: str = RAW_DATA,
     deduper = Deduper() if stage == "dedup" else None
     redactor = Redactor() if stage == "pii" else None
     langf = LangFilter() if stage == "lang" else None
+    translator = Translator() if stage == "lang" else None
     stats = {"in": 0, "out": 0, "affected": 0}
 
     for ap, _sub, _source, rel in find_input_files(input_dir):
@@ -303,10 +316,17 @@ def run_single_stage(stage: str, input_dir: str = RAW_DATA,
                         rec = {**rec, "text": nt}
                     w.write(rec); stats["out"] += 1
                 elif stage == "lang":
-                    if langf.is_allowed(text_of(rec)):
+                    lang = langf.detect(text_of(rec))
+                    if langf.lang_allowed(lang):
                         w.write(rec); stats["out"] += 1
                     else:
-                        stats["affected"] += 1
+                        translated, ok = translator.translate(text_of(rec), src=lang)
+                        if ok:
+                            stats["affected"] += 1
+                            rec = {**rec, "text": translated, "_orig_lang": lang}
+                            w.write(rec); stats["out"] += 1
+                        else:
+                            stats["affected"] += 1
         finally:
             w.close()
     logger.info(f"stage '{stage}': in={stats['in']} out={stats['out']} "

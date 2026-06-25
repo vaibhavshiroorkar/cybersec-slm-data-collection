@@ -20,8 +20,9 @@ Deduplication               exact (sha256) + near-dup (MinHash/LSH)
 PII Removal                 Presidio (→ regex fallback)
    │
    ▼
-Language filtering          fastText lid.176 (→ langdetect/heuristic); drop non-English
-   │
+Language filtering          fastText lid.176 (→ langdetect/heuristic)
+   │  non-English → translate to English (deep-translator → argos); keep
+   │  untranslatable non-English ──▶ ../dropped/
    ▼
 ../cleaned/  → handoff for EDA
 ```
@@ -30,9 +31,10 @@ Language filtering          fastText lid.176 (→ langdetect/heuristic); drop no
 - **Input:** `../raw_data/<Sub-Domain>/<source>/*.jsonl`
   (records shaped `{source, url, license, page?, text}`; tolerant of missing/extra fields).
 - **Outputs** (project root, mirroring the raw_data layout):
-  - `../cleaned/…jsonl` — passed every stage. Original schema preserved.
+  - `../cleaned/…jsonl` — passed every stage. Original schema preserved
+    (translated records gain `_orig_lang` and an English `text`).
   - `../flagged/…jsonl` — behavioral anomalies for the annotation team (`_reason` added).
-  - `../dropped/…jsonl` — structural / duplicate / non-English drops (`_reason` added).
+  - `../dropped/…jsonl` — structural / duplicate / untranslatable-non-English drops (`_reason` added).
   - `../logs/clean_report.csv` — per-file counts + a TOTAL row.
   - `../logs/cleaning.log` — run log.
 
@@ -45,6 +47,7 @@ Language filtering          fastText lid.176 (→ langdetect/heuristic); drop no
 | `dedup.py` | exact sha256 + near-dup MinHash+LSH (datasketch→pure-python) |
 | `pii.py` | Presidio analyze+anonymize → regex fallback (email/phone/IP/CC/SSN) |
 | `langfilter.py` | fastText `lid.176` → langdetect → stopword/script heuristic |
+| `translate.py` | non-English → English: deep-translator (Google) → argostranslate → no-op |
 | `pipeline.py` | runs the stages in order over raw_data + writes the report |
 | `run.py` | CLI: `all` / `sanitize` / `dedup` / `pii` / `lang` / `report` |
 Tests live in the top-level `tests/cleaning/` (pytest, no heavy deps needed).
@@ -66,7 +69,7 @@ extra installed — each module logs which backend it chose. Install the extras 
 upgrade quality:
 
 ```bash
-uv sync --extra cleaning     # ftfy, dateutil, datasketch, presidio, fasttext, langdetect
+uv sync --extra cleaning     # ftfy, dateutil, datasketch, presidio, fasttext, langdetect, deep-translator
 python -m spacy download en_core_web_lg   # required by presidio
 # fasttext also needs a lid.176.ftz / lid.176.bin model in this folder
 # (or set FASTTEXT_LID_MODEL to its path)

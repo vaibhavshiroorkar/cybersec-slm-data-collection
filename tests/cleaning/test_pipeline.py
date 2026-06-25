@@ -39,11 +39,23 @@ def test_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
     monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
 
+    # Stub the translator so the test is deterministic and offline: it "translates"
+    # any non-English record into a fixed English marker.
+    marker = "TRANSLATED into english marker sentence for the pipeline test today."
+
+    class _StubTranslator:
+        backend = "stub"
+
+        def translate(self, text, src=None):
+            return marker, True
+
+    monkeypatch.setattr(pipeline, "Translator", _StubTranslator)
+
     rows = pipeline.run_all(input_dir=str(corpus))
 
     totals = {k: 0 for k in
-              ("in", "out", "struct_dropped", "exact_dups", "non_en_dropped",
-               "pii_redacted")}
+              ("in", "out", "struct_dropped", "exact_dups", "translated",
+               "non_en_dropped", "pii_redacted")}
     for r in rows:
         for k in totals:
             totals[k] += r[k]
@@ -51,15 +63,20 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert totals["in"] == 6
     assert totals["exact_dups"] >= 1
     assert totals["struct_dropped"] >= 1
-    assert totals["non_en_dropped"] >= 1
+    # The Russian record is translated and kept, not dropped.
+    assert totals["translated"] >= 1
+    assert totals["non_en_dropped"] == 0
     assert totals["pii_redacted"] >= 1
-    assert totals["out"] >= 3
+    assert totals["out"] >= 4
     assert os.path.exists(str(tmp_path / "reports" / "clean_report.csv"))
 
-    # cleaned output must not contain the redacted email
+    # cleaned output must not contain the redacted email, must contain the
+    # translated marker, and must not contain the original Russian text.
     cleaned_text = ""
     for r, _d, fs in os.walk(str(tmp_path / "cleaned")):
         for fn in fs:
             with open(os.path.join(r, fn), encoding="utf-8") as f:
                 cleaned_text += f.read()
     assert "admin@example.com" not in cleaned_text
+    assert marker in cleaned_text
+    assert russian not in cleaned_text

@@ -29,6 +29,10 @@ flagged/
 dropped/
 _stages/
 
+# fastText language-id model (downloaded locally, or set FASTTEXT_LID_MODEL)
+lid.176.ftz
+lid.176.bin
+
 # Logs
 logs/
 

@@ -98,10 +98,19 @@ class LangFilter:
                 return "unknown"
         return _heuristic(sample)
 
-    def is_allowed(self, text: str) -> bool:
-        lang = self.detect(text)
+    def lang_allowed(self, lang: str) -> bool:
+        """True if an already-detected `lang` may be kept as-is.
+
+        Allowed languages and uncertain results (``unknown``) are kept; only a
+        confident non-allowed detection returns False. Split out from
+        ``is_allowed`` so callers that translate can detect once and reuse the
+        label (see pipeline language step).
+        """
         if lang in LANGS:
             return True
-        if lang in ("unknown",):        # uncertain -> keep (conservative)
+        if lang == "unknown":           # uncertain -> keep (conservative)
             return True
-        return False                     # confident non-allowed -> drop
+        return False                     # confident non-allowed
+
+    def is_allowed(self, text: str) -> bool:
+        return self.lang_allowed(self.detect(text))
