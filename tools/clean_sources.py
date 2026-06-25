@@ -23,11 +23,14 @@ Usage (run from anywhere; paths are pinned below):
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import multiprocessing as mp
 import os
 import re
+import subprocess
 import sys
+import urllib.request
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -43,6 +46,126 @@ os.environ["CYBERSEC_SLM_DATA_ROOT"] = PROJECT
 from cybersec_slm import core                              # noqa: E402
 from cybersec_slm.cleaning import pipeline                 # noqa: E402
 from cybersec_slm.extraction import sources, worker        # noqa: E402
+
+
+# --------------------------------------------------------------- dependencies --
+# import-name -> (pip package, what it does). We install ONLY the modules that
+# are actually missing — never the whole extra — so an already-working package
+# (e.g. fasttext) is never needlessly rebuilt.
+_REQUIRED_MODULES = {
+    "ftfy": ("ftfy", "encoding repair (sanitize)"),
+    "dateutil": ("python-dateutil", "date parsing (sanitize)"),
+    "datasketch": ("datasketch", "near-dup MinHash/LSH (dedup)"),
+    "langdetect": ("langdetect", "language id fallback (langfilter)"),
+    "deep_translator": ("deep-translator", "translate non-English -> English"),
+    # best-effort below: build-fragile on Windows / large; pipeline has fallbacks
+    "presidio_analyzer": ("presidio-analyzer", "PII detection (pii)"),
+    "presidio_anonymizer": ("presidio-anonymizer", "PII redaction (pii)"),
+    "fasttext": ("fasttext-wheel", "language id (langfilter)"),
+}
+# Modules whose absence only downgrades quality — install best-effort, never abort.
+_OPTIONAL_MODULES = {"presidio_analyzer", "presidio_anonymizer", "fasttext"}
+_SPACY_MODEL = "en_core_web_lg"          # used by presidio for full PII
+_FASTTEXT_MODEL = os.path.join(PROJECT, "src", "cybersec_slm", "cleaning", "lid.176.ftz")
+_FASTTEXT_URL = ("https://dl.fbaipublicfiles.com/fasttext/supervised-models/"
+                 "lid.176.ftz")
+_KAGGLE_TOKEN = os.path.join(os.path.expanduser("~"), ".kaggle", "access_token")
+
+
+def _have(module: str) -> bool:
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _pip_install(*args: str) -> None:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *args])
+
+
+def ensure_deps() -> None:
+    """Install everything the cleaning pipeline needs BEFORE any source runs.
+
+    Critical packages (incl. the translator) are a hard requirement — the run
+    aborts if they can't be installed, so non-English text is never silently
+    dropped. Presidio and the language models are best-effort: missing them only
+    downgrades quality (regex PII / langdetect), so they warn instead of abort.
+    Idempotent — already-present packages/models are skipped.
+    """
+    print("[deps] checking cleaning dependencies...", flush=True)
+    missing = [m for m in _REQUIRED_MODULES if not _have(m)]
+    if not missing:
+        print("[deps] all cleaning packages present", flush=True)
+    else:
+        crit = [m for m in missing if m not in _OPTIONAL_MODULES]
+        opt = [m for m in missing if m in _OPTIONAL_MODULES]
+        print("[deps] missing packages:", flush=True)
+        for m in missing:
+            tag = "optional" if m in _OPTIONAL_MODULES else "REQUIRED"
+            print(f"         - {m} ({tag}): {_REQUIRED_MODULES[m][1]}", flush=True)
+
+        # Required: must succeed or we abort (so non-English is never dropped).
+        if crit:
+            pkgs = [_REQUIRED_MODULES[m][0] for m in crit]
+            print(f"[deps] installing required: {', '.join(pkgs)}", flush=True)
+            try:
+                _pip_install(*pkgs)
+            except subprocess.CalledProcessError as ex:
+                raise SystemExit(f"[deps] FAILED to install required packages: {ex}\n"
+                                 "Fix the error above and re-run.") from ex
+        # Optional: install one at a time so a build failure (e.g. fasttext needs
+        # a C++ compiler on Windows) only downgrades that one stage.
+        for m in opt:
+            pkg = _REQUIRED_MODULES[m][0]
+            print(f"[deps] installing optional: {pkg}", flush=True)
+            try:
+                _pip_install(pkg)
+            except subprocess.CalledProcessError:
+                print(f"[deps] WARNING: '{pkg}' install failed (needs a build "
+                      f"toolchain?); continuing with the pipeline's fallback.",
+                      flush=True)
+        importlib.invalidate_caches()
+
+    # spaCy model for presidio (PII falls back to regex without it) — best-effort
+    if _have("presidio_analyzer") and not _have(_SPACY_MODEL):
+        print(f"[deps] downloading spaCy model {_SPACY_MODEL} (~600MB, one-time)...",
+              flush=True)
+        try:
+            subprocess.check_call([sys.executable, "-m", "spacy", "download", _SPACY_MODEL])
+            importlib.invalidate_caches()
+        except subprocess.CalledProcessError:
+            print("[deps] WARNING: spaCy model download failed; PII uses regex.",
+                  flush=True)
+
+    # fastText language-id model (kept out of git) — best-effort (langdetect covers it)
+    if not os.path.exists(_FASTTEXT_MODEL):
+        print("[deps] downloading fastText lid.176 model...", flush=True)
+        os.makedirs(os.path.dirname(_FASTTEXT_MODEL), exist_ok=True)
+        try:
+            urllib.request.urlretrieve(_FASTTEXT_URL, _FASTTEXT_MODEL)
+        except Exception:
+            print("[deps] WARNING: fastText model download failed; language id uses "
+                  "langdetect/heuristic.", flush=True)
+
+    # Kaggle credentials (kaggle-kind sources fail to fetch without them)
+    if not os.path.exists(_KAGGLE_TOKEN) and not os.environ.get("KAGGLE_API_TOKEN"):
+        print("[deps] WARNING: no Kaggle token (~/.kaggle/access_token or "
+              "KAGGLE_API_TOKEN); kaggle sources will be skipped/failed.", flush=True)
+
+    _report_backends()
+
+
+def _report_backends() -> None:
+    """Print the backend each cleaning stage actually resolved to."""
+    from cybersec_slm.cleaning.dedup import Deduper
+    from cybersec_slm.cleaning.langfilter import LangFilter
+    from cybersec_slm.cleaning.pii import Redactor
+    from cybersec_slm.cleaning.translate import Translator
+    print(f"[deps] backends -> dedup:{Deduper().backend} pii:{Redactor().engine} "
+          f"lang:{LangFilter().backend} translate:{Translator().backend}", flush=True)
+    if Translator().backend == "none":
+        raise SystemExit("[deps] translator backend is still 'none' after install — "
+                         "aborting so non-English text is not silently dropped.")
 
 
 def norm_header(c) -> str:
@@ -169,7 +292,10 @@ def mark_only(sheet: str, subdomain: str | None):
     mark_spreadsheet(sheet, hit)
 
 
-def run(sheet: str, subdomain: str | None, workers: int | None):
+def run(sheet: str, subdomain: str | None, workers: int | None,
+        skip_deps: bool = False):
+    if not skip_deps:
+        ensure_deps()
     rows = load_rows(sheet, subdomain)
     scope = subdomain or "all sub-domains"
     print(f"[clean] sheet '{sheet}' / {scope}: {len(rows)} rows", flush=True)
@@ -254,14 +380,20 @@ def main():
     p.add_argument("--sheet", default=DEFAULT_SHEET, help="worksheet name (default: Finalized)")
     p.add_argument("--subdomain", default=None, help="limit to one Sub-Domain (default: all)")
     p.add_argument("--workers", type=int, default=None, help="process pool size")
+    p.add_argument("--skip-deps", action="store_true",
+                   help="skip the pre-run dependency install/check")
+    p.add_argument("--deps-only", action="store_true",
+                   help="install/verify all dependencies, then exit")
     args = p.parse_args()
 
-    if args.action == "dryrun":
+    if args.deps_only:
+        ensure_deps()
+    elif args.action == "dryrun":
         dryrun(args.sheet, args.subdomain)
     elif args.action == "mark":
         mark_only(args.sheet, args.subdomain)
     else:
-        run(args.sheet, args.subdomain, args.workers)
+        run(args.sheet, args.subdomain, args.workers, skip_deps=args.skip_deps)
 
 
 if __name__ == "__main__":
