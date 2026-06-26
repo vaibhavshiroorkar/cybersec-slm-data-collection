@@ -8,7 +8,9 @@
         |                                   └─ fail rate high? -> hard pause (re-clean)
         -> Content Hash (sha256, content-only)
         -> Near-Duplicate Check (MinHash/LSH @ 0.65) ──seen──> duplicates.jsonl
-        -> dataset.jsonl (append one record)
+        -> dataset.jsonl (append one record; stamped with a sequential
+           `record_id` — rec_000000001, rec_000000002, … — plus its
+           `content_hash`, the stable content fingerprint)
         -> Update Hash List (seen + LSH)
         -> Handoff to annotation team
 
@@ -51,6 +53,15 @@ def _short_reason(exc: ValidationError) -> str:
         return "validation error"
 
 
+def _existing_records(path: str) -> int:
+    """Count records already in `path` so a resumed run continues the rec_ sequence
+    instead of restarting at 1 (which would collide with shipped ids)."""
+    if not os.path.exists(path):
+        return 0
+    with open(path, "rb") as f:
+        return sum(1 for _ in f)
+
+
 class _Sink:
     """Append-only JSONL sink (lazy open; no trailing commas, one record/line)."""
 
@@ -81,6 +92,8 @@ class Normalizer:
         self.resume = resume
         if resume:
             self.index.rebuild_from_jsonl(DATASET)
+        # sequential record_id counter; continues past existing records on resume
+        self._seq = _existing_records(DATASET) if resume else 0
         self.dataset = _Sink(DATASET, append=resume)
         self.rejected = _Sink(REJECTED, append=resume)
         self.duplicates = _Sink(DUPLICATES, append=resume)
@@ -129,6 +142,8 @@ class Normalizer:
 
         # 5) dataset.jsonl output  +  6) Update Hash List
         out = model.model_dump()
+        self._seq += 1
+        out["record_id"] = f"rec_{self._seq:09d}"   # sequential handoff id (rec_000000001, …)
         out["content_hash"] = chash
         self.dataset.write(out)
         self.index.add(model.text, chash, log_id)

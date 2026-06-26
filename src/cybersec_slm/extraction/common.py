@@ -105,7 +105,12 @@ NSLKDD_COLS = [
     "dst_host_serror_rate", "dst_host_srv_serror_rate", "dst_host_rerror_rate",
     "dst_host_srv_rerror_rate", "class", "difficulty_level",
 ]
-EXT_PRIORITY = (".parquet", ".jsonl", ".csv", ".json", ".xlsx", ".txt")
+EXT_PRIORITY = (".parquet", ".jsonl", ".csv", ".json", ".xlsx",
+                ".yar", ".yara", ".yml", ".yaml", ".md", ".txt")
+# Rule / markup / doc files read as a single text record each (one file -> one
+# record). Recovers detection rules (YARA/Sigma) and prose docs (Markdown) that
+# would otherwise be dropped as having no recognized data column.
+TEXT_FILE_EXTS = (".yar", ".yara", ".yml", ".yaml", ".rule", ".sigma", ".md")
 SKIP_SUBSTRINGS = ("embedding", "faiss", "statistics", "data_stats", "_stats")
 
 
@@ -155,11 +160,23 @@ def _read_unknown(path: str) -> pd.DataFrame:
     raise ValueError(f"Unsupported file type: {path}")
 
 
+def _read_textfile(path: str) -> pd.DataFrame:
+    """Read a whole rule/markup file (YARA, YAML, Sigma) as ONE text record."""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read().strip()
+    if not content:
+        return pd.DataFrame(columns=["text"])
+    return pd.DataFrame([{"text": content, "_file": os.path.basename(path)}])
+
+
 def read_any(path: str) -> pd.DataFrame:
-    """Read csv/jsonl/json/parquet/txt into a DataFrame, robustly."""
+    """Read csv/jsonl/json/parquet/txt/rule files into a DataFrame, robustly."""
+    import pandas.errors as pd_errors
     low = path.lower()
     if low.endswith(".parquet"):
         return pd.read_parquet(path)
+    if low.endswith(TEXT_FILE_EXTS):          # YARA / YAML / Sigma -> one record
+        return _read_textfile(path)
     if low.endswith(".jsonl"):
         try:
             return pd.read_json(path, lines=True)
@@ -171,7 +188,12 @@ def read_any(path: str) -> pd.DataFrame:
                 return pd.read_csv(path, low_memory=False, encoding=enc)
             except UnicodeDecodeError:
                 continue
-        return pd.read_csv(path, on_bad_lines="skip", low_memory=False)
+            except pd_errors.ParserError:     # inconsistent column counts
+                break
+        # tolerant last resort: skip malformed rows (python engine handles ragged
+        # rows; it doesn't accept low_memory, so that option is omitted here)
+        return pd.read_csv(path, on_bad_lines="skip", encoding="latin-1",
+                           engine="python")
     if low.endswith(".json"):
         try:
             return pd.read_json(path)
@@ -185,7 +207,11 @@ def read_any(path: str) -> pd.DataFrame:
     if low.endswith(".xls"):
         return pd.read_excel(path)
     if low.endswith(".txt"):
-        df = pd.read_csv(path, header=None, low_memory=False)
+        try:
+            df = pd.read_csv(path, header=None, low_memory=False)
+        except pd_errors.ParserError:         # ragged rows (e.g. MalAPI matrix)
+            df = pd.read_csv(path, header=None, on_bad_lines="skip",
+                             encoding="latin-1", engine="python")
         if df.shape[1] == len(NSLKDD_COLS):
             df.columns = NSLKDD_COLS
         return df

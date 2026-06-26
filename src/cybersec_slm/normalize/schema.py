@@ -77,7 +77,12 @@ class CanonicalRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    id: str = Field(..., description="stable record id (content-hash derived)")
+    # Human-readable run reference (source + positional counter), e.g.
+    # "india-it-act-2000:00000042". The pipeline also stamps each dataset.jsonl
+    # row with a sequential `record_id` (rec_000000001, … — the annotation-team
+    # handoff label) and a `content_hash` (the stable content fingerprint; use
+    # this to re-link if the data is regenerated, since rec_ ids can shift).
+    id: str = Field(..., description="human-readable positional id; handoff label is record_id, stable anchor is content_hash")
     domain: str = Field(..., description="one of the canonical domains")
     source: str = Field(..., description="human-readable source name")
     text: str = Field(..., description="normalized natural-language payload")
