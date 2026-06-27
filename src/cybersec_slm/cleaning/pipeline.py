@@ -38,7 +38,7 @@ from .langfilter import LangFilter
 from .pii import Redactor
 from .translate import Translator
 
-DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.pkl")
+DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")
 
 REPORT_COLS = ["sub_domain", "source", "file", "in", "mapped_text",
                "excluded_no_text", "sanitized", "struct_fixed", "struct_dropped",

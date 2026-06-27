@@ -97,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="service-account JSON for append (env: GOOGLE_SHEETS_CREDENTIALS)")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    sub.add_parser("all", help="extract -> clean (full pipeline)")
+    sub.add_parser("all", help="extract -> clean -> normalize (full pipeline)")
     return p
 
 
@@ -127,10 +127,8 @@ def main(argv: list[str] | None = None) -> None:
                                final_dedup=not args.no_final_dedup)
 
     elif args.stage == "normalize":
-        from .core import CLEAN_DATA
         from .normalize import run_normalization
-        run_normalization(args.input or CLEAN_DATA, resume=not args.fresh,
-                          limit=args.limit)
+        run_normalization(args.input, resume=not args.fresh, limit=args.limit)
 
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
@@ -153,8 +151,12 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "all":
         from .cleaning import run as cleaning
         from .extraction import run as extraction
+        from .normalize import run_normalization
         extraction.run("all")
         cleaning.run("all")
+        # full rebuild: extract+clean regenerate upstream, so normalize fresh
+        # (resume=False) instead of appending/deduping against a stale dataset.
+        run_normalization(resume=False)
 
 
 if __name__ == "__main__":
