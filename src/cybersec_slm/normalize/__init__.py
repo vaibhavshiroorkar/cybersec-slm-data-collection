@@ -7,6 +7,7 @@ Pydantic Validation -> Near-Duplicate Check -> dataset.jsonl -> handoff.
 
 from .dedup import FailureTracker, NearDuplicateIndex
 from .enrich import build_record, content_hash
+from .manifest import build_manifest, write_manifest
 from .mappers import (
     BaseMapper,
     ProseMapper,

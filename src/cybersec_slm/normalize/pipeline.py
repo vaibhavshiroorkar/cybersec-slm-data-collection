@@ -204,9 +204,17 @@ class Normalizer:
 
 
 def run_normalization(input_dir: str | None = None, *, resume: bool = True,
-                      limit: int | None = None) -> dict:
-    """Convenience entry point used by the CLI and other stages."""
-    return Normalizer(resume=resume).run(input_dir, limit=limit)
+                      limit: int | None = None, manifest: bool = True) -> dict:
+    """Convenience entry point used by the CLI and other stages.
+
+    Writes the provenance manifest alongside dataset.jsonl by default (every
+    release ships its datasheet). Imported lazily to avoid a circular import.
+    """
+    report = Normalizer(resume=resume).run(input_dir, limit=limit)
+    if manifest:
+        from .manifest import write_manifest
+        write_manifest()
+    return report
 
 
 def main():

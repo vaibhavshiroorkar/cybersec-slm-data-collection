@@ -20,10 +20,12 @@ def show_table() -> None:
     import pandas as pd
 
     from .common import category_of
-    df = IngestLog().table()
+    log = IngestLog()
+    df = log.table()
     if df.empty:
         logger.info("ingest log is empty — run fetch/scrape first.")
         return
+    log.export_ledger()                 # provenance ledger -> logs/provenance/ledger.csv
     df["category"] = df["kind"].apply(category_of)
     df = df.drop_duplicates(subset=["name", "domain"], keep="last")
     out = df[COLS].rename(columns=dict(zip(COLS, HEADERS, strict=False)))

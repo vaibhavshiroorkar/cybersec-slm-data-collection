@@ -356,6 +356,20 @@ class IngestLog:
     def table(self) -> pd.DataFrame:
         return pd.read_sql_query("SELECT * FROM ingest ORDER BY domain, name", self.con)
 
+    def export_ledger(self, path: str | None = None) -> str:
+        """Write the provenance ledger (one row per produced/skipped file) to CSV.
+
+        Version-controlled / DVC-tracked, this is the trace that lets a toxic or
+        mis-licensed source be scoped and surgically removed later rather than
+        forcing the whole corpus to be discarded (threat model: Licensing and
+        Provenance as a Security Control).
+        """
+        path = path or os.path.join(LOGS, "provenance", "ledger.csv")
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.table().to_csv(path, index=False)
+        logger.info(f"provenance ledger -> {path}")
+        return path
+
 
 class _Collector:
     """Drop-in for ``IngestLog`` that buffers rows in memory instead of SQLite.
