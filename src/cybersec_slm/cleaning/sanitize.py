@@ -2,8 +2,9 @@
 """Structural Sanitization — the first stage.
 
 Fixes encoding (ftfy when available, else a mojibake heuristic), normalizes
-unicode to NFC, strips control characters and collapses whitespace, fills
-missing required fields, and normalizes date-ish fields to ISO-8601.
+unicode to NFC, strips control characters and collapses whitespace, normalizes
+existing required fields (without fabricating missing ones — the normalize stage
+supplies provenance defaults), and normalizes date-ish fields to ISO-8601.
 
 Public API:
     sanitize_text(s) -> str
@@ -81,8 +82,10 @@ def _to_iso(value):
 
 
 def sanitize_record(rec: dict) -> tuple[dict, bool]:
-    """Return (sanitized_record, changed). Fills missing required fields,
-    cleans text, and normalizes any date-ish fields to ISO."""
+    """Return (sanitized_record, changed). Normalizes existing required fields
+    (None -> ""), cleans text, and normalizes any date-ish fields to ISO. Missing
+    provenance fields are *not* fabricated here — the normalize mappers default
+    them (see normalize/mappers.py::BaseMapper._base)."""
     out = dict(rec)
     changed = False
 

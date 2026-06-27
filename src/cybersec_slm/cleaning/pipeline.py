@@ -16,12 +16,23 @@ import json
 import os
 import tempfile
 
-from . import anomaly
-from . import sanitize
-from . import textmap
-from .common import (LOGS, OUT_CLEAN_DATA, OUT_CLEANED, OUT_DROPPED, OUT_FLAGGED,
-                    OUT_STAGES, PARSE_ERROR, RAW_DATA, REPORTS, JsonlWriter,
-                    find_input_files, iter_jsonl, logger, text_of)
+from . import anomaly, sanitize, textmap
+from .common import (
+    LOGS,
+    OUT_CLEAN_DATA,
+    OUT_CLEANED,
+    OUT_DROPPED,
+    OUT_FLAGGED,
+    OUT_STAGES,
+    PARSE_ERROR,
+    RAW_DATA,
+    REPORTS,
+    JsonlWriter,
+    find_input_files,
+    iter_jsonl,
+    logger,
+    text_of,
+)
 from .dedup import Deduper
 from .langfilter import LangFilter
 from .pii import Redactor

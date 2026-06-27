@@ -14,9 +14,23 @@ import shutil
 import sys
 from urllib.parse import urlparse
 
-from .common import (CAP_BYTES, EXT_PRIORITY, ONE_MB, RAW_DATA, SKIP_SUBSTRINGS,
-                    IngestLog, OversizeError, category_of, count_lines, download,
-                    group_key, logger, remote_size, sha256_file, to_jsonl)
+from .common import (
+    CAP_BYTES,
+    EXT_PRIORITY,
+    ONE_MB,
+    RAW_DATA,
+    SKIP_SUBSTRINGS,
+    IngestLog,
+    OversizeError,
+    category_of,
+    count_lines,
+    download,
+    group_key,
+    logger,
+    remote_size,
+    sha256_file,
+    to_jsonl,
+)
 
 BASE = RAW_DATA
 

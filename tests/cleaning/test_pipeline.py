@@ -38,6 +38,10 @@ def test_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
     monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+    # isolate the dedup checkpoint: run_all resumes from it by default, so without
+    # this the test would pollute (and then re-read) the real logs/ checkpoint and
+    # flag its own records as exact dups on a second run.
+    monkeypatch.setattr(pipeline, "DEDUP_CKPT", str(tmp_path / "dedup_ckpt"))
 
     # Stub the translator so the test is deterministic and offline: it "translates"
     # any non-English record into a fixed English marker.

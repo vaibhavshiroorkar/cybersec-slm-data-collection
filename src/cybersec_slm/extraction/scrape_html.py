@@ -15,8 +15,7 @@ from urllib.robotparser import RobotFileParser
 
 from selectolax.parser import HTMLParser
 
-from .common import (HEADERS, ONE_MB, RAW_DATA, IngestLog, category_of, http_get,
-                    logger, sha256_file)
+from .common import HEADERS, ONE_MB, RAW_DATA, IngestLog, category_of, http_get, logger, sha256_file
 from .manifest import SITES
 
 BASE = RAW_DATA

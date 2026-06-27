@@ -154,7 +154,7 @@ class Normalizer:
         logger.info(f"normalize: input={input_dir} -> {DATASET}")
         n = 0
         try:
-            for ap, sub_domain, source, rel in find_input_files(input_dir):
+            for ap, sub_domain, source, _rel in find_input_files(input_dir):
                 for i, rec in enumerate(iter_jsonl(ap)):
                     if limit is not None and i >= limit:
                         break
@@ -200,7 +200,8 @@ def run_normalization(input_dir: str = CLEAN_DATA, *, resume: bool = True,
 
 def main():
     p = argparse.ArgumentParser(description="Schema-normalize cleaned records into dataset.jsonl")
-    p.add_argument("--input", default=CLEAN_DATA, help="cleaned-records root (default: clean_data/)")
+    p.add_argument("--input", default=CLEAN_DATA,
+                   help="cleaned-records root (default: clean_data/)")
     p.add_argument("--fresh", action="store_true",
                    help="ignore any existing dataset.jsonl (do not resume/append)")
     p.add_argument("--limit", type=int, default=None, help="cap records per file (debug)")

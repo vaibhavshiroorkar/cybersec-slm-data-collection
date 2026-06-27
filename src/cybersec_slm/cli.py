@@ -151,8 +151,8 @@ def main(argv: list[str] | None = None) -> None:
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        from .extraction import run as extraction
         from .cleaning import run as cleaning
+        from .extraction import run as extraction
         extraction.run("all")
         cleaning.run("all")
 

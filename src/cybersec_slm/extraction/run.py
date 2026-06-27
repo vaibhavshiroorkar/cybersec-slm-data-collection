@@ -26,7 +26,7 @@ def show_table() -> None:
         return
     df["category"] = df["kind"].apply(category_of)
     df = df.drop_duplicates(subset=["name", "domain"], keep="last")
-    out = df[COLS].rename(columns=dict(zip(COLS, HEADERS)))
+    out = df[COLS].rename(columns=dict(zip(COLS, HEADERS, strict=False)))
     out_path = os.path.join(LOGS, "final_table.csv")
     out.to_csv(out_path, index=False)
     with pd.option_context("display.max_rows", None, "display.width", 200):

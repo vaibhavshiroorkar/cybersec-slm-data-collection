@@ -35,7 +35,7 @@ try:
             return v
 
         @model_validator(mode="after")
-        def warn_missing_provenance(self) -> "CybersecRecord":
+        def warn_missing_provenance(self) -> CybersecRecord:
             if not self.source:
                 logger.debug("record missing source field")
             if not self.url:

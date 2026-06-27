@@ -11,9 +11,20 @@ from __future__ import annotations
 
 import os
 
-from ..core import (CLEAN_DATA, CLEANED, DROPPED, FLAGGED, LOGS,  # noqa: F401
-                    PARSE_ERROR, RAW_DATA, STAGES, JsonlWriter, iter_jsonl,
-                    logger, try_import)
+from ..core import (  # noqa: F401
+    CLEAN_DATA,
+    CLEANED,
+    DROPPED,
+    FLAGGED,
+    LOGS,
+    PARSE_ERROR,
+    RAW_DATA,
+    STAGES,
+    JsonlWriter,
+    iter_jsonl,
+    logger,
+    try_import,
+)
 
 # directory of this package (used by langfilter to look for a fasttext model)
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -63,7 +74,8 @@ def find_input_files(input_dir: str = RAW_DATA):
 
 def text_of(rec: dict) -> str:
     """Best-effort text extraction; '' if absent/None."""
-    for field in ("text", "content", "description", "body", "raw_log", "message", "additional_info"):
+    for field in ("text", "content", "description", "body", "raw_log",
+                  "message", "additional_info"):
         val = rec.get(field)
         if val and isinstance(val, str) and val.strip():
             return val.strip()

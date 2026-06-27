@@ -13,7 +13,7 @@ the SLM text pipeline.  They can still be used for a separate classification
 model but produce no usable text field.
 """
 
-from .common import GOV_US, GOV_IN, MITRE
+from .common import GOV_IN, GOV_US, MITRE
 
 CWE_TERMS = "MITRE CWE Terms of Use (free use with attribution)"
 

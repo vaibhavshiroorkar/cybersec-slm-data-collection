@@ -54,7 +54,7 @@ _INTERNAL_PREFIX = "_"
 
 
 # --------------------------------------------------------------- mapper registry
-MAPPER_REGISTRY: dict[str, "BaseMapper"] = {}
+MAPPER_REGISTRY: dict[str, BaseMapper] = {}
 _UNMAPPED: Counter[str] = Counter()        # sources with no dedicated mapper
 
 

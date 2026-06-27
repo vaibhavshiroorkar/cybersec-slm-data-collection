@@ -53,7 +53,7 @@ def run_streaming(spec: str | None = None, *, sheet: str | int | None = None,
 
     log = IngestLog()                       # parent-only SQLite writer
     clean_rows: list[dict] = []
-    ok = failed = 0
+    ok = failed = skipped = 0
     ctx = mp.get_context("spawn")
 
     try:
@@ -74,14 +74,17 @@ def run_streaming(spec: str | None = None, *, sheet: str | int | None = None,
                 for row in meta.get("ingest_rows", []):
                     log.record(**row)            # serialized: parent only
                 clean_rows.extend(meta.get("clean_report_rows", []))
-                if meta.get("status") == "ok":
+                status = meta.get("status")
+                if status == "ok":
                     ok += 1
+                elif status == "skipped":
+                    skipped += 1
                 else:
                     failed += 1
     except BrokenProcessPool as ex2:
         logger.error(f"process pool broke: {ex2}")
 
-    logger.info(f"streaming done: ok={ok} failed={failed}")
+    logger.info(f"streaming done: ok={ok} failed={failed} skipped={skipped}")
 
     if final_dedup:
         pipeline.final_global_dedup(core.CLEAN_DATA)

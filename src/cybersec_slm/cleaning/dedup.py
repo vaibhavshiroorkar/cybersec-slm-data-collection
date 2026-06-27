@@ -20,8 +20,7 @@ import os
 import pickle
 import re
 
-from .common import (MINHASH_PERM, NEAR_DUP_THRESHOLD, SHINGLE_SIZE, logger,
-                    try_import)
+from .common import MINHASH_PERM, NEAR_DUP_THRESHOLD, SHINGLE_SIZE, logger, try_import
 
 _WS_RE = re.compile(r"\s+")
 _MERSENNE = (1 << 61) - 1          # large prime for hash mixing
@@ -69,7 +68,7 @@ class _FallbackLSH:
 
     @staticmethod
     def _similarity(s1, s2) -> float:
-        return sum(1 for x, y in zip(s1, s2) if x == y) / len(s1)
+        return sum(1 for x, y in zip(s1, s2, strict=False) if x == y) / len(s1)
 
     def add(self, text: str) -> tuple[bool, str]:
         sh = _shingles(text, SHINGLE_SIZE)

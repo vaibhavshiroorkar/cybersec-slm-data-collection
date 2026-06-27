@@ -18,7 +18,7 @@ import importlib
 import json
 import os
 import sys
-from typing import Iterator
+from collections.abc import Iterator
 
 
 # ------------------------------------------------------- optional imports -----
@@ -102,7 +102,7 @@ PARSE_ERROR = "_parse_error"     # marker key on lines that failed to parse
 def iter_jsonl(path: str) -> Iterator[dict]:
     """Yield one dict per line. Malformed lines yield {PARSE_ERROR: True, ...}
     so callers can count them instead of crashing."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for n, line in enumerate(f, 1):
             line = line.strip()
             if not line:

@@ -15,8 +15,7 @@ import time
 
 import pandas as pd
 
-from ..core import (LOGS, RAW_DATA, count_lines, logger, sha256_file,  # noqa: F401
-                    try_import)
+from ..core import LOGS, RAW_DATA, count_lines, logger, sha256_file, try_import  # noqa: F401
 
 # ---------------------------------------------------------------- config -----
 CAP_BYTES = 5 * 1024 ** 3            # 5 GB hard cap (download + jsonl)
@@ -42,8 +41,12 @@ MITRE = "Apache-2.0 / MITRE ATT&CK Terms (free use w/ attribution)"
 
 # ------------------------------------------------------------- http / io -----
 import httpx  # noqa: E402
-from tenacity import (retry, retry_if_exception_type, stop_after_attempt,  # noqa: E402
-                      wait_exponential)
+from tenacity import (  # noqa: E402
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 _RETRY = dict(stop=stop_after_attempt(4),
               wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -116,7 +119,7 @@ SKIP_SUBSTRINGS = ("embedding", "faiss", "statistics", "data_stats", "_stats")
 
 def _read_json_repair(path: str) -> pd.DataFrame:
     """Parse JSON tolerantly (handles hand-edited / broken JSON)."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     try:
         data = json.loads(text)
@@ -162,7 +165,7 @@ def _read_unknown(path: str) -> pd.DataFrame:
 
 def _read_textfile(path: str) -> pd.DataFrame:
     """Read a whole rule/markup file (YARA, YAML, Sigma) as ONE text record."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         content = f.read().strip()
     if not content:
         return pd.DataFrame(columns=["text"])
