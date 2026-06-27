@@ -32,5 +32,6 @@ __all__ = [
     "BaseMapper", "ProseMapper", "StructuredMapper", "register_mapper",
     "get_mapper", "clean_text",
     "build_record", "content_hash",
+    "build_manifest", "write_manifest",
     "NearDuplicateIndex", "FailureTracker",
 ]
