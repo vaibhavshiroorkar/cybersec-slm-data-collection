@@ -53,6 +53,11 @@ discovery = [
     "google-api-python-client>=2.100.0",
     "google-auth>=2.30.0",
 ]
+# EDA stage runs on the standard library; this extra only adds the optional
+# ydata-profiling HTML report (cybersec-slm eda --profile).
+eda = [
+    "ydata-profiling>=4.10.0",
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",

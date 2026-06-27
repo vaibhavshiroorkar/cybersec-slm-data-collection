@@ -52,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
 
+    # ── eda ───────────────────────────────────────────────────────────────────
+    ed = sub.add_parser("eda",
+                        help="validate cleaned corpus + sufficiency gate (-> logs/eda/)")
+    ed.add_argument("--input", default=None,
+                    help="cleaned-records root (default: clean_data/ then cleaned/)")
+    ed.add_argument("--no-enforce", action="store_true",
+                    help="report only; do not fail the run on a blocker")
+    ed.add_argument("--profile", action="store_true",
+                    help="also write a ydata-profiling HTML report (needs the eda extra)")
+
     # ── validate ──────────────────────────────────────────────────────────────
     sub.add_parser("validate",
                    help="validate cleaned/ records against Pydantic schema")
@@ -130,6 +140,10 @@ def main(argv: list[str] | None = None) -> None:
         from .normalize import run_normalization
         run_normalization(args.input, resume=not args.fresh, limit=args.limit)
 
+    elif args.stage == "eda":
+        from .eda import run_eda
+        run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
+
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
@@ -150,10 +164,20 @@ def main(argv: list[str] | None = None) -> None:
 
     elif args.stage == "all":
         from .cleaning import run as cleaning
+        from .core import logger
+        from .eda import SufficiencyError, run_eda
         from .extraction import run as extraction
         from .normalize import run_normalization
         extraction.run("all")
         cleaning.run("all")
+        # EDA sufficiency gate: a blocker means loop back to ingestion, not advance.
+        try:
+            run_eda(enforce=True)
+        except SufficiencyError as exc:
+            logger.error(str(exc))
+            print("Pipeline halted at the EDA sufficiency gate — "
+                  "address the blockers above and re-run.")
+            return
         # full rebuild: extract+clean regenerate upstream, so normalize fresh
         # (resume=False) instead of appending/deduping against a stale dataset.
         run_normalization(resume=False)
