@@ -106,6 +106,15 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--creds", default=None,
                    help="service-account JSON for append (env: GOOGLE_SHEETS_CREDENTIALS)")
 
+    # ── flow (Prefect orchestration) ──────────────────────────────────────────
+    fl = sub.add_parser("flow",
+                        help="run the Prefect build-corpus flow (needs orchestration extra)")
+    fl.add_argument("--sources", default=None, help="path/URL to a sources .xlsx")
+    fl.add_argument("--no-enforce-eda", action="store_true",
+                    help="run the EDA gate in report-only mode")
+    fl.add_argument("--dvc-push", action="store_true",
+                    help="snapshot + push the dataset to the DVC remote")
+
     # ── all ───────────────────────────────────────────────────────────────────
     sub.add_parser("all", help="extract -> clean -> normalize (full pipeline)")
     return p
@@ -143,6 +152,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "eda":
         from .eda import run_eda
         run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
+
+    elif args.stage == "flow":
+        from .orchestration.flows import build_corpus
+        build_corpus(args.sources, enforce_eda=not args.no_enforce_eda,
+                     dvc_push=args.dvc_push)
 
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus

@@ -58,6 +58,11 @@ discovery = [
 eda = [
     "ydata-profiling>=4.10.0",
 ]
+# Prefect orchestration + AWS (Secrets Manager, ECS) for the hosted pipeline.
+orchestration = [
+    "prefect>=3.0.0",
+    "prefect-aws>=0.5.0",
+]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
