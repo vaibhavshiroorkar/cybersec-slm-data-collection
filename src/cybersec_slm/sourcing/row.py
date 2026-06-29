@@ -2,7 +2,7 @@
 """Map a search :class:`~.search.Result` into a tracking-sheet row.
 
 The sheet's columns (exact order) are the contract between this crawler and the
-finalized Google Sheet. Only the fields that are knowable at *discovery* time
+finalized Google Sheet. Only the fields that are knowable at *sourcing* time
 are filled; the rest (counts, sizes, verification status) are left blank for the
 extraction stage and a human to complete.
 """

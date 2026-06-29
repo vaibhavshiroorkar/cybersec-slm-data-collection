@@ -1,4 +1,4 @@
-# Canonical Record Schema (`normalized/dataset.jsonl`)
+# Canonical Record Schema (`final_data/dataset.jsonl`)
 
 The normalization stage emits one JSON object per line against this 22-field
 contract (`src/cybersec_slm/normalize/schema.py::CanonicalRecord`, Pydantic v2,

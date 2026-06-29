@@ -9,7 +9,6 @@ __pycache__
 # generated data + logs (mounted at /data at runtime)
 raw_data/
 clean_data/
-cleaned/
 flagged/
 dropped/
 _stages/

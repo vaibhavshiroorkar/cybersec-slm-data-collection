@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Schema-normalization orchestrator — walks the flowchart end to end.
 
-    Raw cleaned record (clean_data/ or cleaned/)
+    Raw cleaned record (clean_data/)
         -> Source Mapper (prose / structured)  -> Registry Dispatch
         -> build_record (id, content_hash, lang/counts, labels, placeholders)
         -> Pydantic Validation ──invalid──> rejected.jsonl (metadata-only) ;
@@ -12,9 +12,10 @@
         -> Update Hash List (seen + LSH)
         -> Handoff to annotation team
 
-Outputs land under ``normalized/``: ``dataset.jsonl`` (the corpus), ``rejected.jsonl``
-and ``duplicates.jsonl`` sinks, and ``dedup_scores.jsonl`` (near-dup audit). State
-is rebuilt from an existing ``dataset.jsonl`` so the run is resumable.
+Outputs land under ``final_data/``: ``dataset.jsonl`` (the corpus),
+``rejected.jsonl`` and ``duplicates.jsonl`` sinks, and ``dedup_scores.jsonl``
+(near-dup audit). State is rebuilt from an existing ``dataset.jsonl`` so the run
+is resumable.
 
 Rejected records are written **metadata-only** by default (no raw text — avoids a
 secondary PII leak in diagnostic logs); set ``CYBERSEC_SLM_DEBUG_REJECTS=1`` to
@@ -30,17 +31,17 @@ import os
 from pydantic import ValidationError
 
 from ..cleaning.common import find_input_files
-from ..core import CLEAN_DATA, CLEANED, DATA_ROOT, LOGS, iter_jsonl, logger
+from ..core import CLEAN_DATA, FINAL_DATA, LOGS, iter_jsonl, logger
 from . import mappers
 from .dedup import FailureTracker, NearDuplicateIndex
 from .enrich import build_record
 from .schema import CanonicalRecord
 
-NORMALIZED = os.path.join(DATA_ROOT, "normalized")
-DATASET = os.path.join(NORMALIZED, "dataset.jsonl")
-REJECTED = os.path.join(NORMALIZED, "rejected.jsonl")
-DUPLICATES = os.path.join(NORMALIZED, "duplicates.jsonl")
-DEDUP_SCORES = os.path.join(NORMALIZED, "dedup_scores.jsonl")
+FINAL = FINAL_DATA
+DATASET = os.path.join(FINAL, "dataset.jsonl")
+REJECTED = os.path.join(FINAL, "rejected.jsonl")
+DUPLICATES = os.path.join(FINAL, "duplicates.jsonl")
+DEDUP_SCORES = os.path.join(FINAL, "dedup_scores.jsonl")
 REPORT = os.path.join(LOGS, "normalize_report.json")
 
 DEBUG_REJECTS = os.environ.get("CYBERSEC_SLM_DEBUG_REJECTS", "").strip() in ("1", "true", "yes")
@@ -62,11 +63,7 @@ def _short_reason(exc: Exception) -> str:
 
 
 def _default_input() -> str:
-    """Prefer clean_data/ (streaming path); fall back to cleaned/ (sequential path)."""
-    if os.path.isdir(CLEAN_DATA) and any(os.scandir(CLEAN_DATA)):
-        return CLEAN_DATA
-    if os.path.isdir(CLEANED) and any(os.scandir(CLEANED)):
-        return CLEANED
+    """Use clean_data/ (streaming per-source output)."""
     return CLEAN_DATA
 
 
@@ -218,9 +215,10 @@ def run_normalization(input_dir: str | None = None, *, resume: bool = True,
 
 
 def main():
-    p = argparse.ArgumentParser(description="Schema-normalize cleaned records into dataset.jsonl")
+    p = argparse.ArgumentParser(
+        description="Schema-normalize cleaned records into final_data/dataset.jsonl")
     p.add_argument("--input", default=None,
-                   help="cleaned-records root (default: clean_data/ then cleaned/)")
+                   help="cleaned-records root (default: clean_data/)")
     p.add_argument("--fresh", action="store_true",
                    help="ignore any existing dataset.jsonl (do not resume/append)")
     p.add_argument("--limit", type=int, default=None, help="cap records per file (debug)")

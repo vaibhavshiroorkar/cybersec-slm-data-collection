@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Orchestrate keyword search -> dedup -> append for the discovery stage.
+"""Orchestrate keyword search -> dedup -> append for the sourcing stage.
 
 Pipeline per run:
 
@@ -50,7 +50,7 @@ def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
              out_csv: str | None = None, api_key: str | None = None,
              cse_id: str | None = None, creds_path: str | None = None,
              client=None) -> dict:
-    """Run discovery and return a summary dict.
+    """Run sourcing and return a summary dict.
 
     ``mode`` selects the keyword catalog: ``datasets`` (corpora/repos), ``text``
     (articles/docs/writeups), or ``both``. ``client`` is an optional shared
@@ -67,9 +67,9 @@ def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
         raise ValueError(f"unknown Sub-Domain(s): {unknown}. "
                          f"Valid: {list(kw.DOMAIN_KEYWORDS)}")
 
-    logger.info(f"discover: reading existing links from sheet {spreadsheet_id}")
+    logger.info(f"source: reading existing links from sheet {spreadsheet_id}")
     seen = existing_links(spreadsheet_id, client=client)
-    logger.info(f"discover: {len(seen)} links already in the sheet")
+    logger.info(f"source: {len(seen)} links already in the sheet")
 
     today = date.today().strftime("%d/%m/%Y")
     new_rows: list[dict[str, str]] = []
@@ -89,7 +89,7 @@ def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
                     results = google_search(query, api_key=api_key, cse_id=cse_id,
                                             num=min(per_keyword, 10), client=client)
                 except SearchError as e:
-                    logger.error(f"discover: search failed for {query!r}: {e}")
+                    logger.error(f"source: search failed for {query!r}: {e}")
                     raise
                 for res in results:
                     found += 1
@@ -102,21 +102,21 @@ def discover(sheet_url: str | None = None, *, domains: list[str] | None = None,
                     if max_per_domain is not None and added_here >= max_per_domain:
                         break
         by_domain[domain] = added_here
-        logger.info(f"discover: {domain}: {added_here} new")
+        logger.info(f"source: {domain}: {added_here} new")
 
     csv_path = out_csv or os.path.join(
         LOGS, "discovered", f"discovered-{date.today():%Y%m%d}.csv")
     _write_csv(new_rows, csv_path)
-    logger.info(f"discover: wrote {len(new_rows)} candidate rows -> {csv_path}")
+    logger.info(f"source: wrote {len(new_rows)} candidate rows -> {csv_path}")
 
     appended = 0
     if new_rows and not dry_run:
         appended = append_rows(
             spreadsheet_id, [row_to_list(r) for r in new_rows],
             creds_path=creds_path or "")
-        logger.info(f"discover: appended {appended} rows to the sheet")
+        logger.info(f"source: appended {appended} rows to the sheet")
     elif dry_run:
-        logger.info("discover: dry-run, not appending to the sheet")
+        logger.info("source: dry-run, not appending to the sheet")
 
     return {"found": found, "new": len(new_rows), "appended": appended,
             "csv": csv_path, "by_domain": by_domain}

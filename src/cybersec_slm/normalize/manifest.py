@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provenance manifest — a "datasheet for datasets" for every release.
 
-Each ``dataset.jsonl`` is shipped with ``normalized/manifest.json`` so the
+Each ``dataset.jsonl`` is shipped with ``final_data/manifest.json`` so the
 downstream annotation/training teams are never handed a blob with no pedigree
 (threat model Output/Handoff: "Downstream Context Blindsidedness"). The manifest
 records source origins + counts, the SPDX license breakdown, an EDA distribution
@@ -20,9 +20,9 @@ from collections import Counter
 
 from ..core import DATA_ROOT, iter_jsonl, logger, sha256_file
 from .enrich import pipeline_version
-from .pipeline import DATASET, NORMALIZED
+from .pipeline import DATASET, FINAL
 
-MANIFEST = os.path.join(NORMALIZED, "manifest.json")
+MANIFEST = os.path.join(FINAL, "manifest.json")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 

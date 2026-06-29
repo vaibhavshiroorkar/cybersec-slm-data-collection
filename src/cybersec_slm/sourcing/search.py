@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""Google Programmable Search (Custom Search JSON API) client.
-
-A single query returns a list of :class:`Result` items. The HTTP call and the
-response parsing are split so the parser can be unit-tested against a captured
-payload without any network or credentials.
-
-Credentials (both required for a live search):
-    GOOGLE_SEARCH_API_KEY    an API key with the Custom Search API enabled
-                             (legacy alias: GOOGLE_API_KEY)
-    GOOGLE_SEARCH_ENGINE_ID  the Programmable Search Engine id (the ``cx`` value),
-                             configured to "Search the entire web"
-                             (legacy alias: GOOGLE_CSE_ID)
-
-Free tier is 100 queries/day; the client keeps requests modest (<=10 results
-per query, which is one API call).
-"""
+"""Google Programmable Search (Custom Search JSON API) client for sourcing."""
 
 from __future__ import annotations
 
@@ -26,8 +11,6 @@ ENDPOINT = "https://www.googleapis.com/customsearch/v1"
 
 @dataclass(frozen=True)
 class Result:
-    """One search hit, reduced to the fields the crawler needs."""
-
     title: str
     link: str
     snippet: str
@@ -39,11 +22,6 @@ class SearchError(RuntimeError):
 
 
 def _parse_items(payload: dict) -> list[Result]:
-    """Turn a Custom Search JSON response into :class:`Result` items.
-
-    Tolerant of missing fields and of an absent ``items`` key (a query with no
-    hits returns no ``items``), so it never raises on a well-formed response.
-    """
     out: list[Result] = []
     for item in payload.get("items", []) or []:
         link = (item.get("link") or "").strip()
@@ -61,11 +39,6 @@ def _parse_items(payload: dict) -> list[Result]:
 def google_search(query: str, *, api_key: str | None = None,
                   cse_id: str | None = None, num: int = 10,
                   client=None) -> list[Result]:
-    """Run one search and return up to ``num`` (<=10) results.
-
-    ``client`` is an optional ``httpx.Client`` (handy for tests / connection
-    reuse); if omitted a short-lived one is created.
-    """
     api_key = (api_key or os.environ.get("GOOGLE_SEARCH_API_KEY")
                or os.environ.get("GOOGLE_API_KEY"))
     cse_id = (cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
@@ -91,7 +64,6 @@ def google_search(query: str, *, api_key: str | None = None,
             client.close()
 
     if resp.status_code != 200:
-        # The API reports quota/key problems in the body; surface it.
         detail = ""
         try:
             detail = resp.json().get("error", {}).get("message", "")

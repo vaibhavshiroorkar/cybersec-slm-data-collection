@@ -34,7 +34,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     ])
 
     # redirect all outputs into tmp so the real folders are untouched
-    monkeypatch.setattr(pipeline, "OUT_CLEANED", str(tmp_path / "cleaned"))
+    monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean_data"))
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
     monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
@@ -77,7 +77,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     # cleaned output must not contain the redacted email, must contain the
     # translated marker, and must not contain the original Russian text.
     cleaned_text = ""
-    for r, _d, fs in os.walk(str(tmp_path / "cleaned")):
+    for r, _d, fs in os.walk(str(tmp_path / "clean_data")):
         for fn in fs:
             with open(os.path.join(r, fn), encoding="utf-8") as f:
                 cleaned_text += f.read()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Google Sheet I/O for discovery: read existing links (dedup) + append rows.
+"""Google Sheet I/O for sourcing: read existing links (dedup) + append rows.
 
 Two access paths, on purpose:
 
@@ -88,8 +88,8 @@ def _build_service(creds_path: str):
         from googleapiclient.discovery import build
     except ImportError as e:                                  # pragma: no cover
         raise RuntimeError(
-            "Appending to the sheet needs the 'discovery' extra: "
-            "uv sync --extra discovery (google-api-python-client, google-auth)."
+            "Appending to the sheet needs google-api-python-client + google-auth "
+            "(base deps — run `uv sync` to install them)."
         ) from e
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_file(creds_path, scopes=scopes)

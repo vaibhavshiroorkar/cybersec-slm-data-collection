@@ -7,7 +7,7 @@ paths, and line-oriented JSONL helpers + hashing.
 
 Data paths are resolved from ``CYBERSEC_SLM_DATA_ROOT`` if set, otherwise the
 current working directory — so running a command from the project root puts
-``raw_data/``, ``cleaned/``, ``logs/`` etc. there, while tests can point them
+``raw_data/``, ``clean_data/``, ``logs/`` etc. there, while tests can point them
 elsewhere.
 """
 
@@ -46,8 +46,8 @@ def data_root() -> str:
 
 DATA_ROOT = data_root()
 RAW_DATA = os.path.join(DATA_ROOT, "raw_data")     # extraction output / cleaning input
-CLEANED = os.path.join(DATA_ROOT, "cleaned")        # cleaning output -> EDA handoff
 CLEAN_DATA = os.path.join(DATA_ROOT, "clean_data")  # streaming per-source clean output
+FINAL_DATA = os.path.join(DATA_ROOT, "final_data")  # canonical release dataset + sidecars
 FLAGGED = os.path.join(DATA_ROOT, "flagged")        # -> Data Annotation Team
 DROPPED = os.path.join(DATA_ROOT, "dropped")        # -> audit
 STAGES = os.path.join(DATA_ROOT, "_stages")         # single-stage diagnostics

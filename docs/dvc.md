@@ -1,13 +1,13 @@
 # Data Versioning with DVC
 
-Every corpus release (`normalized/dataset.jsonl` + its manifest and audit sinks)
+Every corpus release (`final_data/dataset.jsonl` + its manifest and audit sinks)
 is versioned with **DVC** and stored on **S3**. Git tracks tiny `.dvc`/`dvc.lock`
 pointers; the data lives in the remote. This is what makes a contaminated or
 mis-licensed batch *scopeable and rollback-able* instead of forcing a full rebuild
 (threat model Output: "Untraceable Contamination Scoping").
 
 What is versioned (DVC scope = **outputs + reports**):
-`normalized/dataset.jsonl`, `normalized/manifest.json`, the `rejected`/`duplicates`
+`final_data/dataset.jsonl`, `final_data/manifest.json`, the `rejected`/`duplicates`
 sinks, and the EDA / normalize metrics. The large intermediate trees (`raw_data/`,
 `clean_data/`, …) are re-derivable from the source allowlist + ledger and are left
 out (see `.dvcignore`).
@@ -15,7 +15,7 @@ out (see `.dvcignore`).
 ## One-time setup
 
 ```bash
-uv sync --extra dev            # dvc[s3] comes via the toolchain, or: pip install 'dvc[s3]'
+uv sync                        # base deps + dev group; for DVC: pip install 'dvc[s3]'
 dvc init                       # creates .dvc/ (commit it)
 dvc remote add -d s3 s3://<your-bucket>/dvc
 dvc remote modify s3 region <your-region>
@@ -44,5 +44,5 @@ dvc checkout                           # restore that dataset.jsonl from S3
 ```
 
 To scope a contaminated source: read its rows from `logs/provenance/ledger.csv`
-and `normalized/manifest.json`, remove that source from `sources/allowlist.yaml`,
+and `final_data/manifest.json`, remove that source from `sources/allowlist.yaml`,
 and `dvc repro` to rebuild without it — the rest of the corpus is unaffected.

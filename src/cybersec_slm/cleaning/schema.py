@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Output schema for validated cleaned records.
 
-Validates that every record coming out of cleaned/ meets the minimum contract
+Validates that every record coming out of clean_data/ meets the minimum contract
 for cybersec SLM training. Run after the cleaning pipeline:
 
     from cybersec_slm.cleaning.schema import validate_corpus
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-from ..core import CLEANED, iter_jsonl, logger
+from ..core import CLEAN_DATA, iter_jsonl, logger
 
 try:
     from pydantic import BaseModel, field_validator, model_validator
@@ -49,8 +49,8 @@ except ImportError:
     _PYDANTIC = False
 
 
-def validate_corpus(cleaned_dir: str = CLEANED) -> tuple[int, int]:
-    """Walk cleaned/ and validate every record against CybersecRecord.
+def validate_corpus(cleaned_dir: str = CLEAN_DATA) -> tuple[int, int]:
+    """Walk clean_data/ and validate every record against CybersecRecord.
 
     Returns (valid_count, invalid_count). Logs the first 20 validation errors
     so you can inspect them without drowning in output.

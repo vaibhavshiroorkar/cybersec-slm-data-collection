@@ -8,12 +8,17 @@ version = "0.1.0"
 description = "Collect, clean, and consolidate cybersecurity text data for SLM training."
 readme = "README.md"
 requires-python = ">=3.13"
-# Dependencies reflect what the extraction pipeline actually imports:
-#   common.py    -> pandas, loguru, httpx, tenacity, json-repair, orjson, pyarrow
-#   fetch.py     -> huggingface-hub, kaggle
-#   scrape.py    -> pymupdf, orjson
-#   scrape_html.py -> selectolax, playwright
+# Everything the pipeline needs to run at full quality, in one place: a plain
+# `uv sync` (or `pip install .`) installs all of it — no extras to remember.
+# The code still degrades gracefully if a package is somehow missing (cleaning
+# falls back to stdlib regex/heuristics), but a normal install never hits that.
+#
+# Two assets aren't Python packages and can't be pulled in as deps:
+#   - the Playwright browser   -> `playwright install chromium` (HTML crawler)
+#   - the fastText lid.176 .bin -> optional; langfilter falls back without it
+# The presidio spaCy model IS wired in below via [tool.uv.sources].
 dependencies = [
+    # --- core extraction / runtime ---
     "httpx>=0.27.0",
     "huggingface-hub>=0.25.0",
     "json-repair>=0.30.0",
@@ -29,46 +34,59 @@ dependencies = [
     "pyyaml>=6.0",               # version-controlled source allowlist (extraction/allowlist.py)
     "selectolax>=0.3.0",
     "tenacity>=9.0.0",
-]
-
-# The cleaning stage runs on the standard library alone (built-in fallbacks).
-# Install this group to upgrade each cleaning stage to its named tool.
-# Note: presidio also needs a spaCy model (python -m spacy download en_core_web_lg)
-# and fasttext needs a lid.176 model file in cleaning/ (or set FASTTEXT_LID_MODEL).
-[project.optional-dependencies]
-cleaning = [
+    # --- cleaning (sanitize / dedup / pii / langfilter / translate) ---
     "ftfy>=6.2.0",               # encoding/mojibake repair (sanitize)
     "python-dateutil>=2.9.0",    # flexible date parsing -> ISO (sanitize)
     "datasketch>=1.6.0",         # MinHash + LSH near-duplicate detection (dedup)
     "presidio-analyzer>=2.2",    # PII detection (pii)
     "presidio-anonymizer>=2.2",  # PII redaction (pii)
-    "fasttext-wheel>=0.9.2",     # language id (langfilter)
+    "en-core-web-lg",            # spaCy model presidio's NLP engine loads (see [tool.uv.sources])
+    "fasttext-predict>=0.9.2",   # language id (langfilter); prebuilt wheels incl. cp313/win
+                                 # (fasttext-wheel has no cp313 wheel -> source build needs MSVC)
     "langdetect>=1.0.9",         # language id fallback (langfilter)
     "deep-translator>=1.11.0",   # translate non-English -> English (translate)
-]
-# Search-engine source discovery (cybersec-slm discover). The search call and
-# dedup read use httpx (already a core dep); only the live append to the Google
-# Sheet needs these Google client libraries.
-discovery = [
+    # --- sourcing (cybersec-slm source -> append rows to the tracking sheet) ---
     "google-api-python-client>=2.100.0",
     "google-auth>=2.30.0",
 ]
-# EDA stage runs on the standard library; this extra only adds the optional
-# ydata-profiling HTML report (cybersec-slm eda --profile).
-eda = [
-    "ydata-profiling>=4.10.0",
-]
-# Prefect orchestration + AWS (Secrets Manager, ECS) for the hosted pipeline.
+
+# Two stage tools are intentionally opt-in, because neither can run in the
+# default local environment:
+#
+#   orchestration  Prefect + prefect-aws power `cybersec-slm flow` and the AWS/ECS
+#                  deployment. `cybersec-slm all` already runs the same pipeline
+#                  locally without them, they drag in ~100 transitive packages,
+#                  and on Windows their `whenever` extension ships a DLL that
+#                  Smart App Control / WDAC blocks ("Application Control policy
+#                  has blocked this file"). Install for the hosted path only:
+#                      uv sync --extra orchestration
+#
+#   profiling      ydata-profiling (the optional `eda --profile` HTML report)
+#                  caps pandas <3.0, which is unsatisfiable against the pinned
+#                  pandas>=3.0 — it can't share this environment at all. The EDA
+#                  *sufficiency gate* runs on the stdlib regardless; only the
+#                  cosmetic HTML profile needs it. Generate one in a throwaway
+#                  env when you want it: `uvx --with 'pandas<3' ydata-profiling`.
+[project.optional-dependencies]
 orchestration = [
     "prefect>=3.0.0",
     "prefect-aws>=0.5.0",
 ]
+
+# Dev-only tooling. uv installs this group by default on `uv sync`; the
+# production image opts out with `uv sync --no-dev` to stay lean.
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.6.0",
     "pip-audit>=2.7.0",          # supply-chain vulnerability audit (threat model: Blind Dependencies)
     "pre-commit>=3.7.0",         # local secrets/lint hooks (threat model: Unmonitored Code)
 ]
+
+# The presidio NLP engine loads the large English spaCy model by name; pin its
+# release wheel so `uv sync` installs it (no separate `python -m spacy download`).
+[tool.uv.sources]
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 
 [project.scripts]
 cybersec-slm = "cybersec_slm.cli:main"

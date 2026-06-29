@@ -111,7 +111,7 @@ def _dvc_snapshot(push: bool) -> None:
         logger.warning("orchestration: dvc not installed; skipping snapshot")
         return
     cmd = (["dvc", "repro"] if os.path.exists(os.path.join(_REPO_ROOT, "dvc.yaml"))
-           else ["dvc", "add", os.path.join(DATA_ROOT, "normalized", "dataset.jsonl")])
+           else ["dvc", "add", os.path.join(DATA_ROOT, "final_data", "dataset.jsonl")])
     try:
         subprocess.run(cmd, cwd=_REPO_ROOT, check=True)
         if push:

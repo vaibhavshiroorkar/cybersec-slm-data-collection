@@ -19,7 +19,7 @@ import json
 import os
 import time
 
-from ..core import CLEAN_DATA, CLEANED, LOGS, logger
+from ..core import CLEAN_DATA, LOGS, logger
 from . import config
 from .metrics import compute_metrics
 
@@ -31,10 +31,6 @@ class SufficiencyError(RuntimeError):
 
 
 def _default_input() -> str:
-    if os.path.isdir(CLEAN_DATA) and any(os.scandir(CLEAN_DATA)):
-        return CLEAN_DATA
-    if os.path.isdir(CLEANED) and any(os.scandir(CLEANED)):
-        return CLEANED
     return CLEAN_DATA
 
 

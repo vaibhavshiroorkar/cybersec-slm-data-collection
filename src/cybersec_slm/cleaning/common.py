@@ -13,7 +13,6 @@ import os
 
 from ..core import (  # noqa: F401
     CLEAN_DATA,
-    CLEANED,
     DROPPED,
     FLAGGED,
     LOGS,
@@ -30,8 +29,7 @@ from ..core import (  # noqa: F401
 PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # output aliases (read naturally in the stage modules)
-OUT_CLEANED = CLEANED
-OUT_CLEAN_DATA = CLEAN_DATA       # streaming per-source clean output
+OUT_CLEAN_DATA = CLEAN_DATA       # cleaning output (sequential + per-source)
 OUT_FLAGGED = FLAGGED
 OUT_DROPPED = DROPPED
 OUT_STAGES = STAGES
