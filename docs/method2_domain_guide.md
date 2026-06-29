@@ -24,7 +24,7 @@ cleaned_data/
 
 ### 1. List Available Domains
 ```bash
-python clean_by_domain.py list
+python tools/clean_by_domain.py list
 ```
 Output:
 ```
@@ -36,19 +36,19 @@ Available domains (2):
 ### 2. Clean All Domains (Full Run)
 Run all stages through all domains sequentially:
 ```bash
-python clean_by_domain.py all
+python tools/clean_by_domain.py all
 ```
 
 ### 3. Clean Specific Domain
 Run all stages for just one domain:
 ```bash
-python clean_by_domain.py all "Security Operations"
+python tools/clean_by_domain.py all "Security Operations"
 ```
 
 ### 4. Test with Limit (Before Full Run)
 Cap records per file for quick testing:
 ```bash
-python clean_by_domain.py all "Security Operations" --limit 20
+python tools/clean_by_domain.py all "Security Operations" --limit 20
 ```
 (Process only 20 records per file)
 
@@ -56,22 +56,22 @@ python clean_by_domain.py all "Security Operations" --limit 20
 
 **Sanitize only (fix encoding, dates, missing fields):**
 ```bash
-python clean_by_domain.py sanitize
+python tools/clean_by_domain.py sanitize
 ```
 
 **Deduplication only:**
 ```bash
-python clean_by_domain.py dedup
+python tools/clean_by_domain.py dedup
 ```
 
 **PII redaction only:**
 ```bash
-python clean_by_domain.py pii
+python tools/clean_by_domain.py pii
 ```
 
 **Language filtering only:**
 ```bash
-python clean_by_domain.py lang
+python tools/clean_by_domain.py lang
 ```
 
 ---
@@ -92,20 +92,20 @@ python clean_by_domain.py lang
 ### For Investigation - Find Which Stage Drops Records
 ```bash
 # 1. Run just sanitize
-python clean_by_domain.py sanitize "Threat Intelligence"
+python tools/clean_by_domain.py sanitize "Threat Intelligence"
 
 # 2. Check output
 ls cleaned_data/"Threat Intelligence"/sanitize/
 wc -l cleaned_data/"Threat Intelligence"/sanitize/*.jsonl
 
 # 3. Compare with dedup
-python clean_by_domain.py dedup "Threat Intelligence"
+python tools/clean_by_domain.py dedup "Threat Intelligence"
 ls cleaned_data/"Threat Intelligence"/dedup/
 ```
 
 ### For Production - Full Clean of Everything
 ```bash
-python clean_by_domain.py all
+python tools/clean_by_domain.py all
 ```
 This runs:
 1. Sanitize all domains
@@ -118,7 +118,7 @@ Output goes to `cleaned_data/<domain>/<stage>/`
 ### For Specific Domain Only
 ```bash
 # Clean only Security Operations
-python clean_by_domain.py all "Security Operations"
+python tools/clean_by_domain.py all "Security Operations"
 
 # Check results
 cat cleaned_data/"Security Operations"/sanitize/*.jsonl | wc -l
@@ -145,7 +145,7 @@ Get-Content "cleaned_data/Security Operations/sanitize/sigma-rules.jsonl" -Total
 
 ## Test Results (Example)
 
-Running: `python clean_by_domain.py all "Security Operations" --limit 20`
+Running: `python tools/clean_by_domain.py all "Security Operations" --limit 20`
 
 ```
 Input:  200 records (10 files × 20 limit)
@@ -188,8 +188,8 @@ To run in a different order or skip stages:
 
 ```bash
 # Just sanitize + dedup (skip PII and lang)
-python clean_by_domain.py sanitize "Security Operations"
-python clean_by_domain.py dedup "Security Operations"
+python tools/clean_by_domain.py sanitize "Security Operations"
+python tools/clean_by_domain.py dedup "Security Operations"
 
 # You could also manually edit records at any intermediate stage
 ```
@@ -217,23 +217,23 @@ A: Similar to input (each stage filters differently). The `--limit 20` test runs
 
 1. **Test with limit first** (5 minutes):
    ```bash
-   python clean_by_domain.py all --limit 20
+   python tools/clean_by_domain.py all --limit 20
    ```
 
 2. **Run full clean** (depends on data size):
    ```bash
-   python clean_by_domain.py all
+   python tools/clean_by_domain.py all
    ```
 
 3. **Verify results**:
    ```bash
    ls -la cleaned_data/
-   python clean_by_domain.py report
+   python tools/clean_by_domain.py report
    ```
 
 4. **If something looks wrong, debug one stage**:
    ```bash
-   python clean_by_domain.py dedup "Security Operations" --limit 50
+   python tools/clean_by_domain.py dedup "Security Operations" --limit 50
    ```
 
 ---
