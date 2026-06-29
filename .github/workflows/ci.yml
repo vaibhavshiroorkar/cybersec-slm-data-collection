@@ -43,7 +43,16 @@ jobs:
         run: uv sync
 
       - name: pip-audit (supply-chain)
-        run: uv run pip-audit --strict --desc
+        # Fails the build on any real dependency vulnerability (pip-audit's default
+        # exit-1 behavior). We deliberately drop --strict because it ALSO fails on
+        # packages it cannot audit, which here are only first-party / non-PyPI
+        # artifacts, not supply-chain risks:
+        #   - the editable local project (handled by --skip-editable)
+        #   - the spaCy model en-core-web-lg (installed from a URL, not on PyPI)
+        # PYSEC-2022-252 (deep-translator): 2022 account-takeover advisory with no
+        # fixed version. 1.11.4 is the latest release, the malicious artifact was
+        # removed from PyPI, and osv.dev does not flag 1.11.4 -- ignored deliberately.
+        run: uv run pip-audit --desc --skip-editable --ignore-vuln PYSEC-2022-252
 
       - name: gitleaks (secret scan)
         uses: gitleaks/gitleaks-action@v2
