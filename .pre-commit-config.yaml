@@ -1,0 +1,30 @@
+# Local pre-commit hooks. Install once per clone:  pre-commit install
+# Run on demand across the repo:                    pre-commit run --all-files
+#
+# These are the developer-machine half of the secrets defence (threat model
+# Stage 1 "Credential Exposure" + gap "Unmonitored Code"); GitHub server-side
+# secret scanning backs them up for hooks that get bypassed.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+        name: gitleaks (scan staged changes for secrets)
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|tests)/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files      # block accidental data/model commits
+        args: [--maxkb=2048]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+        exclude: ^sources/allowlist\.yaml$   # large generated catalog; checked in CI

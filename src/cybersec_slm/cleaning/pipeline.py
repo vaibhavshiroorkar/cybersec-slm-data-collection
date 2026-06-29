@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Pipeline — runs the cleaning stages in flowchart order over raw_data.
 
-    Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> cleaned/
+    Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> clean_data/
 
 Reads the extraction output under raw_data/ and mirrors its layout into
-cleaned/ (passed), flagged/ (behavioral anomalies for annotation) and dropped/
+clean_data/ (passed), flagged/ (behavioral anomalies for annotation) and dropped/
 (structural + dedup + language drops, each annotated with a reason). A per-file
 report is written to logs/clean_report.csv.
 """
@@ -16,18 +16,28 @@ import json
 import os
 import tempfile
 
-from . import anomaly
-from . import sanitize
-from . import textmap
-from .common import (LOGS, OUT_CLEAN_DATA, OUT_CLEANED, OUT_DROPPED, OUT_FLAGGED,
-                    OUT_STAGES, PARSE_ERROR, RAW_DATA, REPORTS, JsonlWriter,
-                    find_input_files, iter_jsonl, logger, text_of)
+from . import anomaly, sanitize, textmap
+from .common import (
+    LOGS,
+    OUT_CLEAN_DATA,
+    OUT_DROPPED,
+    OUT_FLAGGED,
+    OUT_STAGES,
+    PARSE_ERROR,
+    RAW_DATA,
+    REPORTS,
+    JsonlWriter,
+    find_input_files,
+    iter_jsonl,
+    logger,
+    text_of,
+)
 from .dedup import Deduper
 from .langfilter import LangFilter
 from .pii import Redactor
 from .translate import Translator
 
-DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.pkl")
+DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")
 
 REPORT_COLS = ["sub_domain", "source", "file", "in", "mapped_text",
                "excluded_no_text", "sanitized", "struct_fixed", "struct_dropped",
@@ -171,7 +181,7 @@ def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
         return []
 
     rows = clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
-                       translator=translator, out_cleaned=OUT_CLEANED,
+                       translator=translator, out_cleaned=OUT_CLEAN_DATA,
                        out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
                        limit=limit, checkpoint_path=DEDUP_CKPT)
     _write_report(rows)
@@ -335,7 +345,7 @@ def run_single_stage(stage: str, input_dir: str = RAW_DATA,
 
 
 def build_report_from_outputs() -> str:
-    """Recount existing cleaned/flagged/dropped trees into a summary line."""
+    """Recount existing clean_data/flagged/dropped trees into a summary line."""
     def count_tree(root):
         n = 0
         for r, _d, fs in os.walk(root):
@@ -344,7 +354,7 @@ def build_report_from_outputs() -> str:
                     with open(os.path.join(r, fn), encoding="utf-8", errors="replace") as f:
                         n += sum(1 for ln in f if ln.strip())
         return n
-    cleaned = count_tree(OUT_CLEANED)
+    cleaned = count_tree(OUT_CLEAN_DATA)
     flagged = count_tree(OUT_FLAGGED)
     dropped = count_tree(OUT_DROPPED)
     logger.info(f"outputs -> cleaned={cleaned} flagged={flagged} dropped={dropped}")

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Content hashing, near-duplicate detection, and failure tracking.
+"""Near-duplicate detection + failure tracking (flowchart bands 4 and the gate).
 
-Covers three flowchart bands:
-  * Content Hash Generation — ``hashlib.sha256`` over content-only fields, so the
-    fingerprint is time-independent (timestamps/ids excluded).
-  * Near Duplicate Check    — ``datasketch`` MinHash + MinHashLSH at Jaccard 0.65,
-    with state rebuildable from an existing ``dataset.jsonl`` (``pathlib``).
-  * FailureTracker          — per-source reject counts; a source that crosses the
-    hard-pause threshold (20) is flagged for a trip back to cleaning.
+  * Near Duplicate Check — ``datasketch`` MinHash + MinHashLSH at Jaccard 0.65.
+    The *exact* membership set uses a normalized fingerprint (``_norm_fingerprint``:
+    lowercased, whitespace/token-collapsed sha256) so trivially-reformatted copies
+    still collide. This is intentionally distinct from the record's schema
+    ``content_hash`` (sha256 of the exact text) — the output field is the exact
+    fingerprint; dedup matching is the normalized one.
+  * Similarity scores — ``is_duplicate`` returns the estimated Jaccard of the best
+    match so the pipeline can log per-record scores (anti-"dedup bypass via
+    paraphrase": watch records that pass just under the threshold).
+  * FailureTracker — per-source reject counts + categories (MAPPER_MISMATCH /
+    DIRTY_DATA / AMBIGUOUS); warns at 5, hard-pauses a source at 20.
 """
 
 from __future__ import annotations
@@ -26,24 +30,24 @@ from ..core import logger
 LSH_THRESHOLD = 0.65
 MINHASH_PERM = 128
 SHINGLE_SIZE = 5               # word-shingle length
+ESCALATE_FAILURES = 5         # per-source rejects before a warning escalation
 HARD_PAUSE_FAILURES = 20      # per-source rejects before a hard pause
 
 _WORD = re.compile(r"\w+")
 
 
-def _norm_for_hash(text: str) -> str:
-    """Lowercase + collapse whitespace: a content-only, time-independent view."""
-    return " ".join(_WORD.findall(text.lower()))
+def _norm_tokens(text: str) -> list[str]:
+    return _WORD.findall((text or "").lower())
 
 
-def content_hash(text: str) -> str:
-    """sha256 fingerprint of the normalized content (excludes ids/timestamps)."""
-    return hashlib.sha256(_norm_for_hash(text).encode("utf-8")).hexdigest()
+def _norm_fingerprint(text: str) -> str:
+    """Normalized, time-independent sha256 used for exact-dup membership."""
+    return hashlib.sha256(" ".join(_norm_tokens(text)).encode("utf-8")).hexdigest()
 
 
 def _minhash(text: str) -> MinHash:
     m = MinHash(num_perm=MINHASH_PERM)
-    tokens = _WORD.findall(text.lower())
+    tokens = _norm_tokens(text)
     if len(tokens) < SHINGLE_SIZE:
         shingles = {" ".join(tokens)} if tokens else set()
     else:
@@ -55,42 +59,49 @@ def _minhash(text: str) -> MinHash:
 
 
 class NearDuplicateIndex:
-    """Exact (sha256) + near-dup (MinHash/LSH) membership with resumable state.
+    """Exact (normalized fingerprint) + near-dup (MinHash/LSH) membership.
 
-    ``seen`` holds exact content hashes for O(1) exact-dup rejection; the LSH
-    index catches near-duplicates above the Jaccard threshold. ``add`` commits a
-    record to both (the flowchart's "Update Hash List").
+    State is resumable from an existing ``dataset.jsonl`` (rebuild_from_jsonl).
+    ``add`` commits a record to both indexes (the flowchart's "Update Hash List").
     """
 
     def __init__(self, threshold: float = LSH_THRESHOLD):
+        self.threshold = threshold
         self.lsh = MinHashLSH(threshold=threshold, num_perm=MINHASH_PERM)
         self.seen: set[str] = set()
+        self._minhashes: dict[str, MinHash] = {}   # key -> minhash, for score est.
         self._n = 0
 
-    def is_duplicate(self, text: str, chash: str) -> tuple[bool, str]:
-        """Return (is_dup, reason) without mutating state."""
-        if chash in self.seen:
-            return True, "exact"
-        m = _minhash(text)
-        if self.lsh.query(m):
-            return True, "near"
-        return False, ""
+    def is_duplicate(self, text: str) -> tuple[bool, str, float]:
+        """Return ``(is_dup, reason, score)`` without mutating state.
 
-    def add(self, text: str, chash: str, key: str) -> None:
-        """Commit a kept record: register its exact hash and LSH signature."""
-        self.seen.add(chash)
+        ``score`` is the estimated Jaccard of the closest indexed record (1.0 for
+        an exact-fingerprint hit, the best candidate's Jaccard for a near hit,
+        0.0 when nothing is close enough to surface).
+        """
+        if _norm_fingerprint(text) in self.seen:
+            return True, "exact", 1.0
+        m = _minhash(text)
+        candidates = self.lsh.query(m)
+        if candidates:
+            best = max((m.jaccard(self._minhashes[k]) for k in candidates
+                        if k in self._minhashes), default=1.0)
+            return True, "near", float(best)
+        return False, "", 0.0
+
+    def add(self, text: str, key: str) -> None:
+        """Commit a kept record: register its fingerprint + LSH signature."""
+        self.seen.add(_norm_fingerprint(text))
+        m = _minhash(text)
         try:
-            self.lsh.insert(key, _minhash(text))
+            self.lsh.insert(key, m)
+            self._minhashes[key] = m
         except ValueError:
             pass                # duplicate LSH key (already inserted) — ignore
         self._n += 1
 
     def rebuild_from_jsonl(self, path: str | Path) -> int:
-        """Repopulate state from an existing dataset.jsonl so runs are resumable.
-
-        Reads each prior record's stored ``content_hash``/``text`` back into the
-        exact set and LSH index. Returns the number of records reloaded.
-        """
+        """Repopulate state from an existing dataset.jsonl so runs are resumable."""
         p = Path(path)
         if not p.exists():
             return 0
@@ -105,11 +116,11 @@ class NearDuplicateIndex:
                 except json.JSONDecodeError:
                     continue
                 text = rec.get("text") or ""
-                chash = rec.get("content_hash") or content_hash(text)
-                key = rec.get("id") or chash
-                if chash in self.seen:
+                key = rec.get("id") or rec.get("content_hash") or _norm_fingerprint(text)
+                fp = _norm_fingerprint(text)
+                if fp in self.seen:
                     continue
-                self.add(text, chash, key)
+                self.add(text, key)
                 n += 1
         logger.info(f"normalize: rebuilt dedup state from {p.name} ({n} records)")
         return n
@@ -118,26 +129,46 @@ class NearDuplicateIndex:
         return self._n
 
 
+# Reject reason -> failure category (treated as a security indicator: a spike in
+# MAPPER_MISMATCH often flags upstream schema drift or manipulation).
+def categorize_failure(reason: str) -> str:
+    r = (reason or "").lower()
+    if "mapper" in r or "no usable text" in r:
+        return "MAPPER_MISMATCH"
+    if ("domain" in r or "text shorter" in r or "empty" in r or "content_hash" in r
+            or "must not be" in r or "not in" in r):
+        return "DIRTY_DATA"
+    return "AMBIGUOUS"
+
+
 class FailureTracker:
-    """Per-source reject accounting (flowchart: FailureTracker.classify_failure).
+    """Per-source reject accounting with categories + escalation thresholds."""
 
-    Each rejected record is recorded against its source. When a single source
-    crosses :data:`HARD_PAUSE_FAILURES`, :meth:`should_pause` flips True once so
-    the caller can stop that source and send it back to the cleaning stage.
-    """
-
-    def __init__(self, threshold: int = HARD_PAUSE_FAILURES):
+    def __init__(self, escalate: int = ESCALATE_FAILURES,
+                 threshold: int = HARD_PAUSE_FAILURES):
+        self.escalate = escalate
         self.threshold = threshold
         self.failures: Counter[str] = Counter()
         self.reasons: Counter[str] = Counter()
+        self.categories: Counter[str] = Counter()
+        self._warned: set[str] = set()
         self._paused: set[str] = set()
 
-    def classify_failure(self, source: str, reason: str) -> None:
+    def classify_failure(self, source: str, reason: str) -> str:
+        """Record a reject; warn once at the escalation threshold. Returns category."""
+        category = categorize_failure(reason)
         self.failures[source] += 1
         self.reasons[reason] += 1
+        self.categories[category] += 1
+        if self.failures[source] == self.escalate and source not in self._warned:
+            self._warned.add(source)
+            logger.warning(f"normalize: ESCALATE — source '{source}' hit "
+                           f"{self.escalate} rejects (latest category {category}); "
+                           f"review before it reaches the hard pause")
+        return category
 
     def should_pause(self, source: str) -> bool:
-        """True exactly once, when ``source`` first crosses the threshold."""
+        """True exactly once, when ``source`` first crosses the hard-pause threshold."""
         if self.failures[source] >= self.threshold and source not in self._paused:
             self._paused.add(source)
             logger.error(f"normalize: HARD PAUSE — source '{source}' hit "

@@ -7,7 +7,7 @@ paths, and line-oriented JSONL helpers + hashing.
 
 Data paths are resolved from ``CYBERSEC_SLM_DATA_ROOT`` if set, otherwise the
 current working directory — so running a command from the project root puts
-``raw_data/``, ``cleaned/``, ``logs/`` etc. there, while tests can point them
+``raw_data/``, ``clean_data/``, ``logs/`` etc. there, while tests can point them
 elsewhere.
 """
 
@@ -18,7 +18,7 @@ import importlib
 import json
 import os
 import sys
-from typing import Iterator
+from collections.abc import Iterator
 
 
 # ------------------------------------------------------- optional imports -----
@@ -46,8 +46,8 @@ def data_root() -> str:
 
 DATA_ROOT = data_root()
 RAW_DATA = os.path.join(DATA_ROOT, "raw_data")     # extraction output / cleaning input
-CLEANED = os.path.join(DATA_ROOT, "cleaned")        # cleaning output -> EDA handoff
 CLEAN_DATA = os.path.join(DATA_ROOT, "clean_data")  # streaming per-source clean output
+FINAL_DATA = os.path.join(DATA_ROOT, "final_data")  # canonical release dataset + sidecars
 FLAGGED = os.path.join(DATA_ROOT, "flagged")        # -> Data Annotation Team
 DROPPED = os.path.join(DATA_ROOT, "dropped")        # -> audit
 STAGES = os.path.join(DATA_ROOT, "_stages")         # single-stage diagnostics
@@ -102,7 +102,7 @@ PARSE_ERROR = "_parse_error"     # marker key on lines that failed to parse
 def iter_jsonl(path: str) -> Iterator[dict]:
     """Yield one dict per line. Malformed lines yield {PARSE_ERROR: True, ...}
     so callers can count them instead of crashing."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for n, line in enumerate(f, 1):
             line = line.strip()
             if not line:

@@ -48,6 +48,9 @@ _SINGLE = (
     "response", "completion", "answer", "output", "transcript", "dialogue",
     "conversation", "story", "essay", "instruction", "question", "sentence",
     "review", "caption", "notes", "playbook",
+    # source/code columns (e.g. slither-audited-smart-contracts.source_code) —
+    # kept last so a prose column is always preferred over raw code.
+    "source_code", "code_snippet", "func", "code",
 )
 
 

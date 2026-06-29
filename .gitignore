@@ -30,7 +30,7 @@ raw_data/
 # Move Sources.xlsx -> sources/Sources.xlsx
 *.xlsx
 *.xls
-cleaned/
+final_data/
 clean_data/
 flagged/
 dropped/

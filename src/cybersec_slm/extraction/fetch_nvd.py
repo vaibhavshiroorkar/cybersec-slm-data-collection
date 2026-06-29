@@ -19,8 +19,7 @@ import time
 
 import orjson
 
-from .common import (ONE_MB, RAW_DATA, IngestLog, category_of, http_get,
-                     logger, sha256_file)
+from .common import ONE_MB, RAW_DATA, IngestLog, logger, sha256_file
 
 PAGE_SIZE = 2000
 _SLEEP_NO_KEY = 6.0

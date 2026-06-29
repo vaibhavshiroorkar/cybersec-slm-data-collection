@@ -61,7 +61,7 @@ _REQUIRED_MODULES = {
     # best-effort below: build-fragile on Windows / large; pipeline has fallbacks
     "presidio_analyzer": ("presidio-analyzer", "PII detection (pii)"),
     "presidio_anonymizer": ("presidio-anonymizer", "PII redaction (pii)"),
-    "fasttext": ("fasttext-wheel", "language id (langfilter)"),
+    "fasttext": ("fasttext-predict", "language id (langfilter)"),
 }
 # Modules whose absence only downgrades quality — install best-effort, never abort.
 _OPTIONAL_MODULES = {"presidio_analyzer", "presidio_anonymizer", "fasttext"}
@@ -245,11 +245,19 @@ def clean_stats(d: str) -> tuple[float, int]:
     return round(total_bytes / (1024 * 1024), 3), lines
 
 
-def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]]) -> None:
-    """For each Excel row in `stats`, set Cleaned?=Yes and write the cleaned
-    output's Cleaned Size (MB) and Cleaned Lines back into the sheet."""
-    if not stats:
-        print("[mark] nothing to mark (no source produced records)", flush=True)
+def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]],
+                     mappable: set[int]) -> None:
+    """Write clean_data ground truth back into the sheet for every mappable row.
+
+    Rows whose clean_data/ folder holds records (in `stats`) get Cleaned?=Yes plus
+    their Cleaned Size (MB) and Cleaned Lines. Mappable rows that own no records —
+    a source that produced nothing, or one merged away by a same-owner folder
+    collision — are cleared, so the Cleaned Lines column always sums to the real
+    corpus size instead of retaining stale numbers from an earlier run.
+    Non-mappable rows are never touched.
+    """
+    if not mappable:
+        print("[mark] nothing to mark (no mappable rows)", flush=True)
         return
     from openpyxl import load_workbook
     wb = load_workbook(XLSX)                  # full load preserves other sheets
@@ -261,23 +269,37 @@ def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]]) -> None:
     if col_flag is None:
         print(f"[mark] WARNING: no 'Cleaned?' column in sheet '{sheet}'; skipping", flush=True)
         return
-    n = 0
+    marked = cleared = 0
     for row in ws.iter_rows(min_row=2):
         er = row[0].row
-        if er not in stats:
-            continue
-        size_mb, lines = stats[er]
-        if str(row[col_flag - 1].value).strip().lower() not in ("yes", "y"):
+        was_yes = str(row[col_flag - 1].value).strip().lower() in ("yes", "y")
+        had_lines = (col_lines is not None
+                     and isinstance(row[col_lines - 1].value, (int, float))
+                     and row[col_lines - 1].value)
+        if er in stats:
+            size_mb, lines = stats[er]
             ws.cell(row=er, column=col_flag, value="Yes")
-            n += 1
-        if col_size is not None:
-            ws.cell(row=er, column=col_size, value=size_mb)
-        if col_lines is not None:
-            ws.cell(row=er, column=col_lines, value=lines)
+            if not was_yes:
+                marked += 1
+            if col_size is not None:
+                ws.cell(row=er, column=col_size, value=size_mb)
+            if col_lines is not None:
+                ws.cell(row=er, column=col_lines, value=lines)
+        elif er in mappable:
+            # Mappable but owns no cleaned records -> reflect that (ground truth).
+            # NB: ws.cell(..., value=None) is a no-op in openpyxl (it only assigns
+            # when value is not None), so clear via the .value attribute instead.
+            row[col_flag - 1].value = None
+            if col_size is not None:
+                row[col_size - 1].value = None
+            if col_lines is not None:
+                row[col_lines - 1].value = None
+            if was_yes or had_lines:
+                cleared += 1
     try:
         wb.save(XLSX)
-        print(f"[mark] updated {len(stats)} rows ({n} newly Cleaned?=Yes) "
-              f"in {os.path.basename(XLSX)}", flush=True)
+        print(f"[mark] {len(stats)} rows Cleaned?=Yes ({marked} newly), "
+              f"{cleared} stale rows cleared, in {os.path.basename(XLSX)}", flush=True)
     except PermissionError:
         alt = XLSX.replace(".xlsx", ".cleaned.xlsx")
         wb.save(alt)
@@ -285,15 +307,39 @@ def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]]) -> None:
 
 
 def collect_stats(rows) -> dict[int, tuple[float, int]]:
-    """Map each mappable row's Excel-row number -> (cleaned MB, lines), keeping
-    only rows whose clean_data/ folder actually holds records (lines > 0)."""
-    stats: dict[int, tuple[float, int]] = {}
+    """Map each mappable row's Excel-row number -> (cleaned MB, lines), counting
+    every clean_data/ folder exactly once.
+
+    Several rows can resolve to the *same* clean_data/<Sub-Domain>/<owner> folder:
+    two Hugging Face / Kaggle datasets published under one owner both clean into
+    clean_data/<domain>/<owner> (see clean_dir_for, which mirrors the extraction
+    worker's owner-based naming). Crediting that shared folder to each colliding
+    row would count its records once per row and inflate the corpus total — the
+    bug that pushed the spreadsheet total above the real ~538k. So a folder is
+    credited to a single row (the lowest Excel row); the rest are reported and
+    left uncredited, because the collision merged their output into one folder.
+    """
+    by_folder: dict[str, list[dict]] = {}
     for r in rows:
         if not r["descriptor"]:
             continue
-        size_mb, lines = clean_stats(clean_dir_for(r["descriptor"]))
-        if lines > 0:
-            stats[r["excel_row"]] = (size_mb, lines)
+        folder = os.path.normpath(clean_dir_for(r["descriptor"]))
+        by_folder.setdefault(folder, []).append(r)
+
+    stats: dict[int, tuple[float, int]] = {}
+    for folder, group in by_folder.items():
+        size_mb, lines = clean_stats(folder)
+        if lines <= 0:
+            continue
+        group.sort(key=lambda r: r["excel_row"])
+        winner = group[0]
+        stats[winner["excel_row"]] = (size_mb, lines)
+        if len(group) > 1:
+            losers = [g["excel_row"] for g in group[1:]]
+            rel = os.path.relpath(folder, core.CLEAN_DATA)
+            print(f"[mark] collision: rows {[g['excel_row'] for g in group]} share "
+                  f"{rel} ({lines:,} lines); credited row {winner['excel_row']}, "
+                  f"left {losers} uncredited (same-owner folder collision)", flush=True)
     return stats
 
 
@@ -316,8 +362,9 @@ def mark_only(sheet: str, subdomain: str | None):
     """No fetching — just mark rows whose clean_data/ folder already has records."""
     rows = load_rows(sheet, subdomain)
     stats = collect_stats(rows)
+    mappable = {r["excel_row"] for r in rows if r["descriptor"]}
     print(f"[mark] {len(stats)} rows have records under clean_data/", flush=True)
-    mark_spreadsheet(sheet, stats)
+    mark_spreadsheet(sheet, stats, mappable)
 
 
 def run(sheet: str, subdomain: str | None, workers: int | None,
@@ -388,7 +435,8 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
     # ground-truth marking: every row whose clean_data/ folder holds records is
     # written back with Cleaned?=Yes + its Cleaned Size (MB) and Cleaned Lines.
     cleaned_stats = collect_stats(rows)
-    mark_spreadsheet(sheet, cleaned_stats)
+    mappable = {r["excel_row"] for r in rows if r["descriptor"]}
+    mark_spreadsheet(sheet, cleaned_stats, mappable)
 
     ok = [v for v in results.values() if v["status"] == "ok" and v["out"] > 0]
     zero = [v for v in results.values() if v["status"] == "ok" and v["out"] == 0]

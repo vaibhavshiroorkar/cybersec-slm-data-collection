@@ -9,7 +9,7 @@ Individual stages:
     cybersec-slm clean    [all|sanitize|dedup|pii|lang|report|balance] [--limit N] [--cap N]
     cybersec-slm run      [--sources X.xlsx] [--workers N]   # parallel streaming fetch+clean
     cybersec-slm validate
-    cybersec-slm discover [--domains ...] [--dry-run]        # search engines -> tracking sheet
+    cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> tracking sheet
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="NVD API key (env: NVD_API_KEY). Higher rate-limit.")
 
     # ── clean ─────────────────────────────────────────────────────────────────
-    c = sub.add_parser("clean", help="clean raw_data/ -> cleaned/")
+    c = sub.add_parser("clean", help="clean raw_data/ -> clean_data/")
     c.add_argument("action", nargs="?", default="all",
                    choices=["all", "sanitize", "dedup", "pii", "lang",
                             "report", "balance"])
@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── normalize ─────────────────────────────────────────────────────────────
     n = sub.add_parser("normalize",
-                       help="schema-normalize clean_data/ -> normalized/dataset.jsonl")
+                       help="schema-normalize clean_data/ -> final_data/dataset.jsonl")
     n.add_argument("--input", default=None,
                    help="cleaned-records root (default: clean_data/)")
     n.add_argument("--fresh", action="store_true",
@@ -52,9 +52,20 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
 
+    # ── eda ───────────────────────────────────────────────────────────────────
+    ed = sub.add_parser("eda",
+                        help="validate cleaned corpus + sufficiency gate (-> logs/eda/)")
+    ed.add_argument("--input", default=None,
+                    help="cleaned-records root (default: clean_data/)")
+    ed.add_argument("--no-enforce", action="store_true",
+                    help="report only; do not fail the run on a blocker")
+    ed.add_argument("--profile", action="store_true",
+                    help="also write a ydata-profiling HTML report (needs ydata-profiling, "
+                         "which requires pandas<3 — run it in a throwaway env; see README)")
+
     # ── validate ──────────────────────────────────────────────────────────────
     sub.add_parser("validate",
-                   help="validate cleaned/ records against Pydantic schema")
+                   help="validate clean_data/ records against Pydantic schema")
 
     # ── run (parallel streaming) ──────────────────────────────────────────────
     r = sub.add_parser("run",
@@ -71,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--no-final-dedup", action="store_true",
                    help="skip the final cross-source dedup pass")
 
-    # ── discover (search-engine source discovery) ────────────────────────────
-    d = sub.add_parser("discover",
+    # ── source (search-engine source discovery) ─────────────────────────────
+    d = sub.add_parser("source",
                        help="search engines by keyword -> append new rows to the sheet")
     d.add_argument("--sheet-url", default=None,
                    help="tracking sheet URL/id (default: the finalized sheet)")
@@ -96,8 +107,17 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--creds", default=None,
                    help="service-account JSON for append (env: GOOGLE_SHEETS_CREDENTIALS)")
 
+    # ── flow (Prefect orchestration) ──────────────────────────────────────────
+    fl = sub.add_parser("flow",
+                        help="run the Prefect build-corpus flow (needs orchestration extra)")
+    fl.add_argument("--sources", default=None, help="path/URL to a sources .xlsx")
+    fl.add_argument("--no-enforce-eda", action="store_true",
+                    help="run the EDA gate in report-only mode")
+    fl.add_argument("--dvc-push", action="store_true",
+                    help="snapshot + push the dataset to the DVC remote")
+
     # ── all ───────────────────────────────────────────────────────────────────
-    sub.add_parser("all", help="extract -> clean (full pipeline)")
+    sub.add_parser("all", help="extract -> clean -> normalize (full pipeline)")
     return p
 
 
@@ -127,18 +147,25 @@ def main(argv: list[str] | None = None) -> None:
                                final_dedup=not args.no_final_dedup)
 
     elif args.stage == "normalize":
-        from .core import CLEAN_DATA
         from .normalize import run_normalization
-        run_normalization(args.input or CLEAN_DATA, resume=not args.fresh,
-                          limit=args.limit)
+        run_normalization(args.input, resume=not args.fresh, limit=args.limit)
+
+    elif args.stage == "eda":
+        from .eda import run_eda
+        run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
+
+    elif args.stage == "flow":
+        from .orchestration.flows import build_corpus
+        build_corpus(args.sources, enforce_eda=not args.no_enforce_eda,
+                     dvc_push=args.dvc_push)
 
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
 
-    elif args.stage == "discover":
-        from .discovery import run as discovery
-        summary = discovery.discover(
+    elif args.stage == "source":
+        from .sourcing import run as sourcing
+        summary = sourcing.discover(
             args.sheet_url, domains=args.domains,
             per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
             mode=args.mode, dry_run=args.dry_run, out_csv=args.out,
@@ -147,14 +174,28 @@ def main(argv: list[str] | None = None) -> None:
             cse_id=(args.cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
                     or os.environ.get("GOOGLE_CSE_ID")),
             creds_path=args.creds or os.environ.get("GOOGLE_SHEETS_CREDENTIALS"))
-        print(f"discover: {summary['found']} hits, {summary['new']} new, "
+        print(f"source: {summary['found']} hits, {summary['new']} new, "
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        from .extraction import run as extraction
         from .cleaning import run as cleaning
+        from .core import logger
+        from .eda import SufficiencyError, run_eda
+        from .extraction import run as extraction
+        from .normalize import run_normalization
         extraction.run("all")
         cleaning.run("all")
+        # EDA sufficiency gate: a blocker means loop back to ingestion, not advance.
+        try:
+            run_eda(enforce=True)
+        except SufficiencyError as exc:
+            logger.error(str(exc))
+            print("Pipeline halted at the EDA sufficiency gate — "
+                  "address the blockers above and re-run.")
+            return
+        # full rebuild: extract+clean regenerate upstream, so normalize fresh
+        # (resume=False) instead of appending/deduping against a stale dataset.
+        run_normalization(resume=False)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,19 @@
 from cybersec_slm.cleaning import sanitize
 
 
-def test_fills_missing_required_fields():
-    rec, changed = sanitize.sanitize_record({"text": "hello world"})
-    assert changed
-    for k in ("source", "url", "license", "text"):
-        assert k in rec
+def test_normalizes_existing_fields_without_fabricating():
+    # None-valued existing fields are normalized to ""; missing provenance fields
+    # are NOT invented (the normalize mappers supply those defaults).
+    rec, changed = sanitize.sanitize_record({"source": None, "text": "hello world"})
+    assert changed                       # source None -> ""
+    assert rec["source"] == ""
+    assert rec["text"] == "hello world"
+    assert "url" not in rec and "license" not in rec
+
+    # a clean record with no None fields is unchanged
+    rec2, changed2 = sanitize.sanitize_record({"text": "hello world"})
+    assert changed2 is False
+    assert rec2 == {"text": "hello world"}
 
 
 def test_strips_control_chars_and_collapses_whitespace():

@@ -1,10 +1,10 @@
-"""Offline tests for the discovery stage — pure logic, no network/credentials."""
+"""Offline tests for the sourcing stage — pure logic, no network/credentials."""
 
-from cybersec_slm.discovery import keywords as kw
-from cybersec_slm.discovery.classify import infer_category_and_format, refine_domain
-from cybersec_slm.discovery.row import SHEET_COLUMNS, build_row, row_to_list
-from cybersec_slm.discovery.search import Result, _parse_items
-from cybersec_slm.discovery.sheet import (
+from cybersec_slm.sourcing import keywords as kw
+from cybersec_slm.sourcing.classify import infer_category_and_format, refine_domain
+from cybersec_slm.sourcing.row import SHEET_COLUMNS, build_row, row_to_list
+from cybersec_slm.sourcing.search import Result, _parse_items
+from cybersec_slm.sourcing.sheet import (
     _links_from_csv,
     extract_spreadsheet_id,
     normalize_url,

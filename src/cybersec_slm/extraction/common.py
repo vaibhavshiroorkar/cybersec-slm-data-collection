@@ -15,8 +15,7 @@ import time
 
 import pandas as pd
 
-from ..core import (LOGS, RAW_DATA, count_lines, logger, sha256_file,  # noqa: F401
-                    try_import)
+from ..core import LOGS, RAW_DATA, count_lines, logger, sha256_file, try_import  # noqa: F401
 
 # ---------------------------------------------------------------- config -----
 CAP_BYTES = 5 * 1024 ** 3            # 5 GB hard cap (download + jsonl)
@@ -42,8 +41,12 @@ MITRE = "Apache-2.0 / MITRE ATT&CK Terms (free use w/ attribution)"
 
 # ------------------------------------------------------------- http / io -----
 import httpx  # noqa: E402
-from tenacity import (retry, retry_if_exception_type, stop_after_attempt,  # noqa: E402
-                      wait_exponential)
+from tenacity import (  # noqa: E402
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 _RETRY = dict(stop=stop_after_attempt(4),
               wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -105,13 +108,18 @@ NSLKDD_COLS = [
     "dst_host_serror_rate", "dst_host_srv_serror_rate", "dst_host_rerror_rate",
     "dst_host_srv_rerror_rate", "class", "difficulty_level",
 ]
-EXT_PRIORITY = (".parquet", ".jsonl", ".csv", ".json", ".xlsx", ".txt")
+EXT_PRIORITY = (".parquet", ".jsonl", ".csv", ".json", ".xlsx",
+                ".yar", ".yara", ".yml", ".yaml", ".md", ".txt")
+# Rule / markup / doc files read as a single text record each (one file -> one
+# record). Recovers detection rules (YARA/Sigma) and prose docs (Markdown) that
+# would otherwise be dropped as having no recognized data column.
+TEXT_FILE_EXTS = (".yar", ".yara", ".yml", ".yaml", ".rule", ".sigma", ".md")
 SKIP_SUBSTRINGS = ("embedding", "faiss", "statistics", "data_stats", "_stats")
 
 
 def _read_json_repair(path: str) -> pd.DataFrame:
     """Parse JSON tolerantly (handles hand-edited / broken JSON)."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     try:
         data = json.loads(text)
@@ -155,11 +163,23 @@ def _read_unknown(path: str) -> pd.DataFrame:
     raise ValueError(f"Unsupported file type: {path}")
 
 
+def _read_textfile(path: str) -> pd.DataFrame:
+    """Read a whole rule/markup file (YARA, YAML, Sigma) as ONE text record."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        content = f.read().strip()
+    if not content:
+        return pd.DataFrame(columns=["text"])
+    return pd.DataFrame([{"text": content, "_file": os.path.basename(path)}])
+
+
 def read_any(path: str) -> pd.DataFrame:
-    """Read csv/jsonl/json/parquet/txt into a DataFrame, robustly."""
+    """Read csv/jsonl/json/parquet/txt/rule files into a DataFrame, robustly."""
+    import pandas.errors as pd_errors
     low = path.lower()
     if low.endswith(".parquet"):
         return pd.read_parquet(path)
+    if low.endswith(TEXT_FILE_EXTS):          # YARA / YAML / Sigma -> one record
+        return _read_textfile(path)
     if low.endswith(".jsonl"):
         try:
             return pd.read_json(path, lines=True)
@@ -171,7 +191,12 @@ def read_any(path: str) -> pd.DataFrame:
                 return pd.read_csv(path, low_memory=False, encoding=enc)
             except UnicodeDecodeError:
                 continue
-        return pd.read_csv(path, on_bad_lines="skip", low_memory=False)
+            except pd_errors.ParserError:     # inconsistent column counts
+                break
+        # tolerant last resort: skip malformed rows (python engine handles ragged
+        # rows; it doesn't accept low_memory, so that option is omitted here)
+        return pd.read_csv(path, on_bad_lines="skip", encoding="latin-1",
+                           engine="python")
     if low.endswith(".json"):
         try:
             return pd.read_json(path)
@@ -185,7 +210,11 @@ def read_any(path: str) -> pd.DataFrame:
     if low.endswith(".xls"):
         return pd.read_excel(path)
     if low.endswith(".txt"):
-        df = pd.read_csv(path, header=None, low_memory=False)
+        try:
+            df = pd.read_csv(path, header=None, low_memory=False)
+        except pd_errors.ParserError:         # ragged rows (e.g. MalAPI matrix)
+            df = pd.read_csv(path, header=None, on_bad_lines="skip",
+                             encoding="latin-1", engine="python")
         if df.shape[1] == len(NSLKDD_COLS):
             df.columns = NSLKDD_COLS
         return df
@@ -326,6 +355,20 @@ class IngestLog:
 
     def table(self) -> pd.DataFrame:
         return pd.read_sql_query("SELECT * FROM ingest ORDER BY domain, name", self.con)
+
+    def export_ledger(self, path: str | None = None) -> str:
+        """Write the provenance ledger (one row per produced/skipped file) to CSV.
+
+        Version-controlled / DVC-tracked, this is the trace that lets a toxic or
+        mis-licensed source be scoped and surgically removed later rather than
+        forcing the whole corpus to be discarded (threat model: Licensing and
+        Provenance as a Security Control).
+        """
+        path = path or os.path.join(LOGS, "provenance", "ledger.csv")
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.table().to_csv(path, index=False)
+        logger.info(f"provenance ledger -> {path}")
+        return path
 
 
 class _Collector:

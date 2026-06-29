@@ -1,0 +1,22 @@
+# DVC pipeline — the reproducibility unit for a corpus release.
+#
+# `dvc repro` rebuilds the corpus end to end; the outputs are versioned and
+# pushed to the S3 remote (see docs/dvc.md). Versioned releases let a bad batch
+# be rolled back / scoped without discarding the whole dataset (threat model
+# Output: "Untraceable Contamination Scoping").
+stages:
+  build:
+    cmd: cybersec-slm all
+    deps:
+      - src/cybersec_slm
+      - sources/allowlist.yaml
+    outs:
+      - final_data/dataset.jsonl
+      - final_data/manifest.json
+      - final_data/rejected.jsonl
+      - final_data/duplicates.jsonl
+    metrics:
+      - logs/eda/latest.json:
+          cache: false
+      - logs/normalize_report.json:
+          cache: false

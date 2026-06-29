@@ -2,7 +2,7 @@
 """Domain balance checker — counts records per cybersecurity domain and
 reports imbalance so you can prevent the SLM from over-fitting to one area.
 
-Reads cleaned/ (or chunked/) and produces:
+Reads clean_data/ and produces:
   - A console table sorted by record count
   - logs/balance_report.csv
 
@@ -11,7 +11,7 @@ Pass cap=N to hard-limit each domain (useful before splitting).
 
     from cybersec_slm.cleaning.balance import check_balance, apply_cap
     check_balance()               # report only
-    apply_cap(max_per_domain=50_000)   # cap + rewrite cleaned/
+    apply_cap(max_per_domain=50_000)   # cap + rewrite clean_data/
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import csv
 import os
 import random
 
-from ..core import CLEANED, JsonlWriter, iter_jsonl, logger
+from ..core import CLEAN_DATA, JsonlWriter, iter_jsonl, logger
 
 IMBALANCE_RATIO = 5.0   # warn if max/median exceeds this
 
@@ -42,7 +42,7 @@ def _count_domain(input_dir: str) -> dict[str, int]:
     return counts
 
 
-def check_balance(input_dir: str = CLEANED,
+def check_balance(input_dir: str = CLEAN_DATA,
                   report_dir: str | None = None) -> dict[str, int]:
     """Count records per domain, log a table, write CSV, return counts dict."""
     if not os.path.isdir(input_dir):
@@ -92,11 +92,11 @@ def check_balance(input_dir: str = CLEANED,
     return counts
 
 
-def apply_cap(max_per_domain: int, input_dir: str = CLEANED,
+def apply_cap(max_per_domain: int, input_dir: str = CLEAN_DATA,
               seed: int = 42) -> dict[str, int]:
     """Randomly downsample any domain exceeding max_per_domain records.
 
-    Rewrites cleaned/ files in-place. The random seed ensures reproducibility.
+    Rewrites clean_data/ files in-place. The random seed ensures reproducibility.
     Returns the new counts dict.
     """
     rng = random.Random(seed)

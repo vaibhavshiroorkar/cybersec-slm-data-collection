@@ -1,0 +1,18 @@
+# Automated supply-chain auditing (threat model gap: "Blind Dependencies").
+# Dependabot opens PRs for vulnerable / outdated dependencies; pip-audit in CI
+# is the gate, this keeps the lockfile moving deliberately.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

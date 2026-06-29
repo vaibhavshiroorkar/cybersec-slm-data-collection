@@ -58,9 +58,15 @@ CATEGORY_TO_DOMAIN = {
 _FEED_KEY_GUESSES = ("vulnerabilities", "objects", "data", "results", "items")
 
 
+# Cap slug length so clean_data/<domain>/<slug>/<slug>.jsonl stays under the
+# Windows 260-char MAX_PATH (long paper-title slugs otherwise break tools that
+# read the file, e.g. Google Drive upload/sync).
+SLUG_MAXLEN = 45
+
+
 def slugify(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
-    return s or "source"
+    return (s[:SLUG_MAXLEN].rstrip("-") or "source")
 
 
 _GSHEET_RE = re.compile(r"docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)")
@@ -170,6 +176,7 @@ def _row_to_descriptor(row: dict) -> dict | None:
     domain = _domain_for(row)
     desc = _val(row, "description", "notes", default=name)
     slug = _val(row, "slug", default=slugify(name))
+    slug = (slug[:SLUG_MAXLEN].rstrip("-_") or "source")   # bound path length
     low = url.lower()
 
     kind = _val(row, "kind")
@@ -178,10 +185,11 @@ def _row_to_descriptor(row: dict) -> dict | None:
             kind = "hf"
         elif "kaggle.com/datasets/" in low:
             kind = "kaggle"
-        elif fmt == "pdf" or low.endswith(".pdf"):
-            kind = "pdf"
-        elif fmt == "html" or access == "scraping":
-            kind = "website"
+        elif fmt == "pdf" or low.endswith(".pdf") or "arxiv.org/pdf/" in low:
+            kind = "pdf"          # arxiv /pdf/<id> serves a PDF with no .pdf suffix
+        elif (fmt == "html" or access == "scraping"
+              or "archive.ics.uci.edu/dataset/" in low):
+            kind = "website"      # a UCI /dataset/ link is an HTML landing page, not data
         elif (fmt == "json" or low.endswith(".json")) and "github" not in low:
             kind = "feed"          # a bare .json endpoint is a record collection
         elif "github.com" in low or "raw.githubusercontent.com" in low:

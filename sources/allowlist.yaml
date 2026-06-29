@@ -1,0 +1,252 @@
+# Version-controlled source allowlist. Only `status: approved` sources
+# are fetched (extraction/allowlist.py). Edit deliberately; changes here
+# should go through peer review (threat model: Access Control).
+version: 1
+enforce: true
+sources:
+- id: hf:AlicanKiraz0/Cybersecurity-Dataset-v1
+  kind: hf
+  domain: Application Security
+  license: to-verify
+  url: https://huggingface.co/datasets/AlicanKiraz0/Cybersecurity-Dataset-v1
+  status: approved
+- id: kaggle:cyberprince/web-application-payloads-dataset
+  kind: kaggle
+  domain: Application Security
+  license: to-verify
+  url: https://www.kaggle.com/datasets/cyberprince/web-application-payloads-dataset
+  status: approved
+- id: kaggle:ispangler/csic-2010-web-application-attacks
+  kind: kaggle
+  domain: Application Security
+  license: to-verify
+  url: https://www.kaggle.com/datasets/ispangler/csic-2010-web-application-attacks
+  status: approved
+- id: kaggle:syedsaqlainhussain/cross-site-scripting-xss-dataset-for-deep-learning
+  kind: kaggle
+  domain: Application Security
+  license: to-verify
+  url: https://www.kaggle.com/datasets/syedsaqlainhussain/cross-site-scripting-xss-dataset-for-deep-learning
+  status: approved
+- id: kaggle:nobukim/aws-cloudtrails-dataset-from-flaws-cloud
+  kind: kaggle
+  domain: Cloud Security
+  license: to-verify
+  url: https://www.kaggle.com/datasets/nobukim/aws-cloudtrails-dataset-from-flaws-cloud
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf
+  kind: pdf
+  domain: Cryptography
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.203.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf
+  kind: pdf
+  domain: Cryptography
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.204.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.205.pdf
+  kind: pdf
+  domain: Cryptography
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.205.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-208.pdf
+  kind: pdf
+  domain: Cryptography
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-208.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-57pt1r5.pdf
+  kind: pdf
+  domain: Cryptography
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-57pt1r5.pdf
+  status: approved
+- id: hf:ai4privacy/pii-masking-200k
+  kind: hf
+  domain: Data Security and Privacy
+  license: to-verify
+  url: https://huggingface.co/datasets/ai4privacy/pii-masking-200k
+  status: approved
+- id: hf:ai4privacy/pii-masking-300k
+  kind: hf
+  domain: Data Security and Privacy
+  license: to-verify
+  url: https://huggingface.co/datasets/ai4privacy/pii-masking-300k
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-122.pdf
+  kind: pdf
+  domain: Data Security and Privacy
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-122.pdf
+  status: approved
+- id: https://www.meity.gov.in/static/uploads/2024/06/2bf1f0e9f04e6fb4f8fef35e82c42aa5.pdf
+  kind: pdf
+  domain: Data Security and Privacy
+  license: Government of India (official gazette / open publication)
+  url: https://www.meity.gov.in/static/uploads/2024/06/2bf1f0e9f04e6fb4f8fef35e82c42aa5.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-30r1.pdf
+  kind: pdf
+  domain: Governance, Risk and Compliance
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-30r1.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-37r2.pdf
+  kind: pdf
+  domain: Governance, Risk and Compliance
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-37r2.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf
+  kind: pdf
+  domain: Governance, Risk and Compliance
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-53r5.pdf
+  status: approved
+- id: https://www.indiacode.nic.in/bitstream/123456789/13116/1/it_act_2000_updated.pdf
+  kind: pdf
+  domain: Governance, Risk and Compliance
+  license: Government of India (official gazette / open publication)
+  url: https://www.indiacode.nic.in/bitstream/123456789/13116/1/it_act_2000_updated.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-63b.pdf
+  kind: pdf
+  domain: Identity Access and Management
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-63b.pdf
+  status: approved
+- id: hf:darkknight25/Incident_Response_Playbook_Dataset
+  kind: hf
+  domain: Incident Response and Forensics
+  license: to-verify
+  url: https://huggingface.co/datasets/darkknight25/Incident_Response_Playbook_Dataset
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-86.pdf
+  kind: pdf
+  domain: Incident Response and Forensics
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-86.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-184.pdf
+  kind: pdf
+  domain: Incident Response and Forensics
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-184.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-61r2.pdf
+  kind: pdf
+  domain: Incident Response and Forensics
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-61r2.pdf
+  status: approved
+- id: kaggle:Microsoft/microsoft-security-incident-prediction
+  kind: kaggle
+  domain: Incident Response and Forensics
+  license: cc-by-4.0
+  url: https://www.kaggle.com/datasets/Microsoft/microsoft-security-incident-prediction
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-94.pdf
+  kind: pdf
+  domain: Network Security
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-94.pdf
+  status: approved
+- id: https://capec.mitre.org/data/definitions/1000.html
+  kind: website
+  domain: Penetration Testing and Vulnerability Management
+  license: MITRE CAPEC Terms (free w/ attribution)
+  url: https://capec.mitre.org/data/definitions/1000.html
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-115.pdf
+  kind: pdf
+  domain: Penetration Testing and Vulnerability Management
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-115.pdf
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-40r4.pdf
+  kind: pdf
+  domain: Penetration Testing and Vulnerability Management
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-40r4.pdf
+  status: approved
+- id: kaggle:sid321axn/malicious-urls-dataset
+  kind: kaggle
+  domain: Penetration Testing and Vulnerability Management
+  license: to-verify
+  url: https://www.kaggle.com/datasets/sid321axn/malicious-urls-dataset
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-92.pdf
+  kind: pdf
+  domain: Security Operations
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-92.pdf
+  status: approved
+- id: hf:darkknight25/phishing_benign_email_dataset
+  kind: hf
+  domain: Threat Intelligence
+  license: to-verify
+  url: https://huggingface.co/datasets/darkknight25/phishing_benign_email_dataset
+  status: approved
+- id: hf:ealvaradob/phishing-dataset
+  kind: hf
+  domain: Threat Intelligence
+  license: to-verify
+  url: https://huggingface.co/datasets/ealvaradob/phishing-dataset
+  status: approved
+- id: hf:zefang-liu/phishing-email-dataset
+  kind: hf
+  domain: Threat Intelligence
+  license: to-verify
+  url: https://huggingface.co/datasets/zefang-liu/phishing-email-dataset
+  status: approved
+- id: https://archive.ics.uci.edu/static/public/967/phiusiil+phishing+url+dataset.zip
+  kind: url
+  domain: Threat Intelligence
+  license: CC BY 4.0
+  url: https://archive.ics.uci.edu/static/public/967/phiusiil+phishing+url+dataset.zip
+  status: approved
+- id: https://attack.mitre.org/techniques/enterprise/
+  kind: website
+  domain: Threat Intelligence
+  license: MITRE ATT&CK Terms (free w/ attribution)
+  url: https://attack.mitre.org/techniques/enterprise/
+  status: approved
+- id: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-150.pdf
+  kind: pdf
+  domain: Threat Intelligence
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-150.pdf
+  status: approved
+- id: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+  kind: feed
+  domain: Threat Intelligence
+  license: Apache-2.0 / MITRE ATT&CK Terms (free use w/ attribution)
+  url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+  status: approved
+- id: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json
+  kind: feed
+  domain: Threat Intelligence
+  license: Apache-2.0 / MITRE ATT&CK Terms (free use w/ attribution)
+  url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json
+  status: approved
+- id: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/mobile-attack/mobile-attack.json
+  kind: feed
+  domain: Threat Intelligence
+  license: Apache-2.0 / MITRE ATT&CK Terms (free use w/ attribution)
+  url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/mobile-attack/mobile-attack.json
+  status: approved
+- id: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+  kind: feed
+  domain: Threat Intelligence
+  license: Public Domain (CISA)
+  url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+  status: approved
+- id: kaggle:shashwatwork/web-page-phishing-detection-dataset
+  kind: kaggle
+  domain: Threat Intelligence
+  license: to-verify
+  url: https://www.kaggle.com/datasets/shashwatwork/web-page-phishing-detection-dataset
+  status: approved

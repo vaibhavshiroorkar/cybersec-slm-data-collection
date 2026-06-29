@@ -1,0 +1,23 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+# generated data + logs (mounted at /data at runtime)
+raw_data/
+clean_data/
+flagged/
+dropped/
+_stages/
+normalized/
+logs/
+# local secrets / models
+.env
+*.ftz
+*.bin
+infra/.terraform
+docs
+tests

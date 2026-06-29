@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync (all base deps + dev group)
+        run: uv sync
+
+      - name: Ruff
+        run: uv run ruff check src tests
+
+      - name: Tests
+        run: uv run pytest -q
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks needs full history to scan commits
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Sync (dev group)
+        run: uv sync
+
+      - name: pip-audit (supply-chain)
+        run: uv run pip-audit --strict --desc
+
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

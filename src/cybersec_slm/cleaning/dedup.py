@@ -16,12 +16,11 @@ Public API:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-import pickle
 import re
 
-from .common import (MINHASH_PERM, NEAR_DUP_THRESHOLD, SHINGLE_SIZE, logger,
-                    try_import)
+from .common import MINHASH_PERM, NEAR_DUP_THRESHOLD, SHINGLE_SIZE, logger, try_import
 
 _WS_RE = re.compile(r"\s+")
 _MERSENNE = (1 << 61) - 1          # large prime for hash mixing
@@ -69,7 +68,7 @@ class _FallbackLSH:
 
     @staticmethod
     def _similarity(s1, s2) -> float:
-        return sum(1 for x, y in zip(s1, s2) if x == y) / len(s1)
+        return sum(1 for x, y in zip(s1, s2, strict=False) if x == y) / len(s1)
 
     def add(self, text: str) -> tuple[bool, str]:
         sh = _shingles(text, SHINGLE_SIZE)
@@ -152,21 +151,38 @@ class Deduper:
         return self._near.add(text)
 
     def save_state(self, path: str) -> None:
-        """Persist exact-hash set to disk for crash-safe resume.
+        """Persist the exact-hash set to disk (JSON) for crash-safe resume.
 
-        Only the SHA256 set is checkpointed (not the near-dup LSH index, which
-        is fast to rebuild). On a restart near-dup detection starts fresh, but
-        exact duplicates are still caught across runs.
+        Only the SHA256 set is checkpointed (not the near-dup LSH index, which is
+        fast to rebuild). JSON, not pickle: the checkpoint is rebuilt/loaded by
+        the pipeline, and deserializing an unvetted pickle is a code-execution
+        risk (threat model Stage 2: "Deduplication Index Corruption").
         """
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self._seen_exact, f)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "exact": sorted(self._seen_exact)}, f)
+        os.replace(tmp, path)
         logger.debug(f"dedup: saved {len(self._seen_exact):,} hashes -> {path}")
 
     def load_state(self, path: str) -> None:
-        """Restore exact-hash set saved by save_state()."""
+        """Restore the exact-hash set saved by save_state().
+
+        Validates the payload (a list of 64-char hex digests); a malformed or
+        legacy file is ignored with a warning rather than trusted.
+        """
         if not os.path.exists(path):
             return
-        with open(path, "rb") as f:
-            self._seen_exact = pickle.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+            hashes = doc["exact"] if isinstance(doc, dict) else doc
+            valid = {h for h in hashes
+                     if isinstance(h, str) and len(h) == 64
+                     and all(c in "0123456789abcdef" for c in h)}
+        except (ValueError, KeyError, TypeError, OSError) as ex:
+            logger.warning(f"dedup: ignoring unreadable checkpoint {path} "
+                           f"({type(ex).__name__}); starting fresh")
+            return
+        self._seen_exact = valid
         logger.info(f"dedup: loaded {len(self._seen_exact):,} hashes from {path}")

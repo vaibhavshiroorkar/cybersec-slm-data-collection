@@ -1,0 +1,52 @@
+name: Deploy
+
+# Build + push the image to ECR and register the Prefect deployment.
+# Triggers on a version tag or manual dispatch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write     # OIDC: assume the AWS deploy role (no static keys)
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: cybersec-slm
+        run: |
+          IMAGE="$REGISTRY/$REPO:${GITHUB_SHA::12}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --extra orchestration
+      - name: Register Prefect deployment
+        env:
+          PREFECT_API_URL: ${{ secrets.PREFECT_API_URL }}
+          PREFECT_API_KEY: ${{ secrets.PREFECT_API_KEY }}
+          IMAGE: ${{ needs.image.outputs.image }}
+        run: uv run prefect deploy --all --job-variable image="$IMAGE"
