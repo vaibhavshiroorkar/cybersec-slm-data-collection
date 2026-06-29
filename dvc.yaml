@@ -1,7 +1,7 @@
 # DVC pipeline — the reproducibility unit for a corpus release.
 #
 # `dvc repro` rebuilds the corpus end to end; the outputs are versioned and
-# pushed to the S3 remote (see docs/dvc.md). Versioned releases let a bad batch
+# pushed to the S3 remote (see docs/operations/dvc.md). Versioned releases let a bad batch
 # be rolled back / scoped without discarding the whole dataset (threat model
 # Output: "Untraceable Contamination Scoping").
 stages:

@@ -67,7 +67,7 @@ prefect deploy --all          # registers build-corpus from prefect.yaml (weekly
 prefect deployment run 'build-corpus/build-corpus'   # kick off once to smoke test
 ```
 
-The DVC remote is set once (see `docs/dvc.md`): `dvc remote add -d s3 s3://<data_bucket>/dvc`.
+The DVC remote is set once (see `docs/operations/dvc.md`): `dvc remote add -d s3 s3://<data_bucket>/dvc`.
 With `dvc_push: true` (default in `prefect.yaml`), each run snapshots + pushes the
 versioned `dataset.jsonl` release to S3.
 
