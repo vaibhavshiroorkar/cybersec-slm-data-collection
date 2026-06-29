@@ -1,7 +1,7 @@
 # Architecture
 
 How the pipeline works, end to end. This is the companion to the
-[README](../README.md): the README tells you how to run it; this document
+[README](../../README.md): the README tells you how to run it; this document
 explains what happens inside.
 
 ## Overview
@@ -163,9 +163,9 @@ contract.
   the helpers stay unit-testable.
 - **DVC** (`dvc.yaml`) — `dvc repro` rebuilds the corpus and versions the outputs
   to an S3 remote, with the EDA and normalize reports tracked as metrics. See
-  [dvc.md](dvc.md).
+  [dvc.md](../operations/dvc.md).
 - **AWS** — Dockerized, with a Terraform skeleton (ECR / ECS / S3 / IAM / Secrets
-  Manager) and CI/CD. See [deploy.md](deploy.md).
+  Manager) and CI/CD. See [deploy.md](../operations/deploy.md).
 
 ## Security controls
 
@@ -185,7 +185,7 @@ response toward something traceable, reversible, and auditable.
 
 PII redaction has known limits on a security corpus (internal hostnames, private
 IPs, service accounts, API keys); these are documented with a manual-review process
-in [pii_limitations.md](pii_limitations.md).
+in [pii_limitations.md](../pii_limitations.md).
 
 ## Data layout
 
@@ -204,6 +204,6 @@ directory) and are git-ignored.
 ## Configuration
 
 Optional API keys are read from `.env` (auto-loaded; shell environment wins). See
-the [README configuration table](../README.md#configuration) for the full list.
+the [README configuration table](../../README.md#configuration) for the full list.
 EDA gate thresholds and the allowlist enforcement flag are environment-overridable;
 see `eda/config.py` and `extraction/allowlist.py`.

@@ -4,7 +4,7 @@
 # bucket (DVC remote + dataset releases, versioned), a least-privilege ECS task
 # role, Secrets Manager entries for the API keys, an ECS Fargate cluster, and a
 # CloudWatch log group. The Prefect ECS *push work pool* is created in Prefect
-# Cloud and pointed at this cluster/role (see docs/deploy.md).
+# Cloud and pointed at this cluster/role (see docs/operations/deploy.md).
 
 terraform {
   required_version = ">= 1.6"
