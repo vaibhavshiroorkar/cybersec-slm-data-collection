@@ -7,9 +7,6 @@ import json
 from pathlib import Path
 from typing import Optional
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
 from cybersec_slm.cleaning.common import find_input_files, iter_jsonl, logger, LOGS
 from cybersec_slm.cleaning import sanitize, anomaly, dedup, pii, langfilter
 from cybersec_slm.core import JsonlWriter, PARSE_ERROR
