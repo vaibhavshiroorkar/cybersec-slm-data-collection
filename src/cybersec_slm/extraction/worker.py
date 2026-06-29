@@ -17,6 +17,7 @@ import shutil
 
 from ..core import CLEAN_DATA, RAW_DATA, logger
 from . import fetch, scrape, scrape_html
+from .allowlist import descriptor_key, is_allowed
 from .common import _Collector
 
 
@@ -72,6 +73,21 @@ def process_source(descriptor: dict, *, data_root: str | None = None,
     result = {"descriptor": descriptor, "status": "ok", "error": None,
               "folder": None, "ingest_rows": [], "clean_report_rows": []}
     label = descriptor.get("ref") or descriptor.get("slug") or descriptor.get("kind")
+
+    # Allowlist gate (anti-poisoning): never fetch a source the team has not
+    # explicitly approved. Skipped sources are logged + recorded, not fetched.
+    allowed, reason = is_allowed(descriptor)
+    if not allowed:
+        result["status"] = "skipped"
+        result["error"] = f"allowlist: {reason}"
+        logger.warning(f"  SKIPPED (allowlist {reason}) {descriptor_key(descriptor)}")
+        collector.record(kind=descriptor.get("kind"), name=label,
+                         domain=descriptor.get("domain"),
+                         source_url=descriptor.get("url") or descriptor.get("start_url"),
+                         license=descriptor.get("license"),
+                         status=f"skipped:allowlist:{reason}")
+        result["ingest_rows"] = collector.rows
+        return result
     try:
         logger.info(f"=== source: {descriptor['kind']} {label} ===")
         folder = _fetch_one(descriptor, collector)

@@ -21,7 +21,6 @@ from __future__ import annotations
 import abc
 import re
 from collections import Counter
-from typing import Any
 
 from ..core import logger
 
@@ -52,9 +51,26 @@ _RESERVED = {"source", "url", "license", "text", "_text_field"}
 # Annotation/provenance keys added by the cleaning stage (leading underscore).
 _INTERNAL_PREFIX = "_"
 
+# Original file extension -> origin_format (best-effort; cleaned records are jsonl
+# by the time normalize runs, so default to that when no hint survives).
+_FMT_BY_EXT = {
+    ".parquet": "parquet", ".csv": "csv", ".json": "json", ".jsonl": "jsonl",
+    ".xlsx": "xlsx", ".xls": "xls", ".txt": "txt", ".pdf": "pdf", ".xml": "xml",
+    ".yar": "yara", ".yara": "yara", ".yml": "yaml", ".yaml": "yaml", ".md": "markdown",
+}
+
+
+def _infer_origin_format(rec: dict) -> str:
+    hint = rec.get("_file") or rec.get("_source_file") or ""
+    if isinstance(hint, str) and "." in hint:
+        ext = "." + hint.rsplit(".", 1)[-1].lower()
+        if ext in _FMT_BY_EXT:
+            return _FMT_BY_EXT[ext]
+    return "jsonl"
+
 
 # --------------------------------------------------------------- mapper registry
-MAPPER_REGISTRY: dict[str, "BaseMapper"] = {}
+MAPPER_REGISTRY: dict[str, BaseMapper] = {}
 _UNMAPPED: Counter[str] = Counter()        # sources with no dedicated mapper
 
 
@@ -69,21 +85,17 @@ def register_mapper(name: str):
 class BaseMapper(abc.ABC):
     """Abstract base — every subclass must implement :meth:`map`."""
 
-    #: keys this mapper preserves verbatim into ``meta`` (None = all non-reserved)
-    keep_meta: tuple[str, ...] | None = None
-
     @abc.abstractmethod
     def map(self, rec: dict, *, domain: str, source: str) -> dict | None:
-        """Return canonical field dict, or ``None`` to drop the record."""
+        """Return the intermediate text+provenance dict, or ``None`` to drop.
+
+        Output keys: ``text, source, source_url, license, origin_format,
+        source_file, raw_domain``. :func:`cybersec_slm.normalize.enrich.build_record`
+        turns that into the full canonical record (id, hashes, labels, ...).
+        """
         raise NotImplementedError
 
     # -- shared helpers ------------------------------------------------------
-    def _meta(self, rec: dict) -> dict[str, Any]:
-        if self.keep_meta is not None:
-            return {k: rec[k] for k in self.keep_meta if k in rec}
-        return {k: v for k, v in rec.items()
-                if k not in _RESERVED and not k.startswith(_INTERNAL_PREFIX)}
-
     @staticmethod
     def _str_or(value, fallback=None):
         """Non-empty string, else the fallback (record fields are often NaN/None)."""
@@ -91,13 +103,13 @@ class BaseMapper(abc.ABC):
 
     def _base(self, rec: dict, text: str, domain: str, source: str) -> dict:
         return {
-            "domain": domain,
-            "source": self._str_or(rec.get("source"), source),
             "text": text,
-            "url": self._str_or(rec.get("url")),
-            "license": self._str_or(rec.get("license")),
-            "text_field": rec.get("_text_field"),
-            "meta": self._meta(rec),
+            "source": self._str_or(rec.get("source"), source),
+            "source_url": self._str_or(rec.get("url")),
+            "license": self._str_or(rec.get("license")) or "",
+            "origin_format": _infer_origin_format(rec),
+            "source_file": source,
+            "raw_domain": domain,
         }
 
 

@@ -1,0 +1,33 @@
+# Prefect deployment config for the corpus build.
+#
+#   prefect work-pool create ecs-pool --type ecs:push   # one-time (Phase 6)
+#   prefect deploy                                       # register the deployment
+#
+# Secrets (NVD/Kaggle/Google keys) are injected at runtime from AWS Secrets
+# Manager via prefect-aws blocks — never baked into the image (threat model:
+# Secrets Management).
+name: cybersec-slm-data-pipeline
+prefect-version: 3.0.0
+
+build: null
+push: null
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  - name: build-corpus
+    entrypoint: src/cybersec_slm/orchestration/flows.py:build_corpus
+    description: Extract -> clean -> EDA gate -> normalize -> DVC snapshot.
+    parameters:
+      enforce_eda: true
+      dvc_push: true
+    work_pool:
+      name: ecs-pool          # ECS Fargate push work pool (per-source isolation)
+      job_variables:
+        env:
+          CYBERSEC_SLM_DATA_ROOT: /data
+          CYBERSEC_SLM_ENFORCE_ALLOWLIST: "1"
+    schedules:
+      - cron: "0 6 * * 1"     # weekly, Monday 06:00 UTC
+        timezone: UTC

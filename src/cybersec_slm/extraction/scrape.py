@@ -13,8 +13,7 @@ import os
 import orjson
 import pymupdf
 
-from .common import (ONE_MB, RAW_DATA, IngestLog, category_of, http_get, logger,
-                    sha256_file)
+from .common import ONE_MB, RAW_DATA, IngestLog, category_of, http_get, logger, sha256_file
 from .manifest import FEEDS, PDFS, XML_FEEDS
 
 BASE = RAW_DATA
@@ -180,7 +179,6 @@ def scrape_cwe(domain: str, slug: str, title: str, lic: str, url: str,
     open(os.path.join(folder, slug + ".xml"), "wb").write(xml_bytes)
     _source_file(folder, title, url, lic)
 
-    ns = {"cwe": "http://cwe.mitre.org/cwe-7"}
     root = ET.fromstring(xml_bytes)
     out = os.path.join(folder, slug + ".jsonl")
     n = 0

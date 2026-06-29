@@ -14,9 +14,23 @@ import shutil
 import sys
 from urllib.parse import urlparse
 
-from .common import (CAP_BYTES, EXT_PRIORITY, ONE_MB, RAW_DATA, SKIP_SUBSTRINGS,
-                    IngestLog, OversizeError, category_of, count_lines, download,
-                    group_key, logger, remote_size, sha256_file, to_jsonl)
+from .common import (
+    CAP_BYTES,
+    EXT_PRIORITY,
+    ONE_MB,
+    RAW_DATA,
+    SKIP_SUBSTRINGS,
+    IngestLog,
+    OversizeError,
+    category_of,
+    count_lines,
+    download,
+    group_key,
+    logger,
+    remote_size,
+    sha256_file,
+    to_jsonl,
+)
 
 BASE = RAW_DATA
 
@@ -46,6 +60,32 @@ def _github_target(url: str) -> tuple[str, str] | None:
         return (f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{rest}",
                 os.path.basename(rest))
     return None
+
+
+def _download_name(url: str) -> str:
+    """A non-empty download filename for ``url``, even when it ends in '/'.
+
+    Trailing-slash export endpoints (e.g. abuse.ch ``/export/csv/full/``) have no
+    basename, so ``os.path.basename`` returns '' and the download target collapses
+    to the folder itself (``open(dir)`` -> FileNotFoundError). Fall back to the
+    last non-empty path segment so the file gets a real name.
+    """
+    base = os.path.basename(urlparse(url).path.rstrip("/"))
+    return base or "download"
+
+
+def _is_zipfile(path: str) -> bool:
+    """True when ``path`` begins with the ZIP local-file magic (``PK\\x03\\x04``).
+
+    Some endpoints serve a zip from an extensionless / trailing-slash URL
+    (Content-Type: application/zip), so the '.zip' suffix check alone misses them;
+    sniff the magic bytes to route those through the zip-extraction path too.
+    """
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"PK\x03\x04"
+    except OSError:
+        return False
 
 
 def _folder(domain, owner, name, counts):
@@ -241,7 +281,7 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
     if gh:
         url, name = gh           # repo page -> archive zip / raw file
     else:
-        name = os.path.basename(url.split("?")[0])
+        name = _download_name(url)
     sz = remote_size(url)
     stem, fext = os.path.splitext(name)
     if sz and sz > CAP_BYTES:
@@ -252,7 +292,7 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         return
     orig = os.path.join(folder, name)
     download(url, orig)
-    if orig.lower().endswith(".zip"):
+    if orig.lower().endswith(".zip") or _is_zipfile(orig):
         import zipfile
         zdir = os.path.join(folder, "_z"); os.makedirs(zdir, exist_ok=True)
         with zipfile.ZipFile(orig) as z:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Search-engine source discovery.
+"""Search-engine source sourcing.
 
 Finds *new* candidate cybersecurity sources by querying a search engine with
 per-domain keyword sets, maps each hit into the finalized tracking sheet's row
@@ -15,7 +15,7 @@ The pieces are deliberately small and independently testable:
     sheet.py      read existing rows for dedup + append new rows (Sheets API)
     run.py        orchestration + the entry the CLI calls
 
-See ``discovery/README.md`` for the column mapping and the credentials needed.
+See ``sourcing/README.md`` for the column mapping and the credentials needed.
 """
 
 from __future__ import annotations

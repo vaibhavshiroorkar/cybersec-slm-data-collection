@@ -20,8 +20,7 @@ from __future__ import annotations
 
 import re
 
-from .common import (GARBAGE_MAX, MAX_TEXT_CHARS, MIN_TEXT_CHARS, PARSE_ERROR,
-                    REPEAT_MAX, text_of)
+from .common import GARBAGE_MAX, MAX_TEXT_CHARS, MIN_TEXT_CHARS, PARSE_ERROR, REPEAT_MAX, text_of
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 

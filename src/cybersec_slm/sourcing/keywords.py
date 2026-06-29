@@ -1,26 +1,5 @@
 #!/usr/bin/env python3
-"""Per-Sub-Domain search keywords and snippet-classification vocabulary.
-
-Two keyword catalogs feed the crawler, selected by ``mode``:
-
-* ``DOMAIN_KEYWORDS`` (mode ``datasets``) — phrases that hunt for usable corpora
-  (datasets / repos / annotated collections), biased by ``QUERY_QUALIFIER``.
-* ``DOMAIN_TEXT_KEYWORDS`` (mode ``text``) — prose-oriented phrases that surface
-  articles, docs, tutorials, and writeups for general SLM training text, biased
-  by ``TEXT_QUERY_QUALIFIER``.
-
-Mode ``both`` runs each domain through both catalogs. Use :func:`keyword_sets`
-to get the ``(keywords, qualifier)`` pairs for a mode.
-
-The domain a phrase belongs to is the *default* Sub-Domain assigned to whatever
-the phrase surfaces. ``DOMAIN_VOCAB`` is the tie-breaker: when a result is
-ambiguous, the text of its title + snippet is scored against each domain's
-vocabulary and, if some other domain scores strictly higher than the default,
-the result is reassigned.
-
-Sub-Domain labels are kept in sync with ``extraction.sources.CATEGORY_TO_DOMAIN``
-so discovered rows file under the same folders the rest of the pipeline uses.
-"""
+"""Per-Sub-Domain search keywords and snippet-classification vocabulary."""
 
 from __future__ import annotations
 
@@ -338,10 +317,6 @@ MODES: tuple[str, ...] = ("datasets", "text", "both")
 
 
 def keyword_sets(mode: str = "datasets") -> list[tuple[dict[str, list[str]], str]]:
-    """Return the ``(keywords, qualifier)`` pairs to run for ``mode``.
-
-    ``both`` returns the datasets pair followed by the text pair.
-    """
     if mode == "both":
         return [_KEYWORD_SETS["datasets"], _KEYWORD_SETS["text"]]
     if mode in _KEYWORD_SETS:

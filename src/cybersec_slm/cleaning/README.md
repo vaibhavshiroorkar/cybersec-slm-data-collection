@@ -24,14 +24,14 @@ Language filtering          fastText lid.176 (→ langdetect/heuristic)
    │  non-English → translate to English (deep-translator → argos); keep
    │  untranslatable non-English ──▶ ../dropped/
    ▼
-../cleaned/  → handoff for EDA
+../clean_data/  → handoff for EDA
 ```
 
 ## Data flow
 - **Input:** `../raw_data/<Sub-Domain>/<source>/*.jsonl`
   (records shaped `{source, url, license, page?, text}`; tolerant of missing/extra fields).
 - **Outputs** (project root, mirroring the raw_data layout):
-  - `../cleaned/…jsonl` — passed every stage. Original schema preserved
+  - `../clean_data/…jsonl` — passed every stage. Original schema preserved
     (translated records gain `_orig_lang` and an English `text`).
   - `../flagged/…jsonl` — behavioral anomalies for the annotation team (`_reason` added).
   - `../dropped/…jsonl` — structural / duplicate / untranslatable-non-English drops (`_reason` added).
@@ -54,28 +54,27 @@ Tests live in the top-level `tests/cleaning/` (pytest, no heavy deps needed).
 
 ## Usage
 ```bash
-cybersec-slm clean all              # full pipeline -> cleaned/ flagged/ dropped/ + report
+cybersec-slm clean all              # full pipeline -> clean_data/ flagged/ dropped/ + report
 cybersec-slm clean all --limit 100  # smoke run: cap 100 records per file
 cybersec-slm clean sanitize         # diagnostic single-stage run -> _stages/sanitize/
 cybersec-slm clean dedup            # -> _stages/dedup/
 cybersec-slm clean pii              # -> _stages/pii/
 cybersec-slm clean lang             # -> _stages/lang/
-cybersec-slm clean report           # recount existing cleaned/flagged/dropped trees
+cybersec-slm clean report           # recount existing clean_data/flagged/dropped trees
 ```
 
-## Dependencies are optional
-Every named tool has a standard-library fallback, so the stage runs with nothing
-extra installed — each module logs which backend it chose. Install the extras to
-upgrade quality:
+## Dependencies
+Every named tool (ftfy, dateutil, datasketch, presidio, fastText, langdetect,
+deep-translator) plus the spaCy model presidio loads is a **base dependency** —
+`uv sync` from the repo root installs all of it, and `pytest` is there too (dev
+group). Each module still has a standard-library fallback and logs which backend
+it chose, so the stage never hard-fails if something is missing.
 
 ```bash
-uv sync --extra cleaning     # ftfy, dateutil, datasketch, presidio, fasttext, langdetect, deep-translator
-python -m spacy download en_core_web_lg   # required by presidio
-# fasttext also needs a lid.176.ftz / lid.176.bin model in this folder
-# (or set FASTTEXT_LID_MODEL to its path)
+uv sync                      # the cleaning stack + spaCy model + dev tools
+# fastText also needs a lid.176.ftz / lid.176.bin model in this folder
+# (one ships in the repo; or set FASTTEXT_LID_MODEL to its path)
 ```
-
-Run the tests with `uv sync --extra dev` then `pytest` from this folder.
 
 ## Tunables (`common.py`)
 `MIN_TEXT_CHARS` (50), `MAX_TEXT_CHARS` (100k), `GARBAGE_MAX` (0.30),
@@ -86,5 +85,5 @@ Run the tests with `uv sync --extra dev` then `pytest` from this folder.
 - Deduplication is **global across the corpus** and holds an in-memory MinHash/LSH
   index — fine at the current corpus size. For a much larger corpus, swap to a
   disk-backed index (e.g. datasketch's Redis/Cassandra backends) or shard by sub-domain.
-- Records keep their original schema in `cleaned/`; provenance/`_reason` fields
+- Records keep their original schema in `clean_data/`; provenance/`_reason` fields
   are attached only in `flagged/` and `dropped/`.

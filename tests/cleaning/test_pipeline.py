@@ -34,10 +34,14 @@ def test_end_to_end(tmp_path, monkeypatch):
     ])
 
     # redirect all outputs into tmp so the real folders are untouched
-    monkeypatch.setattr(pipeline, "OUT_CLEANED", str(tmp_path / "cleaned"))
+    monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean_data"))
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
     monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+    # isolate the dedup checkpoint: run_all resumes from it by default, so without
+    # this the test would pollute (and then re-read) the real logs/ checkpoint and
+    # flag its own records as exact dups on a second run.
+    monkeypatch.setattr(pipeline, "DEDUP_CKPT", str(tmp_path / "dedup_ckpt"))
 
     # Stub the translator so the test is deterministic and offline: it "translates"
     # any non-English record into a fixed English marker.
@@ -73,7 +77,7 @@ def test_end_to_end(tmp_path, monkeypatch):
     # cleaned output must not contain the redacted email, must contain the
     # translated marker, and must not contain the original Russian text.
     cleaned_text = ""
-    for r, _d, fs in os.walk(str(tmp_path / "cleaned")):
+    for r, _d, fs in os.walk(str(tmp_path / "clean_data")):
         for fn in fs:
             with open(os.path.join(r, fn), encoding="utf-8") as f:
                 cleaned_text += f.read()
