@@ -1,7 +1,7 @@
 # Commands
 
 The complete command reference for the pipeline. The [README](../README.md) covers
-the quickstart; this page is the detail — every stage, flag, and run mode, plus
+the quickstart; this page is the detail, every stage, flag, and run mode, plus
 Docker, configuration, and development.
 
 Everything runs through one console script, `cybersec-slm` (installed by `uv sync`).
@@ -29,7 +29,7 @@ and rebuilds the canonical dataset. Output lands in `data/final/dataset.jsonl`.
 
 ## Run one stage at a time
 
-Ingestion isn't a standalone command — it runs fused with cleaning via `run`. The
+Ingestion isn't a standalone command, it runs fused with cleaning via `run`. The
 other stages can be re-run on their own:
 
 ```bash
@@ -54,51 +54,51 @@ uv run cybersec-slm normalize           # canonical 22-field dataset            
 
 ### Per-command flags
 
-**Ingestion (runs inside `run` / `all`)** — each source is dispatched to a handler
+**Ingestion (runs inside `run` / `all`)**: each source is dispatched to a handler
 by kind: dataset platforms (HuggingFace / Kaggle / GitHub / raw URLs), PDFs and JSON
 feeds, crawlable websites (needs Chromium), and the NVD CVE API. Sources are read
 from `sources/Sources.csv`; only rows approved in `sources/allowlist.yaml` are
 fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
 
-**`clean <action>`** — `all` runs the full chain; `sanitize` / `dedup` / `pii` /
+**`clean <action>`**: `all` runs the full chain; `sanitize` / `dedup` / `pii` /
 `lang` run a single step; `report` recounts the existing `data/clean`, `data/flagged`,
 and `data/dropped` trees; `balance` reports per-domain volume.
-- `--limit N` — cap records per file (smoke test).
-- `--cap N` — max records per domain (with the `balance` action).
+- `--limit N`: cap records per file (smoke test).
+- `--cap N`: max records per domain (with the `balance` action).
 
 **`eda`**
-- `--input PATH` — cleaned-records root (default: `data/clean/`).
-- `--no-enforce` — report only; don't fail the run on a blocker.
-- `--profile` — also write a ydata-profiling HTML report (needs `ydata-profiling`,
-  which requires pandas `<3`; run it in a throwaway env — see [Optional extras](#optional-extras)).
+- `--input PATH`: cleaned-records root (default: `data/clean/`).
+- `--no-enforce`: report only; don't fail the run on a blocker.
+- `--profile`: also write a ydata-profiling HTML report (needs `ydata-profiling`,
+  which requires pandas `<3`; run it in a throwaway env, see [Optional extras](#optional-extras)).
 
 **`normalize`**
-- `--input PATH` — cleaned-records root (default: `data/clean/`).
-- `--fresh` — ignore any existing `dataset.jsonl` (don't resume/append).
-- `--limit N` — cap records per file (smoke test).
+- `--input PATH`: cleaned-records root (default: `data/clean/`).
+- `--fresh`: ignore any existing `dataset.jsonl` (don't resume/append).
+- `--limit N`: cap records per file (smoke test).
 
 **`run`** (parallel streaming fetch + clean)
-- `--sources PATH` — a sources `.csv` (default: `sources/Sources.csv`).
-- `--workers N` — process-pool size (default: `min(cpu, 8)`).
-- `--limit N` — cap records per file.
-- `--keep-raw` — keep `data/raw/` instead of deleting it after cleaning.
-- `--no-final-dedup` — skip the final cross-source dedup pass.
+- `--sources PATH`: a sources `.csv` (default: `sources/Sources.csv`).
+- `--workers N`: process-pool size (default: `min(cpu, 8)`).
+- `--limit N`: cap records per file.
+- `--keep-raw`: keep `data/raw/` instead of deleting it after cleaning.
+- `--no-final-dedup`: skip the final cross-source dedup pass.
 
 **`source`** (search-engine source discovery)
-- `--sources PATH` — catalog CSV to append to (default: `sources/Sources.csv`).
-- `--domains ...` — limit to these Sub-Domains (default: all).
-- `--mode datasets|text|both` — keyword catalog (default: `datasets`).
-- `--per-keyword N` — results per keyword (≤10, default 5).
-- `--max-per-domain N` — cap new rows kept per Sub-Domain.
-- `--dry-run` — discover and write the candidate CSV but don't append to the catalog (`sources/Sources.csv`).
-- `--out PATH` — path for the candidate CSV (default: `logs/discovered/`).
-- `--api-key`, `--cse-id` — Google Programmable Search credentials (or set
+- `--sources PATH`: catalog CSV to append to (default: `sources/Sources.csv`).
+- `--domains ...`: limit to these Sub-Domains (default: all).
+- `--mode datasets|text|both`: keyword catalog (default: `datasets`).
+- `--per-keyword N`: results per keyword (≤10, default 5).
+- `--max-per-domain N`: cap new rows kept per Sub-Domain.
+- `--dry-run`: discover and write the candidate CSV but don't append to the catalog (`sources/Sources.csv`).
+- `--out PATH`: path for the candidate CSV (default: `logs/discovered/`).
+- `--api-key`, `--cse-id`: Google Programmable Search credentials (or set
   `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_ENGINE_ID`).
 
-**`flow`** (Prefect orchestration — needs the `orchestration` extra)
-- `--sources PATH` — path/URL to a sources file.
-- `--no-enforce-eda` — run the EDA gate in report-only mode.
-- `--dvc-push` — snapshot and push the dataset to the DVC remote.
+**`flow`** (Prefect orchestration, needs the `orchestration` extra)
+- `--sources PATH`: path/URL to a sources file.
+- `--no-enforce-eda`: run the EDA gate in report-only mode.
+- `--dvc-push`: snapshot and push the dataset to the DVC remote.
 
 ## Two run modes
 
@@ -121,7 +121,7 @@ docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm
 ```
 
 On Windows PowerShell, mount the volume with `-v "${PWD}\out:/work"`. The image runs
-as a non-root user and writes everything under the mounted volume — the corpus to
+as a non-root user and writes everything under the mounted volume, the corpus to
 `out/data/` and run logs to `out/logs/`. Secrets are read from `--env-file` at
 runtime and are never baked into the image. To run a single stage, append it after
 the image name:
@@ -157,7 +157,7 @@ uv sync --extra orchestration   # Prefect + prefect-aws (for `flow` and AWS depl
 - **orchestration** powers `cybersec-slm flow` and the ECS deployment.
   `cybersec-slm all` runs the identical pipeline locally without it. It pulls in
   ~100 packages, and on Windows its `whenever` extension ships a DLL that Smart App
-  Control may block — so it is opt-in.
+  Control may block, so it is opt-in.
 - **profiling** (`ydata-profiling`, the optional `eda --profile` HTML report) pins
   pandas `<3.0`, which conflicts with the pipeline's pandas `>=3.0`. The EDA gate
   runs without it; for a one-off profile, use a throwaway environment:

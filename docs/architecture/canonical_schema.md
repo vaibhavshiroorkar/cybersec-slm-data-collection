@@ -50,8 +50,8 @@ internally; only `content_hash` (exact) appears on the record.
 
 ## Sidecars (same `normalized/` directory)
 
-- `manifest.json` — the release datasheet (counts, license/format/domain
+- `manifest.json`: the release datasheet (counts, license/format/domain
   breakdowns, dataset sha256, git commit, EDA snapshot).
-- `rejected.jsonl` — metadata-only reject log (raw text only under
+- `rejected.jsonl`: metadata-only reject log (raw text only under
   `CYBERSEC_SLM_DEBUG_REJECTS=1`).
-- `duplicates.jsonl`, `dedup_scores.jsonl` — dedup audit trail.
+- `duplicates.jsonl`, `dedup_scores.jsonl`: dedup audit trail.

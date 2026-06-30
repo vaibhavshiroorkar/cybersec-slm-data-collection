@@ -24,7 +24,7 @@ terraform apply -var data_bucket_name=<globally-unique-bucket> -var region=us-ea
 Outputs you'll need: `ecr_repository_url`, `data_bucket`, `ecs_cluster_arn`,
 `task_role_arn`, `execution_role_arn`, `secret_arns`.
 
-Set the secret values (out of band — never in Terraform/Git):
+Set the secret values (out of band, never in Terraform/Git):
 
 ```bash
 aws secretsmanager put-secret-value --secret-id cybersec-slm/nvd-api-key --secret-string '...'
@@ -82,5 +82,5 @@ versioned `dataset.jsonl` release to S3.
 ## Least privilege (threat model: Access Control)
 
 The ECS **task role** can only RW the one data bucket and read the four named
-secrets — nothing else. The image holds **no** credentials; everything sensitive
+secrets, nothing else. The image holds **no** credentials; everything sensitive
 is injected at runtime.

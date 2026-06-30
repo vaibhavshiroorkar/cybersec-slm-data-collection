@@ -1,4 +1,4 @@
-# Sourcing — search-engine source discovery
+# Sourcing: search-engine source discovery
 
 `cybersec-slm source` finds **new** candidate cybersecurity sources by querying
 a search engine with per–Sub-Domain keyword sets, maps each hit into the catalog's
