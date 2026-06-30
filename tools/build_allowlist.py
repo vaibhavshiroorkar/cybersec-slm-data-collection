@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Regenerate sources/allowlist.yaml from the built-in manifest catalog.
+"""Regenerate sources/allowlist.yaml from the catalog (sources/Sources.csv).
 
-Manifest sources are already curated, so they are seeded `approved`. Review the
-diff before committing — adding an approved source is a security decision.
+Every catalog source is seeded with ``--status`` (default ``approved``). Review the
+diff before committing — adding an approved source is a security decision, so prefer
+``--status pending`` for a freshly-discovered catalog and approve rows deliberately.
 
     python tools/build_allowlist.py            # write sources/allowlist.yaml
     python tools/build_allowlist.py --stdout   # print, don't write
@@ -17,7 +18,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from cybersec_slm.extraction.allowlist import DEFAULT_ALLOWLIST, dump_allowlist_yaml  # noqa: E402
-from cybersec_slm.extraction.sources import manifest_descriptors  # noqa: E402
+from cybersec_slm.extraction.sources import DEFAULT_CATALOG, load_descriptors  # noqa: E402
 
 
 def main() -> None:
@@ -27,7 +28,7 @@ def main() -> None:
     ap.add_argument("--stdout", action="store_true", help="print instead of writing")
     args = ap.parse_args()
 
-    text = dump_allowlist_yaml(manifest_descriptors(), status=args.status)
+    text = dump_allowlist_yaml(load_descriptors(DEFAULT_CATALOG), status=args.status)
     if args.stdout:
         print(text)
         return

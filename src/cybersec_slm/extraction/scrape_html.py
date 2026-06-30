@@ -3,8 +3,8 @@
 
 Static pages: httpx + selectolax (fast). JS-rendered pages: Playwright (chromium).
 Respects robots.txt (urllib.robotparser). Same-domain BFS with page/depth caps.
-
-    py -3.13 scrape_html.py            # crawl all manifest.SITES
+``crawl`` is invoked per ``website`` source by the streaming worker
+(:func:`cybersec_slm.extraction.worker.process_source`).
 """
 
 import json
@@ -15,8 +15,7 @@ from urllib.robotparser import RobotFileParser
 
 from selectolax.parser import HTMLParser
 
-from .common import HEADERS, ONE_MB, RAW_DATA, IngestLog, category_of, http_get, logger, sha256_file
-from .manifest import SITES
+from .common import HEADERS, ONE_MB, RAW_DATA, category_of, http_get, logger, sha256_file
 
 BASE = RAW_DATA
 UA = HEADERS["User-Agent"]
@@ -105,17 +104,3 @@ def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, l
                domain=domain, description=desc, source_url=start_url,
                origin_format="html", jsonl_mb=round(size / ONE_MB, 1), rows=n,
                sha256=sha256_file(out), license=lic, status="ok")
-
-
-def run(log=None):
-    log = log or IngestLog()
-    for site in SITES:
-        try:
-            crawl(*site, log)
-        except Exception as ex:
-            logger.error(f"  FAILED {site[1]}: {type(ex).__name__}: {ex}")
-
-
-if __name__ == "__main__":
-    run()
-    logger.info("=== HTML CRAWL DONE ===")

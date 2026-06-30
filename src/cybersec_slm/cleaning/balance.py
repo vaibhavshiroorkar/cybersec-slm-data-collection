@@ -2,7 +2,7 @@
 """Domain balance checker — counts records per cybersecurity domain and
 reports imbalance so you can prevent the SLM from over-fitting to one area.
 
-Reads clean_data/ and produces:
+Reads data/clean/ and produces:
   - A console table sorted by record count
   - logs/balance_report.csv
 
@@ -11,7 +11,7 @@ Pass cap=N to hard-limit each domain (useful before splitting).
 
     from cybersec_slm.cleaning.balance import check_balance, apply_cap
     check_balance()               # report only
-    apply_cap(max_per_domain=50_000)   # cap + rewrite clean_data/
+    apply_cap(max_per_domain=50_000)   # cap + rewrite data/clean/
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def apply_cap(max_per_domain: int, input_dir: str = CLEAN_DATA,
               seed: int = 42) -> dict[str, int]:
     """Randomly downsample any domain exceeding max_per_domain records.
 
-    Rewrites clean_data/ files in-place. The random seed ensures reproducibility.
+    Rewrites data/clean/ files in-place. The random seed ensures reproducibility.
     Returns the new counts dict.
     """
     rng = random.Random(seed)

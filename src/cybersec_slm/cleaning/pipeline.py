@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Pipeline — runs the cleaning stages in flowchart order over raw_data.
+"""Pipeline — runs the cleaning stages in flowchart order over data/raw.
 
-    Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> clean_data/
+    Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> data/clean/
 
-Reads the extraction output under raw_data/ and mirrors its layout into
-clean_data/ (passed), flagged/ (behavioral anomalies for annotation) and dropped/
+Reads the extraction output under data/raw/ and mirrors its layout into
+data/clean/ (passed), flagged/ (behavioral anomalies for annotation) and dropped/
 (structural + dedup + language drops, each annotated with a reason). A per-file
 report is written to logs/clean_report.csv.
 """
@@ -191,11 +191,11 @@ def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
 def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
                      clean_data_dir: str = OUT_CLEAN_DATA,
                      limit: int | None = None) -> list[dict]:
-    """Clean a single source's .jsonl files into `clean_data/` (no global dedup).
+    """Clean a single source's .jsonl files into `data/clean/` (no global dedup).
 
     Used by the parallel per-source worker. Global cross-source dedup is deferred
     to `final_global_dedup`; here the deduper is disabled so each worker stays
-    isolated. Output mirrors the raw_data layout (rel paths are relative to
+    isolated. Output mirrors the data/raw layout (rel paths are relative to
     `raw_root`). Returns report rows for the parent to aggregate.
     """
     source_dir = os.path.abspath(source_dir)
@@ -215,7 +215,7 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
 
 
 def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA) -> dict:
-    """One cross-source dedup pass over `clean_data/`, rewriting files in place.
+    """One cross-source dedup pass over `data/clean/`, rewriting files in place.
 
     The per-source workers skip global dedup, so this single pass (run once in
     the parent after the pool drains) is what catches duplicates shared across
@@ -345,7 +345,7 @@ def run_single_stage(stage: str, input_dir: str = RAW_DATA,
 
 
 def build_report_from_outputs() -> str:
-    """Recount existing clean_data/flagged/dropped trees into a summary line."""
+    """Recount existing data/clean/flagged/dropped trees into a summary line."""
     def count_tree(root):
         n = 0
         for r, _d, fs in os.walk(root):

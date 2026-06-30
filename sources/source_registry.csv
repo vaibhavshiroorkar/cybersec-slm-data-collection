@@ -1,5 +1,0 @@
-source_name,url,category,format,size_estimate,access_method,license,license_status,quality_score,domain_score,extraction_difficulty,scalability_score,overall_rank,notes
-The Hacker News,https://thehackernews.com,articles_news_blogs,HTML,large,scraping,unknown,yellow,,,,,
-Krebs on Security,https://krebsonsecurity.com,articles_news_blogs,HTML,medium,scraping,unknown,yellow,,,,,
-NVD API,https://nvd.nist.gov/developers/vulnerabilities,vulnerabilities,JSON,large,api,public_domain,green,,,,,
-CISA KEV,https://www.cisa.gov/known-exploited-vulnerabilities-catalog,vulnerabilities,JSON,medium,bulk_download,public_domain,green,,,,,

@@ -6,13 +6,8 @@ __pycache__
 *.pyc
 .pytest_cache
 .ruff_cache
-# generated data + logs (mounted at /data at runtime)
-raw_data/
-clean_data/
-flagged/
-dropped/
-_stages/
-normalized/
+# generated data + logs (written under the mounted volume at runtime)
+data/
 logs/
 # local secrets / models
 .env

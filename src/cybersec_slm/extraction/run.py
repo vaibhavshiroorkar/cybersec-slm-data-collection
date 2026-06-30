@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Extraction orchestrator + final-table reporter."""
+"""Final-table reporter for the ingest log (shared by the streaming path)."""
 
 from __future__ import annotations
 
 import os
-import sys
 
 from ..core import LOGS
 from .common import IngestLog, logger
@@ -38,34 +37,3 @@ def show_table() -> None:
     fail = df["status"].str.startswith("failed").sum()
     print(f"\nrows: {len(out)}  | ok: {ok}  skipped(>5GB): {skip}  failed: {fail}")
     print(f"written: {out_path}")
-
-
-def run(cmd: str = "all", nvd_key: str | None = None) -> None:
-    """Run an extraction command: scrape | fetch | html | nvd | all | table."""
-    if cmd == "table":
-        show_table()
-        return
-    log = IngestLog()
-    if cmd in ("scrape", "all"):
-        from . import scrape
-        scrape.run(log)
-    if cmd in ("fetch", "all"):
-        from . import fetch
-        from .manifest import DATASETS
-        fetch.run(DATASETS, log)
-    if cmd in ("html", "crawl", "all"):
-        from . import scrape_html
-        scrape_html.run(log)
-    if cmd in ("nvd", "all"):
-        from . import fetch_nvd
-        fetch_nvd.run(log, api_key=nvd_key or os.environ.get("NVD_API_KEY"))
-    logger.info("=== EXTRACTION DONE ===")
-    show_table()
-
-
-def main() -> None:
-    run(sys.argv[1] if len(sys.argv) > 1 else "all")
-
-
-if __name__ == "__main__":
-    main()

@@ -1,176 +1,113 @@
 # Cybersecurity SLM Data Pipeline
 
-A reproducible pipeline that gathers cybersecurity text from across the web and
-turns it into a clean, schema-standardized, training-ready corpus for a small
-language model (SLM).
+This project builds the training data for a small cybersecurity language model.
 
-The pipeline runs as five stages that can be invoked individually or end to end:
+The internet has plenty of good cybersecurity material — CVE feeds, NIST publications,
+MITRE catalogs, research datasets, security blogs — but it is scattered across dozens
+of formats and sites, mixed with noise, duplicates, and personal data, and none of it
+is shaped the way a model wants to read it. This pipeline does that unglamorous middle
+work: it gathers the good material from a vetted list of sources and turns it into one
+clean, consistent, training-ready corpus you can trust and trace.
 
-| Stage | What it does | Output |
+It runs as an installable Python package (`cybersec_slm`) with a single command,
+`cybersec-slm`. Run the whole thing end to end, or one stage at a time.
+
+## How it works
+
+The work happens in five stages. Each one hands its output to the next, and each one
+assumes its input might be messy or untrustworthy — so problems get flagged, dropped,
+or quarantined rather than passed downstream silently.
+
+| Stage | In plain terms | Output |
 |---|---|---|
-| **Sourcing** *(optional)* | Searches the web by keyword and compiles a reviewed tracking sheet of candidate sources | tracking sheet + `logs/discovered/` |
-| **Extraction** | Pulls each *allowlisted* source (datasets, PDFs, feeds, crawlable sites) and normalizes it to JSONL | `raw_data/` |
-| **Cleaning** | Sanitizes text, flags anomalies, drops duplicates, redacts PII, and translates non-English content into English | `clean_data/`, `flagged/`, `dropped/` |
-| **EDA** | Validates the corpus (volume, balance, concentration, drift, duplicates) behind a sufficiency gate | `logs/eda/` |
-| **Normalization** | Maps every record onto the canonical 22-field schema, hashes it, removes near-duplicates, and writes a provenance manifest | `final_data/dataset.jsonl` + `manifest.json` |
+| **Sourcing** *(optional)* | Goes looking for new sources by searching the web, and adds the candidates to a tracking catalog for a human to review. Nothing here is trusted automatically. | `sources/Sources.csv` |
+| **Extraction** | Downloads each *approved* source — datasets, PDFs, feeds, crawlable sites — and converts everything to one simple line-per-record format. | `data/raw/` |
+| **Cleaning** | Tidies the text, flags suspicious records, removes duplicates, redacts personal data, and translates non-English text into English. | `data/clean/` (+ `flagged/`, `dropped/`) |
+| **EDA gate** | Checks whether the corpus is actually good enough — enough volume, balanced across topics, not dominated by one source. If it isn't, the run stops here. | `logs/eda/` |
+| **Normalization** | Maps every record onto one canonical 22-field schema, removes near-duplicates, and writes the final dataset alongside a provenance manifest. | `data/final/dataset.jsonl` |
 
-It ships as an installable Python package (`cybersec_slm`) with a single CLI.
-Security is built into every stage — a version-controlled source allowlist, PII
-redaction, metadata-only reject logs, content hashing, and a provenance manifest —
-and an optional Prefect + DVC layer runs the whole pipeline on AWS.
+A few ideas hold it together:
 
-For a complete walk-through of how it works, see **[docs/architecture/architecture.md](docs/architecture/architecture.md)**.
+- **One vetted source list.** A source only gets fetched if it's marked `approved` in
+  `sources/allowlist.yaml`. A compromised or swapped-out upstream can't sneak into the
+  corpus under a trusted name.
+- **Nothing is thrown away quietly.** Removed records go to `data/dropped/` with a
+  reason; records that need a human eye go to `data/flagged/`. Everything is auditable.
+- **Every release is traceable.** The final dataset ships with a content-hashed
+  manifest — a "datasheet" recording where each record came from, under what license,
+  and from which pipeline version — so a bad batch can be scoped and rolled back.
+
+For the full stage-by-stage walk-through, see
+**[docs/architecture/architecture.md](docs/architecture/architecture.md)**.
 
 ## Quickstart
 
 Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-cp .env.example .env                    # add API keys (all optional for a basic run)
-uv sync                                 # installs the pipeline and dev tools
-uv run playwright install chromium      # browser for the HTML crawler (extract html)
-```
-
-Run the full pipeline:
-
-```bash
+cp .env.example .env                    # API keys (all optional for a basic run)
+uv sync                                 # install the pipeline
 uv run cybersec-slm all                 # extract → clean → EDA gate → normalize
 ```
 
-…or one stage at a time:
+That writes the finished corpus to `data/final/dataset.jsonl`. To run the stages
+individually, tune them with flags, or deploy with Docker, see
+**[docs/commands.md](docs/commands.md)** — the full command reference.
 
-```bash
-uv run cybersec-slm extract all         # collect allowlisted sources       -> raw_data/
-uv run cybersec-slm clean all           # clean + flag + drop + report       -> clean_data/
-uv run cybersec-slm eda                 # validate corpus + sufficiency gate -> logs/eda/
-uv run cybersec-slm normalize           # canonical 22-field dataset         -> final_data/
-```
-
-Output folders are created at the project root and are git-ignored. Redirect them
-with `CYBERSEC_SLM_DATA_ROOT`. If you would rather not use the console script,
-`python -m cybersec_slm <command> ...` works the same way.
-
-### Commands at a glance
-
-| Command | Purpose |
-|---|---|
-| `extract [scrape\|fetch\|html\|nvd\|all\|table]` | Fetch and normalize allowlisted sources |
-| `clean [all\|sanitize\|dedup\|pii\|lang\|report\|balance]` | Clean the raw corpus |
-| `eda [--no-enforce] [--profile]` | Validate the corpus and apply the sufficiency gate |
-| `normalize [--fresh]` | Schema-normalize into `dataset.jsonl` + manifest |
-| `run [--workers N]` | Parallel per-source fetch and clean (streaming) |
-| `source [--dry-run]` | Discover sources via search engines → tracking sheet |
-| `flow [--dvc-push]` | Run the pipeline via Prefect (needs the `orchestration` extra) |
-| `validate` | Check `clean_data/` records against the schema |
-| `all` | Run the full pipeline, end to end |
-
-## Docker
-
-```bash
-docker build -t cybersec-slm .
-docker run --rm --env-file .env -v "$(pwd)/data:/data" cybersec-slm
-```
-
-On Windows PowerShell, mount the volume with `-v "${PWD}\data:/data"`. The image
-runs as a non-root user, writes outputs to the mounted `/data` volume, and reads
-secrets at runtime (they are never baked into the image). To run a single stage,
-append it after the image name, e.g.
-`docker run ... cybersec-slm cybersec-slm extract all`. See
-**[docs/operations/deploy.md](docs/operations/deploy.md)** for the AWS (ECR / ECS / Prefect) path.
+> Output folders (`data/`, `logs/`) are created at the project root and are
+> git-ignored. Point them somewhere else with `CYBERSEC_SLM_DATA_ROOT`.
 
 ## Project layout
 
 ```
 src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
-  cli.py         single entry point (source / extract / clean / eda / normalize / run / flow / all)
-  sourcing/      search-engine source discovery → tracking sheet
+  cli.py         the single entry point (source / extract / clean / eda / normalize / run / flow / all)
+  sourcing/      search-engine source discovery → Sources.csv catalog
   extraction/    fetch, scrape, crawl, allowlist gate, parallel worker
-  cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate, pipeline
-  eda/           metrics + sufficiency gate
-  normalize/     schema, mappers, enrich, dedup, manifest → final_data/dataset.jsonl
+  cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
+  eda/           metrics + the sufficiency gate
+  normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
   orchestration/ Prefect build-corpus flow
+sources/         Sources.csv (the curated catalog) + allowlist.yaml + the research behind them
 tests/           pytest suite covering every stage
-sources/         allowlist.yaml + the research behind it
-docs/            architecture, schema, deployment, and security notes
+docs/            architecture, commands, schema, deployment, and security notes
 infra/           Terraform skeleton (ECR / ECS / S3 / IAM / Secrets Manager)
 ```
 
-Generated data lives at the project root and stays out of git: `raw_data/`
-(extraction), `clean_data/` (the cleaning → EDA handoff), `flagged/` (records a
-human should review), `dropped/` (removed records, with reasons), `final_data/`
-(the release), and `logs/`.
+Generated data stays out of git and lives under one `data/` folder: `data/raw/`
+(extraction), `data/clean/` (the cleaning → EDA handoff), `data/flagged/` (records a
+human should review), `data/dropped/` (removed records, with reasons), and
+`data/final/` (the release). Run logs go to `logs/`.
 
-## Configuration
+## Security
 
-The pipeline reads optional API keys from a `.env` file, auto-loaded at startup;
-shell environment variables take precedence. None are required for a basic local
-run.
-
-| Variable | Used by | Required? |
-|---|---|---|
-| `NVD_API_KEY` | `extract nvd` (higher CVE rate limit) | optional |
-| `KAGGLE_API_TOKEN` | Kaggle sources | only for Kaggle sources |
-| `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID` | `source` | only for sourcing |
-| `GOOGLE_SHEETS_CREDENTIALS` | `source` (appending to the sheet) | only for live append |
-| `CYBERSEC_SLM_DATA_ROOT` | all stages (where data is written) | optional |
-| `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | extraction allowlist gate | optional |
-
-## Optional extras
-
-```bash
-uv sync --extra orchestration   # Prefect + prefect-aws (for `flow` and the AWS deployment)
-```
-
-- **orchestration** powers `cybersec-slm flow` and the ECS deployment.
-  `cybersec-slm all` runs the identical pipeline locally without it. It pulls in
-  roughly 100 packages, and on Windows its `whenever` extension ships a DLL that
-  Smart App Control may block — so it is opt-in.
-- **profiling** (`ydata-profiling`, the optional `eda --profile` HTML report) pins
-  pandas `<3.0`, which conflicts with the pipeline's pandas `>=3.0`. The EDA gate
-  runs without it; for a one-off profile, use a throwaway environment:
-  `uvx --with 'pandas<3' ydata-profiling`.
-
-Every cleaning tool also has a standard-library fallback and logs which backend it
-used, so a missing optional dependency degrades quality gracefully rather than
-failing the run.
-
-## Development
-
-```bash
-uv run pytest                  # full test suite
-uv run ruff check src tests    # lint
-```
+Security isn't a layer bolted on at the end — it's part of how each stage behaves.
+An allowlist gates every fetch; PII is redacted and anomalies quarantined during
+cleaning; a blocking sufficiency gate sits between cleaning and release; normalization
+validates against a strict schema with per-source failure limits; and every release is
+content-hashed into a provenance manifest. CI adds secret scanning (gitleaks) and
+dependency auditing (pip-audit). The reasoning is in
+[architecture.md](docs/architecture/architecture.md#security-controls), and the known
+limits of automated PII redaction on a security corpus are documented honestly in
+[pii_limitations.md](docs/pii_limitations.md).
 
 ## Documentation
 
 | Doc | What's in it |
 |---|---|
-| [architecture.md](docs/architecture/architecture.md) | How the pipeline works, stage by stage, with the data flow and security controls |
-| [canonical_schema.md](docs/architecture/canonical_schema.md) | The canonical 22-field record schema (the downstream handoff contract) |
-| [deploy.md](docs/operations/deploy.md) | AWS deployment (Prefect Cloud + ECS Fargate, ECR, S3) |
-| [dvc.md](docs/operations/dvc.md) | Versioned corpus releases with DVC + S3 |
+| [commands.md](docs/commands.md) | Every command, flag, and run mode; Docker; configuration; development |
+| [architecture/architecture.md](docs/architecture/architecture.md) | How the pipeline works, stage by stage, with the data flow and security controls |
+| [architecture/canonical_schema.md](docs/architecture/canonical_schema.md) | The canonical 22-field record schema (the downstream handoff contract) |
+| [operations/deploy.md](docs/operations/deploy.md) | AWS deployment (Prefect Cloud + ECS Fargate, ECR, S3) |
+| [operations/dvc.md](docs/operations/dvc.md) | Versioned corpus releases with DVC + S3 |
 | [pii_limitations.md](docs/pii_limitations.md) | What the automated PII pass does and does not catch |
 | [risk_register.md](docs/risk_register.md) | Operational risks and mitigations |
 | `docs/sources/source_*.md` | How sources were researched, evaluated, and accepted |
 
-## Security
-
-Each stage assumes its input could be hostile or low quality and responds in a way
-that stays traceable and reversible: an allowlist before any fetch, PII redaction
-and anomaly flagging during cleaning, a blocking sufficiency gate at EDA, strict
-schema validation with per-source failure escalation at normalization, and a
-content-hashed provenance manifest at release. CI adds secret scanning (gitleaks)
-and dependency auditing (pip-audit). The details are in
-[docs/architecture/architecture.md](docs/architecture/architecture.md#security-controls) and
-[docs/pii_limitations.md](docs/pii_limitations.md).
-
 ## Project status
 
-**Week 4 — orchestration and deployment.**
-
-All five stages are implemented, wired end to end, and covered by the test suite.
-With the pipeline feature-complete, the focus has shifted to operations: hardening
-the security baseline (source allowlist, secret and supply-chain scanning,
-metadata-only reject logs, provenance manifest) and standing up the automated
-Prefect + DVC deployment on AWS for scheduled, versioned corpus releases.
+**Week 4 — orchestration and deployment.** All five stages are implemented, wired end
+to end, and covered by the test suite. With the pipeline feature-complete, the focus
+has shifted to operations: hardening the security baseline and standing up the
+automated Prefect + DVC deployment on AWS for scheduled, versioned corpus releases.

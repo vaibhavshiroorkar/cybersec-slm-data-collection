@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Map a search :class:`~.search.Result` into a tracking-sheet row.
+"""Map a search :class:`~.search.Result` into a catalog (Sources.csv) row.
 
-The sheet's columns (exact order) are the contract between this crawler and the
-finalized Google Sheet. Only the fields that are knowable at *sourcing* time
-are filled; the rest (counts, sizes, verification status) are left blank for the
-extraction stage and a human to complete.
+The catalog's columns (exact order) are the contract between this crawler and the
+``sources/Sources.csv`` catalog. Only the fields that are knowable at *sourcing*
+time are filled; the rest (counts, sizes, cleaned/verification status) are left
+blank for the extraction/cleaning stages and a human to complete.
 """
 
 from __future__ import annotations
@@ -13,16 +13,12 @@ import re
 from datetime import date
 from urllib.parse import urlparse
 
+from ..extraction.sources import CATALOG_COLUMNS
 from .classify import infer_category_and_format, refine_domain
 from .search import Result
 
-# The 16 columns of the finalized sheet, in order.
-SHEET_COLUMNS: tuple[str, ...] = (
-    "Name", "Sub-Domain", "Description", "Dataset Link", "File Count",
-    "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
-    "Total Lines", "License", "Last Updated", "Verified?", "Uploaded?",
-    "Date Added", "Note",
-)
+# The catalog columns, in order (single source of truth lives in extraction.sources).
+SHEET_COLUMNS: tuple[str, ...] = CATALOG_COLUMNS
 
 # Fields the crawler fills vs. leaves for extraction/humans.
 _BLANK = ""

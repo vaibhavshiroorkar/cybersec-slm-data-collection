@@ -6,8 +6,9 @@ a single configured logger (loguru if present, else stdlib), the workspace data
 paths, and line-oriented JSONL helpers + hashing.
 
 Data paths are resolved from ``CYBERSEC_SLM_DATA_ROOT`` if set, otherwise the
-current working directory — so running a command from the project root puts
-``raw_data/``, ``clean_data/``, ``logs/`` etc. there, while tests can point them
+current working directory. Every generated corpus artifact lives under a single
+``data/`` folder (``data/raw``, ``data/clean``, ``data/final`` …) so the project
+root stays uncluttered; ``logs/`` sits alongside it. Tests can point the root
 elsewhere.
 """
 
@@ -45,13 +46,14 @@ def data_root() -> str:
 
 
 DATA_ROOT = data_root()
-RAW_DATA = os.path.join(DATA_ROOT, "raw_data")     # extraction output / cleaning input
-CLEAN_DATA = os.path.join(DATA_ROOT, "clean_data")  # streaming per-source clean output
-FINAL_DATA = os.path.join(DATA_ROOT, "final_data")  # canonical release dataset + sidecars
-FLAGGED = os.path.join(DATA_ROOT, "flagged")        # -> Data Annotation Team
-DROPPED = os.path.join(DATA_ROOT, "dropped")        # -> audit
-STAGES = os.path.join(DATA_ROOT, "_stages")         # single-stage diagnostics
-LOGS = os.path.join(DATA_ROOT, "logs")
+DATA_DIR = os.path.join(DATA_ROOT, "data")          # all generated corpus artifacts
+RAW_DATA = os.path.join(DATA_DIR, "raw")            # extraction output / cleaning input
+CLEAN_DATA = os.path.join(DATA_DIR, "clean")        # streaming per-source clean output
+FINAL_DATA = os.path.join(DATA_DIR, "final")        # canonical release dataset + sidecars
+FLAGGED = os.path.join(DATA_DIR, "flagged")         # -> Data Annotation Team
+DROPPED = os.path.join(DATA_DIR, "dropped")         # -> audit
+STAGES = os.path.join(DATA_DIR, "_stages")          # single-stage diagnostics
+LOGS = os.path.join(DATA_ROOT, "logs")              # operational logs (alongside data/)
 
 
 # ----------------------------------------------------------------- logging ---

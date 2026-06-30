@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Unified scraper -> raw_data/<domain>/<slug>/ (original + jsonl + _SOURCE.json).
+"""Unified scraper -> data/raw/<domain>/<slug>/ (original + jsonl + _SOURCE.json).
 
-PDFs via PyMuPDF (one record per page); JSON feeds via httpx + orjson.
-Shares common.py and records everything in the ingest log.
-
-    py -3.13 scrape.py            # all PDFS + FEEDS from manifest
+PDFs via PyMuPDF (one record per page); JSON feeds via httpx + orjson; the MITRE
+CWE XML-in-ZIP via :func:`scrape_cwe`. Shares common.py and records everything in
+the ingest log. The per-source streaming worker
+(:func:`cybersec_slm.extraction.worker.process_source`) calls these handlers.
 """
 
 import json
@@ -14,7 +14,6 @@ import orjson
 import pymupdf
 
 from .common import ONE_MB, RAW_DATA, IngestLog, category_of, http_get, logger, sha256_file
-from .manifest import FEEDS, PDFS, XML_FEEDS
 
 BASE = RAW_DATA
 
@@ -210,27 +209,3 @@ def scrape_cwe(domain: str, slug: str, title: str, lic: str, url: str,
                orig_mb=round(len(r.content) / ONE_MB, 1),
                jsonl_mb=round(size / ONE_MB, 1), rows=n,
                sha256=sha256_file(out), license=lic, status="ok")
-
-
-def run(log=None):
-    log = log or IngestLog()
-    for e in PDFS:
-        try:
-            scrape_pdf(*e, log)
-        except Exception as ex:
-            logger.error(f"  FAILED {e[2]}: {type(ex).__name__}: {ex}")
-    for e in FEEDS:
-        try:
-            scrape_feed(*e, log)
-        except Exception as ex:
-            logger.error(f"  FAILED {e[2]}: {type(ex).__name__}: {ex}")
-    for e in XML_FEEDS:
-        try:
-            scrape_cwe(*e, log)
-        except Exception as ex:
-            logger.error(f"  FAILED {e[1]}: {type(ex).__name__}: {ex}")
-
-
-if __name__ == "__main__":
-    run()
-    logger.info("=== SCRAPE DONE ===")

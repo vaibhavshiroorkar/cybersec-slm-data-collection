@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Spreadsheet-driven source catalog.
+"""CSV-driven source catalog (offline / local file).
 
-Reads an Excel workbook (local path or http(s) link) describing what to fetch
-and maps each row to a *source descriptor* — the same shape the fetch/scrape
-handlers already consume. This lets the corpus be curated in a spreadsheet
-(see ``sources/source_registry.csv`` for the column convention) instead of
-editing :mod:`cybersec_slm.extraction.manifest`.
+Reads a local CSV describing what to fetch and maps each row to a *source
+descriptor* — the same shape the fetch/scrape handlers already consume. This is
+the single source catalog: the corpus is curated entirely in one spreadsheet
+(``sources/Sources.csv``; see the column convention below).
 
 Expected columns (header matching is case-insensitive; extras are ignored):
     source_name, url, category, format, access_method, license
@@ -22,9 +21,12 @@ Row -> kind dispatch (when ``kind`` is not given explicitly):
     github.com / raw.githubusercontent   -> github
     anything else with a direct file URL -> url
 
+Row -> kind dispatch also covers two infrastructure sources by URL:
+    services.nvd.nist.gov/...  -> api   (NVD CVE 2.0 paginated API)
+    *.xml.zip / cwe.mitre.org  -> xml   (MITRE CWE XML-in-ZIP)
+
 Public API:
-    load_descriptors(spec, sheet=None) -> list[dict]
-    load_sources(spec, sheet=None)     -> (datasets, pdfs, feeds, sites) tuples
+    load_descriptors(spec) -> list[dict]
 """
 
 from __future__ import annotations
@@ -33,8 +35,23 @@ import os
 import re
 from urllib.parse import urlparse
 
-from . import common
 from .common import GOV_US, logger
+
+# The catalog lives in the repo's ``sources/`` dir (curated, version-controlled),
+# not the relocatable data root — resolve it relative to this package, like
+# allowlist.py does for allowlist.yaml.
+_PKG_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+DEFAULT_CATALOG = os.path.join(_PKG_ROOT, "sources", "Sources.csv")
+
+# Canonical catalog schema — the columns of ``sources/Sources.csv`` (in order).
+# Shared by the sourcing crawler (which appends rows) and the cleaning driver
+# (which writes the Cleaned* columns back), so the column list lives in one place.
+CATALOG_COLUMNS: tuple[str, ...] = (
+    "Name", "Sub-Domain", "Description", "Dataset Link", "File Count",
+    "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
+    "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
+    "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Date Added", "Note",
+)
 
 # Coarse spreadsheet categories -> the sub-domain folder names used elsewhere.
 CATEGORY_TO_DOMAIN = {
@@ -58,7 +75,7 @@ CATEGORY_TO_DOMAIN = {
 _FEED_KEY_GUESSES = ("vulnerabilities", "objects", "data", "results", "items")
 
 
-# Cap slug length so clean_data/<domain>/<slug>/<slug>.jsonl stays under the
+# Cap slug length so data/clean/<domain>/<slug>/<slug>.jsonl stays under the
 # Windows 260-char MAX_PATH (long paper-title slugs otherwise break tools that
 # read the file, e.g. Google Drive upload/sync).
 SLUG_MAXLEN = 45
@@ -69,48 +86,10 @@ def slugify(text: str) -> str:
     return (s[:SLUG_MAXLEN].rstrip("-") or "source")
 
 
-_GSHEET_RE = re.compile(r"docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)")
-
-
-def _normalize_gsheet(spec: str) -> str:
-    """Rewrite a Google Sheets share/edit URL to its .xlsx export endpoint.
-
-    An ``/edit#gid=0`` link serves HTML, not a workbook, so it must be turned
-    into ``/export?format=xlsx`` (which exports the whole workbook — the first
-    sheet is read by default; use ``--sheet`` to pick another). The sheet must
-    be shared as "Anyone with the link -> Viewer" for an unauthenticated export.
-    """
-    m = _GSHEET_RE.search(spec)
-    if not m:
-        return spec
-    return (f"https://docs.google.com/spreadsheets/d/{m.group(1)}"
-            "/export?format=xlsx")
-
-
-def _check_xlsx(path: str) -> None:
-    with open(path, "rb") as f:
-        sig = f.read(2)
-    if sig != b"PK":          # every .xlsx is a zip; zips start with "PK"
-        raise ValueError(
-            f"{path} is not a valid .xlsx (got {sig!r}). If this is a Google "
-            "Sheet, share it as 'Anyone with the link -> Viewer' so it can be "
-            "exported without signing in.")
-
-
 def _resolve(spec: str) -> str:
-    """Return a local path for ``spec``; download first if it is an http(s) URL."""
-    if spec.lower().startswith(("http://", "https://")):
-        url = _normalize_gsheet(spec)
-        dest_dir = os.path.join(common.LOGS, "_sources")
-        os.makedirs(dest_dir, exist_ok=True)
-        name = os.path.basename(urlparse(url).path)
-        if not name.lower().endswith((".xlsx", ".xls", ".csv")):
-            name = "sources.xlsx"
-        dest = os.path.join(dest_dir, name)
-        logger.info(f"downloading sources sheet: {url}")
-        common.download(url, dest)
-        _check_xlsx(dest)
-        return dest
+    """Validate and return a local path for the catalog CSV (offline only)."""
+    if not os.path.exists(spec):
+        raise FileNotFoundError(f"sources catalog not found: {spec}")
     return spec
 
 
@@ -181,7 +160,11 @@ def _row_to_descriptor(row: dict) -> dict | None:
 
     kind = _val(row, "kind")
     if not kind:
-        if "huggingface.co/datasets/" in low:
+        if "services.nvd.nist.gov" in low:
+            kind = "api"          # NVD CVE 2.0 — paginated REST API (fetch_nvd)
+        elif low.endswith(".xml.zip") or ("cwe.mitre.org" in low and ".xml" in low):
+            kind = "xml"          # MITRE CWE — XML-in-ZIP needing custom parsing (scrape_cwe)
+        elif "huggingface.co/datasets/" in low:
             kind = "hf"
         elif "kaggle.com/datasets/" in low:
             kind = "kaggle"
@@ -211,6 +194,12 @@ def _row_to_descriptor(row: dict) -> dict | None:
     if kind == "pdf":
         return dict(kind="pdf", domain=domain, slug=slug, title=name,
                     license=lic or GOV_US, url=url)
+    if kind == "api":
+        return dict(kind="api", domain=domain, slug=slug, title=name,
+                    license=lic or GOV_US, url=url)
+    if kind == "xml":
+        return dict(kind="xml", domain=domain, slug=slug, title=name,
+                    license=lic, url=url)
     if kind == "feed":
         return dict(kind="feed", domain=domain, slug=slug, title=name,
                     license=lic, url=url, json_key=_feed_key(slug, row))
@@ -227,12 +216,14 @@ def _row_to_descriptor(row: dict) -> dict | None:
     return None
 
 
-def load_descriptors(spec: str, sheet: str | int | None = None) -> list[dict]:
-    """Read the spreadsheet at ``spec`` into a list of source descriptors."""
+def load_descriptors(spec: str) -> list[dict]:
+    """Read the catalog CSV at ``spec`` into a list of source descriptors."""
     import pandas as pd
 
     path = _resolve(spec)
-    df = pd.read_excel(path, sheet_name=0 if sheet is None else sheet)
+    # dtype=str + keep_default_na=False: every cell stays a string and blanks
+    # stay "" (never NaN), so descriptor mapping sees clean text values.
+    df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
     out: list[dict] = []
     for row in df.to_dict("records"):
@@ -241,64 +232,3 @@ def load_descriptors(spec: str, sheet: str | int | None = None) -> list[dict]:
             out.append(d)
     logger.info(f"loaded {len(out)} sources from {os.path.basename(path)}")
     return out
-
-
-# --------------------------------------------------- legacy tuple adapters ---
-def descriptor_to_tuple(d: dict):
-    """Convert a descriptor back to the positional tuple a handler expects."""
-    k = d["kind"]
-    if k in ("hf", "kaggle"):
-        return (k, d["ref"], d["domain"], d["description"], d["license"])
-    if k in ("url", "github"):
-        return (k, d["ref"], d["domain"], d["description"], d["license"], d["url"])
-    if k == "pdf":
-        return (d["domain"], d["slug"], d["title"], d["license"], d["url"])
-    if k == "feed":
-        return (d["domain"], d["slug"], d["title"], d["license"], d["url"],
-                d["json_key"])
-    if k == "website":
-        return (d["domain"], d["slug"], d["start_url"], d["license"], d["use_js"],
-                d["max_pages"], d["allow_prefix"], d["description"])
-    raise ValueError(f"unknown kind: {k}")
-
-
-def load_sources(spec: str, sheet: str | int | None = None):
-    """Return ``(datasets, pdfs, feeds, sites)`` tuple-lists (sequential path)."""
-    datasets, pdfs, feeds, sites = [], [], [], []
-    bucket = {"hf": datasets, "kaggle": datasets, "url": datasets,
-              "github": datasets, "pdf": pdfs, "feed": feeds, "website": sites}
-    for d in load_descriptors(spec, sheet):
-        bucket[d["kind"]].append(descriptor_to_tuple(d))
-    return datasets, pdfs, feeds, sites
-
-
-# ----------------------------------------------- manifest.py tuple adapters --
-def _dataset_to_descriptor(t) -> dict:
-    kind, ref, domain, desc, lic = t[:5]
-    d = dict(kind=kind, ref=ref, domain=domain, description=desc, license=lic)
-    if kind in ("url", "github"):
-        d["url"] = t[5]
-    elif kind == "hf":
-        d["url"] = f"https://huggingface.co/datasets/{ref}"
-    else:
-        d["url"] = f"https://www.kaggle.com/datasets/{ref}"
-    return d
-
-
-def descriptors_from_lists(datasets, pdfs, feeds, sites) -> list[dict]:
-    """Convert the four manifest-style tuple-lists into source descriptors."""
-    out = [_dataset_to_descriptor(t) for t in datasets]
-    out += [dict(kind="pdf", domain=t[0], slug=t[1], title=t[2], license=t[3],
-                 url=t[4]) for t in pdfs]
-    out += [dict(kind="feed", domain=t[0], slug=t[1], title=t[2], license=t[3],
-                 url=t[4], json_key=t[5]) for t in feeds]
-    out += [dict(kind="website", domain=t[0], slug=t[1], start_url=t[2],
-                 license=t[3], use_js=t[4], max_pages=t[5], allow_prefix=t[6],
-                 description=t[7]) for t in sites]
-    return out
-
-
-def manifest_descriptors() -> list[dict]:
-    """Descriptors for the built-in catalog (used when no --sources is given)."""
-    from .manifest import DATASETS, FEEDS, PDFS, SITES
-    return descriptors_from_lists(DATASETS, PDFS, FEEDS, SITES)

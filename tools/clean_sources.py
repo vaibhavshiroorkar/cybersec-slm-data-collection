@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""End-to-end driver: fetch + clean every source in the spreadsheet, lay the
-cleaned output out per sub-domain, and mark Cleaned?=Yes back in the workbook.
+"""End-to-end driver: fetch + clean every source in the catalog CSV, lay the
+cleaned output out per sub-domain, and mark Cleaned?=Yes back in the CSV.
 
-For each row in the chosen sheet this:
+For each row in ``sources/Sources.csv`` this:
   1. maps the row to a source descriptor (extraction.sources._row_to_descriptor),
   2. fetches it, cleans it through the full cleaning pipeline, and writes the
-     result to  clean_data/<Sub-Domain>/<source>/...  (folder per sub-domain),
+     result to  data/clean/<Sub-Domain>/<source>/...  (folder per sub-domain),
   3. deletes the intermediate raw files,
   4. after the pool drains, runs one cross-source dedup pass, then sets
-     Cleaned?=Yes for every row whose clean_data/ folder actually holds records
+     Cleaned?=Yes for every row whose data/clean/ folder actually holds records
      (ground-truth marking — safe to re-run; it only ever adds Yes).
 
-Generalizes tools/clean_quantum.py (which was Quantum-only) to all sub-domains.
+Drives fetch+clean across every sub-domain in the catalog.
 
 Usage (run from anywhere; paths are pinned below):
     python tools/clean_sources.py                       # all sub-domains
     python tools/clean_sources.py --subdomain "Cloud Security"
-    python tools/clean_sources.py --sheet Finalized --workers 6
+    python tools/clean_sources.py --workers 6
     python tools/clean_sources.py dryrun                # preview, fetch nothing
-    python tools/clean_sources.py mark                  # only re-mark from clean_data/
+    python tools/clean_sources.py mark                  # only re-mark from data/clean/
 """
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ import importlib.util
 import json
 import multiprocessing as mp
 import os
-import re
 import subprocess
 import sys
 import urllib.request
@@ -35,8 +34,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 PROJECT = r"c:/Users/vaibh/Documents/Main/Projects/cybersec-slm-data-pipeline"
-XLSX = os.path.join(PROJECT, "sources", "Sources.xlsx")
-DEFAULT_SHEET = "Finalized"
+CSV = os.path.join(PROJECT, "sources", "Sources.csv")
 RESULTS_JSON = os.path.join(PROJECT, "logs", "clean_sources_results.json")
 
 os.makedirs(os.path.join(PROJECT, "logs"), exist_ok=True)
@@ -168,24 +166,19 @@ def _report_backends() -> None:
                          "aborting so non-English text is not silently dropped.")
 
 
-def norm_header(c) -> str:
-    return re.sub(r"[ \-]+", "_", str(c).strip().lower())
+# ------------------------------------------------------------------- catalog --
+def load_rows(subdomain: str | None):
+    """Return [{row_idx, name, url, sub_domain, descriptor|None, already}].
 
+    ``row_idx`` is the 0-based DataFrame index of the row in Sources.csv — the
+    handle :func:`mark_csv` uses to write Cleaned?/sizes back to that exact row.
+    """
+    import pandas as pd
 
-# --------------------------------------------------------------- spreadsheet --
-def load_rows(sheet: str, subdomain: str | None):
-    """Return [{excel_row, name, url, sub_domain, descriptor|None, already}]."""
-    from openpyxl import load_workbook
-    wb = load_workbook(XLSX, read_only=True, data_only=True)
-    ws = wb[sheet]
-    rows = list(ws.iter_rows(values_only=True))   # read_only EmptyCell has no .row
-    header = [norm_header(v) if v is not None else "" for v in rows[0]]
+    df = pd.read_csv(CSV, dtype=str, keep_default_na=False, encoding="utf-8")
+    df = sources._norm_headers(df)                # headers -> snake_case
     out = []
-    for idx, r in enumerate(rows[1:], start=2):   # excel row numbers are 1-based
-        if not r or all(v is None for v in r):    # fully blank row
-            continue
-        rd = {header[i]: (v if v is not None else "")
-              for i, v in enumerate(r) if i < len(header) and header[i]}
+    for idx, rd in enumerate(df.to_dict("records")):    # idx == DataFrame row index
         sub = str(rd.get("sub_domain", "")).strip()
         if subdomain is not None and sub != subdomain:
             continue
@@ -194,19 +187,18 @@ def load_rows(sheet: str, subdomain: str | None):
         desc = sources._row_to_descriptor(rd)
         if desc is not None:
             desc = dict(desc)
-            desc["_excel_row"] = idx
+            desc["_row_idx"] = idx
             desc["_xname"] = name
             desc["_xurl"] = url
         cleaned_flag = str(rd.get("cleaned?", "")).strip().lower()
-        out.append({"excel_row": idx, "name": name, "url": url,
+        out.append({"row_idx": idx, "name": name, "url": url,
                     "sub_domain": sub, "descriptor": desc,
                     "already": cleaned_flag in ("yes", "y", "true", "1")})
-    wb.close()
     return out
 
 
 def clean_dir_for(descriptor: dict) -> str:
-    """The clean_data/ folder a descriptor's output lands in (mirrors worker).
+    """The data/clean/ folder a descriptor's output lands in (mirrors worker).
 
     Pure path computation — mirrors fetch._folder's naming (base == owner when a
     single source uses that owner) without creating any directories.
@@ -224,10 +216,10 @@ def clean_dir_for(descriptor: dict) -> str:
 
 
 def clean_stats(d: str) -> tuple[float, int]:
-    """(total .jsonl size in MB, total non-empty lines) under a clean_data/ folder.
+    """(total .jsonl size in MB, total non-empty lines) under a data/clean/ folder.
 
     A row counts as cleaned when this returns lines > 0; the size/line figures are
-    written straight into the spreadsheet's Cleaned Size (MB) / Cleaned Lines cells.
+    written straight into the CSV's Cleaned Size (MB) / Cleaned Lines columns.
     """
     total_bytes = lines = 0
     if os.path.isdir(d):
@@ -245,78 +237,81 @@ def clean_stats(d: str) -> tuple[float, int]:
     return round(total_bytes / (1024 * 1024), 3), lines
 
 
-def mark_spreadsheet(sheet: str, stats: dict[int, tuple[float, int]],
-                     mappable: set[int]) -> None:
-    """Write clean_data ground truth back into the sheet for every mappable row.
+def _csv_col(columns, want: str) -> str | None:
+    """Find the real column name whose lowercased form equals ``want``."""
+    for c in columns:
+        if str(c).strip().lower() == want:
+            return c
+    return None
 
-    Rows whose clean_data/ folder holds records (in `stats`) get Cleaned?=Yes plus
-    their Cleaned Size (MB) and Cleaned Lines. Mappable rows that own no records —
-    a source that produced nothing, or one merged away by a same-owner folder
-    collision — are cleared, so the Cleaned Lines column always sums to the real
-    corpus size instead of retaining stale numbers from an earlier run.
-    Non-mappable rows are never touched.
+
+def mark_csv(stats: dict[int, tuple[float, int]], mappable: set[int]) -> None:
+    """Write data/clean ground truth back into Sources.csv for every mappable row.
+
+    Rows whose data/clean/ folder holds records (in `stats`, keyed by row_idx) get
+    Cleaned?=Yes plus their Cleaned Size (MB) and Cleaned Lines. Mappable rows that
+    own no records — a source that produced nothing, or one merged away by a
+    same-owner folder collision — are cleared, so the Cleaned Lines column always
+    sums to the real corpus size instead of retaining stale numbers from an earlier
+    run. Non-mappable rows are never touched.
     """
     if not mappable:
         print("[mark] nothing to mark (no mappable rows)", flush=True)
         return
-    from openpyxl import load_workbook
-    wb = load_workbook(XLSX)                  # full load preserves other sheets
-    ws = wb[sheet]
-    header = {norm_header(c.value): c.column for c in ws[1] if c.value is not None}
-    col_flag = header.get("cleaned?")
-    col_size = header.get("cleaned_size_(mb)")
-    col_lines = header.get("cleaned_lines")
+    import pandas as pd
+
+    df = pd.read_csv(CSV, dtype=str, keep_default_na=False, encoding="utf-8")
+    col_flag = _csv_col(df.columns, "cleaned?")
+    col_size = _csv_col(df.columns, "cleaned size (mb)")
+    col_lines = _csv_col(df.columns, "cleaned lines")
     if col_flag is None:
-        print(f"[mark] WARNING: no 'Cleaned?' column in sheet '{sheet}'; skipping", flush=True)
+        print("[mark] WARNING: no 'Cleaned?' column in Sources.csv; skipping", flush=True)
         return
     marked = cleared = 0
-    for row in ws.iter_rows(min_row=2):
-        er = row[0].row
-        was_yes = str(row[col_flag - 1].value).strip().lower() in ("yes", "y")
-        had_lines = (col_lines is not None
-                     and isinstance(row[col_lines - 1].value, (int, float))
-                     and row[col_lines - 1].value)
-        if er in stats:
-            size_mb, lines = stats[er]
-            ws.cell(row=er, column=col_flag, value="Yes")
+    for idx in range(len(df)):
+        was_yes = str(df.at[idx, col_flag]).strip().lower() in ("yes", "y")
+        had_lines = bool(col_lines is not None and str(df.at[idx, col_lines]).strip())
+        if idx in stats:
+            size_mb, lines = stats[idx]
+            df.at[idx, col_flag] = "Yes"
             if not was_yes:
                 marked += 1
             if col_size is not None:
-                ws.cell(row=er, column=col_size, value=size_mb)
+                df.at[idx, col_size] = str(size_mb)
             if col_lines is not None:
-                ws.cell(row=er, column=col_lines, value=lines)
-        elif er in mappable:
-            # Mappable but owns no cleaned records -> reflect that (ground truth).
-            # NB: ws.cell(..., value=None) is a no-op in openpyxl (it only assigns
-            # when value is not None), so clear via the .value attribute instead.
-            row[col_flag - 1].value = None
+                df.at[idx, col_lines] = str(lines)
+        elif idx in mappable:
+            # Mappable but owns no cleaned records -> clear the cells (ground truth).
+            df.at[idx, col_flag] = ""
             if col_size is not None:
-                row[col_size - 1].value = None
+                df.at[idx, col_size] = ""
             if col_lines is not None:
-                row[col_lines - 1].value = None
+                df.at[idx, col_lines] = ""
             if was_yes or had_lines:
                 cleared += 1
     try:
-        wb.save(XLSX)
+        tmp = CSV + ".tmp"
+        df.to_csv(tmp, index=False, encoding="utf-8")
+        os.replace(tmp, CSV)                      # atomic; never a half-written catalog
         print(f"[mark] {len(stats)} rows Cleaned?=Yes ({marked} newly), "
-              f"{cleared} stale rows cleared, in {os.path.basename(XLSX)}", flush=True)
-    except PermissionError:
-        alt = XLSX.replace(".xlsx", ".cleaned.xlsx")
-        wb.save(alt)
-        print(f"[mark] {XLSX} is locked (open in Excel?); wrote {alt} instead", flush=True)
+              f"{cleared} stale rows cleared, in {os.path.basename(CSV)}", flush=True)
+    except OSError:
+        alt = CSV.replace(".csv", ".cleaned.csv")
+        df.to_csv(alt, index=False, encoding="utf-8")
+        print(f"[mark] {CSV} is locked (open in Excel?); wrote {alt} instead", flush=True)
 
 
 def collect_stats(rows) -> dict[int, tuple[float, int]]:
     """Map each mappable row's Excel-row number -> (cleaned MB, lines), counting
-    every clean_data/ folder exactly once.
+    every data/clean/ folder exactly once.
 
-    Several rows can resolve to the *same* clean_data/<Sub-Domain>/<owner> folder:
+    Several rows can resolve to the *same* data/clean/<Sub-Domain>/<owner> folder:
     two Hugging Face / Kaggle datasets published under one owner both clean into
-    clean_data/<domain>/<owner> (see clean_dir_for, which mirrors the extraction
+    data/clean/<domain>/<owner> (see clean_dir_for, which mirrors the extraction
     worker's owner-based naming). Crediting that shared folder to each colliding
     row would count its records once per row and inflate the corpus total — the
-    bug that pushed the spreadsheet total above the real ~538k. So a folder is
-    credited to a single row (the lowest Excel row); the rest are reported and
+    bug that pushed the catalog total above the real ~538k. So a folder is
+    credited to a single row (the lowest row_idx); the rest are reported and
     left uncredited, because the collision merged their output into one folder.
     """
     by_folder: dict[str, list[dict]] = {}
@@ -331,23 +326,22 @@ def collect_stats(rows) -> dict[int, tuple[float, int]]:
         size_mb, lines = clean_stats(folder)
         if lines <= 0:
             continue
-        group.sort(key=lambda r: r["excel_row"])
+        group.sort(key=lambda r: r["row_idx"])
         winner = group[0]
-        stats[winner["excel_row"]] = (size_mb, lines)
+        stats[winner["row_idx"]] = (size_mb, lines)
         if len(group) > 1:
-            losers = [g["excel_row"] for g in group[1:]]
+            losers = [g["row_idx"] for g in group[1:]]
             rel = os.path.relpath(folder, core.CLEAN_DATA)
-            print(f"[mark] collision: rows {[g['excel_row'] for g in group]} share "
-                  f"{rel} ({lines:,} lines); credited row {winner['excel_row']}, "
+            print(f"[mark] collision: rows {[g['row_idx'] for g in group]} share "
+                  f"{rel} ({lines:,} lines); credited row {winner['row_idx']}, "
                   f"left {losers} uncredited (same-owner folder collision)", flush=True)
     return stats
 
 
 # ------------------------------------------------------------------ actions ---
-def dryrun(sheet: str, subdomain: str | None):
-    rows = load_rows(sheet, subdomain)
-    print(f"sheet '{sheet}'"
-          + (f" sub-domain '{subdomain}'" if subdomain else " (all sub-domains)"))
+def dryrun(subdomain: str | None):
+    rows = load_rows(subdomain)
+    print(f"sub-domain '{subdomain}'" if subdomain else "all sub-domains")
     print("rows considered :", len(rows))
     print("mappable        :", sum(1 for r in rows if r["descriptor"]))
     print("no-descriptor   :", sum(1 for r in rows if r["descriptor"] is None))
@@ -358,22 +352,22 @@ def dryrun(sheet: str, subdomain: str | None):
           dict(Counter(r["descriptor"]["kind"] for r in rows if r["descriptor"])))
 
 
-def mark_only(sheet: str, subdomain: str | None):
-    """No fetching — just mark rows whose clean_data/ folder already has records."""
-    rows = load_rows(sheet, subdomain)
+def mark_only(subdomain: str | None):
+    """No fetching — just mark rows whose data/clean/ folder already has records."""
+    rows = load_rows(subdomain)
     stats = collect_stats(rows)
-    mappable = {r["excel_row"] for r in rows if r["descriptor"]}
-    print(f"[mark] {len(stats)} rows have records under clean_data/", flush=True)
-    mark_spreadsheet(sheet, stats, mappable)
+    mappable = {r["row_idx"] for r in rows if r["descriptor"]}
+    print(f"[mark] {len(stats)} rows have records under data/clean/", flush=True)
+    mark_csv(stats, mappable)
 
 
-def run(sheet: str, subdomain: str | None, workers: int | None,
+def run(subdomain: str | None, workers: int | None,
         skip_deps: bool = False):
     if not skip_deps:
         ensure_deps()
-    rows = load_rows(sheet, subdomain)
+    rows = load_rows(subdomain)
     scope = subdomain or "all sub-domains"
-    print(f"[clean] sheet '{sheet}' / {scope}: {len(rows)} rows", flush=True)
+    print(f"[clean] {scope}: {len(rows)} rows", flush=True)
 
     todo = [r for r in rows if r["descriptor"] is not None and not r["already"]]
     skipped = [r for r in rows if r["descriptor"] is None]
@@ -395,7 +389,7 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
                     for d in descriptors}
             for fut in as_completed(futs):
                 d = futs[fut]
-                er = d["_excel_row"]
+                er = d["_row_idx"]
                 label = d.get("_xname") or d.get("ref") or d.get("slug")
                 try:
                     meta = fut.result()
@@ -406,7 +400,7 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
                 except Exception as ex2:
                     status, out_recs, in_recs, err = "failed", 0, 0, \
                         f"{type(ex2).__name__}: {ex2}"
-                results[er] = {"excel_row": er, "name": label, "url": d.get("_xurl"),
+                results[er] = {"row_idx": er, "name": label, "url": d.get("_xurl"),
                                "sub_domain": d.get("domain"), "kind": d.get("kind"),
                                "status": status, "in": in_recs, "out": out_recs,
                                "error": err}
@@ -424,19 +418,19 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
         print(f"[clean] final dedup skipped: {ex2}", flush=True)
 
     for r in skipped:
-        results[r["excel_row"]] = {"excel_row": r["excel_row"], "name": r["name"],
-                                   "url": r["url"], "sub_domain": r["sub_domain"],
-                                   "kind": None, "status": "skipped_no_descriptor",
-                                   "in": 0, "out": 0,
-                                   "error": "could not map row to a source"}
+        results[r["row_idx"]] = {"row_idx": r["row_idx"], "name": r["name"],
+                                 "url": r["url"], "sub_domain": r["sub_domain"],
+                                 "kind": None, "status": "skipped_no_descriptor",
+                                 "in": 0, "out": 0,
+                                 "error": "could not map row to a source"}
     with open(RESULTS_JSON, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    # ground-truth marking: every row whose clean_data/ folder holds records is
+    # ground-truth marking: every row whose data/clean/ folder holds records is
     # written back with Cleaned?=Yes + its Cleaned Size (MB) and Cleaned Lines.
     cleaned_stats = collect_stats(rows)
-    mappable = {r["excel_row"] for r in rows if r["descriptor"]}
-    mark_spreadsheet(sheet, cleaned_stats, mappable)
+    mappable = {r["row_idx"] for r in rows if r["descriptor"]}
+    mark_csv(cleaned_stats, mappable)
 
     ok = [v for v in results.values() if v["status"] == "ok" and v["out"] > 0]
     zero = [v for v in results.values() if v["status"] == "ok" and v["out"] == 0]
@@ -451,9 +445,8 @@ def run(sheet: str, subdomain: str | None, workers: int | None,
 
 
 def main():
-    p = argparse.ArgumentParser(description="Fetch+clean spreadsheet sources, mark Cleaned?=Yes")
+    p = argparse.ArgumentParser(description="Fetch+clean Sources.csv sources, mark Cleaned?=Yes")
     p.add_argument("action", nargs="?", default="run", choices=["run", "dryrun", "mark"])
-    p.add_argument("--sheet", default=DEFAULT_SHEET, help="worksheet name (default: Finalized)")
     p.add_argument("--subdomain", default=None, help="limit to one Sub-Domain (default: all)")
     p.add_argument("--workers", type=int, default=None, help="process pool size")
     p.add_argument("--skip-deps", action="store_true",
@@ -465,11 +458,11 @@ def main():
     if args.deps_only:
         ensure_deps()
     elif args.action == "dryrun":
-        dryrun(args.sheet, args.subdomain)
+        dryrun(args.subdomain)
     elif args.action == "mark":
-        mark_only(args.sheet, args.subdomain)
+        mark_only(args.subdomain)
     else:
-        run(args.sheet, args.subdomain, args.workers, skip_deps=args.skip_deps)
+        run(args.subdomain, args.workers, skip_deps=args.skip_deps)
 
 
 if __name__ == "__main__":

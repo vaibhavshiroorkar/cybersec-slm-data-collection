@@ -16,7 +16,7 @@ import os
 import shutil
 
 from ..core import CLEAN_DATA, RAW_DATA, logger
-from . import fetch, scrape, scrape_html
+from . import fetch, fetch_nvd, scrape, scrape_html
 from .allowlist import descriptor_key, is_allowed
 from .common import _Collector
 
@@ -45,6 +45,14 @@ def _fetch_one(descriptor: dict, log) -> str:
     if kind == "pdf":
         scrape.scrape_pdf(domain, slug, descriptor["title"], descriptor["license"],
                           descriptor["url"], log)
+    elif kind == "api":
+        # NVD CVE 2.0 — paginated REST API (key only raises the rate limit).
+        fetch_nvd.fetch_nvd(domain, slug, descriptor["title"], descriptor["license"],
+                            descriptor["url"], log,
+                            api_key=os.environ.get("NVD_API_KEY"))
+    elif kind == "xml":
+        scrape.scrape_cwe(domain, slug, descriptor["title"], descriptor["license"],
+                          descriptor["url"], log)
     elif kind == "feed":
         scrape.scrape_feed(domain, slug, descriptor["title"], descriptor["license"],
                            descriptor["url"], descriptor["json_key"], log)
@@ -60,7 +68,7 @@ def _fetch_one(descriptor: dict, log) -> str:
 def process_source(descriptor: dict, *, data_root: str | None = None,
                    clean_data_dir: str | None = None, keep_raw: bool = False,
                    limit: int | None = None) -> dict:
-    """Fetch one source, clean it into clean_data/, delete its raw files.
+    """Fetch one source, clean it into data/clean/, delete its raw files.
 
     Returns ``{descriptor, status, error, folder, ingest_rows,
     clean_report_rows}``. ``ingest_rows`` are replayed into the real ingest log

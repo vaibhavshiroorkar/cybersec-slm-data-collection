@@ -47,7 +47,7 @@ def _resolve_input(name: str | None) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--input", default=None,
-                    help="cleaned root (default clean_data/ then cleaned/)")
+                    help="cleaned root (default data/clean/ then cleaned/)")
     ap.add_argument("--n", type=int, default=200, help="sample size")
     ap.add_argument("--seed", type=int, default=None, help="RNG seed for a reproducible sample")
     args = ap.parse_args()
