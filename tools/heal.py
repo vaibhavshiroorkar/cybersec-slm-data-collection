@@ -41,7 +41,7 @@ import clean_sources as cs                                     # noqa: E402
 
 from cybersec_slm import core                                  # noqa: E402
 from cybersec_slm.cleaning import pipeline                     # noqa: E402
-from cybersec_slm.extraction import worker                     # noqa: E402
+from cybersec_slm.ingestion import worker                     # noqa: E402
 
 LEDGER_JSON = os.path.join(cs.PROJECT, "logs", "heal_ledger.json")
 LEDGER_MD = os.path.join(cs.PROJECT, "logs", "heal_ledger.md")
@@ -59,7 +59,7 @@ def _remote_size_mb(descriptor: dict) -> float | None:
     kind = descriptor.get("kind")
     try:
         if kind == "hf":
-            from cybersec_slm.extraction.common import (EXT_PRIORITY,
+            from cybersec_slm.ingestion.common import (EXT_PRIORITY,
                                                         SKIP_SUBSTRINGS)
             from huggingface_hub import HfApi
             info = HfApi().dataset_info(descriptor["ref"], files_metadata=True)
@@ -75,7 +75,7 @@ def _remote_size_mb(descriptor: dict) -> float | None:
                          or getattr(f, "total_bytes", 0) or 0) for f in files)
             return total / (1024 * 1024) if total else None
         if kind in ("url", "github"):
-            from cybersec_slm.extraction.common import remote_size
+            from cybersec_slm.ingestion.common import remote_size
             url = descriptor.get("url")
             sz = remote_size(url) if url else None
             return sz / (1024 * 1024) if sz else None

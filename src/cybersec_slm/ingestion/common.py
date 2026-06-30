@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Extraction-stage helpers — HTTP, robust readers, and the ingest log.
+"""Ingestion-stage helpers — HTTP, robust readers, and the ingest log.
 
 Shared concerns (logger, try_import, sha256, count_lines, paths) live in
-``cybersec_slm.core``; this module adds what only extraction needs.
+``cybersec_slm.core``; this module adds what only ingestion needs.
 """
 
 from __future__ import annotations

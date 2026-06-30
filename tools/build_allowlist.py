@@ -17,8 +17,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from cybersec_slm.extraction.allowlist import DEFAULT_ALLOWLIST, dump_allowlist_yaml  # noqa: E402
-from cybersec_slm.extraction.sources import DEFAULT_CATALOG, load_descriptors  # noqa: E402
+from cybersec_slm.ingestion.allowlist import DEFAULT_ALLOWLIST, dump_allowlist_yaml  # noqa: E402
+from cybersec_slm.ingestion.sources import DEFAULT_CATALOG, load_descriptors  # noqa: E402
 
 
 def main() -> None:

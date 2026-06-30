@@ -61,7 +61,7 @@ def test_build_row_fills_known_fields_only():
     assert row["Dataset Link"] == res.link
     assert row["Category"] == "Dataset"
     assert row["Date Added"] == "01/01/2026"
-    # Extraction/cleaning-dependent fields stay blank.
+    # Ingestion/cleaning-dependent fields stay blank.
     for blank in ("File Count", "Total Lines", "Verified?", "Uploaded?", "License",
                   "Cleaned?", "Cleaned Size (MB)", "Cleaned Lines"):
         assert row[blank] == ""

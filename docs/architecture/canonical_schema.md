@@ -11,10 +11,10 @@ and annotation pipelines, so the record shape is fixed end to end.
 | Identity | `id` | str (uuid4) | normalize |
 | | `content_hash` | str (sha256 hex of `text`) | normalize |
 | Content | `text` | str | cleaning → normalize |
-| Provenance | `source` | str | extraction |
-| | `source_url` | str \| null | extraction |
-| | `license` | str (SPDX/best-effort) | extraction |
-| | `origin_format` | str (jsonl/csv/pdf/…) | extraction (best-effort) |
+| Provenance | `source` | str | ingestion |
+| | `source_url` | str \| null | ingestion |
+| | `license` | str (SPDX/best-effort) | ingestion |
+| | `origin_format` | str (jsonl/csv/pdf/…) | ingestion (best-effort) |
 | Auto-computed | `lang` | str (ISO 639-1) | normalize |
 | | `token_count` | int | normalize |
 | | `char_count` | int | normalize |

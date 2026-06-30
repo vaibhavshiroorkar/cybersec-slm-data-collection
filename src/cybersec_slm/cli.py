@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="snapshot + push the dataset to the DVC remote")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    sub.add_parser("all", help="extract -> clean -> normalize (full pipeline)")
+    sub.add_parser("all", help="ingest -> clean -> normalize (full pipeline)")
     return p
 
 
@@ -127,7 +127,7 @@ def main(argv: list[str] | None = None) -> None:
             cleaning.run(args.action, limit=args.limit)
 
     elif args.stage == "run":
-        from .extraction import parallel
+        from .ingestion import parallel
         parallel.run_streaming(args.sources,
                                workers=args.workers, limit=args.limit,
                                keep_raw=args.keep_raw,
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "all":
         from .core import logger
         from .eda import SufficiencyError, run_eda
-        from .extraction import parallel
+        from .ingestion import parallel
         from .normalize import run_normalization
         # Streaming ingestion from sources/Sources.csv: fetch + clean fused per
         # source, then one final cross-source dedup pass (no separate clean stage).

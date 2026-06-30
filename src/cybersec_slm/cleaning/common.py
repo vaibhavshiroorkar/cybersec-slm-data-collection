@@ -54,7 +54,7 @@ DATE_FIELDS = ("date", "collection_date", "last_updated", "published",
 def find_input_files(input_dir: str = RAW_DATA):
     """Yield (abs_path, sub_domain, source, rel_path) for every input .jsonl.
 
-    Layout (extraction output): data/raw/<Sub-Domain>/<source>/<file>.jsonl
+    Layout (ingestion output): data/raw/<Sub-Domain>/<source>/<file>.jsonl
     """
     if not os.path.isdir(input_dir):
         return

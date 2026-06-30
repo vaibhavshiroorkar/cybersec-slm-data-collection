@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from cybersec_slm.extraction import sources
+from cybersec_slm.ingestion import sources
 
 # Header subset that exercises every dispatch branch, including the two
 # infrastructure kinds (api/xml) auto-detected by URL.

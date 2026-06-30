@@ -12,7 +12,7 @@ provenance manifest. It is an installable package (`cybersec_slm`) driven by one
 CLI (`src/cybersec_slm/cli.py`).
 
 ```
-Sourcing  →  Extraction  →  Cleaning   →  EDA gate  →  Normalization  →  dataset.jsonl
+Sourcing  →  Ingestion   →  Cleaning   →  EDA gate  →  Normalization  →  dataset.jsonl
 (optional)    data/raw/     data/clean/   (pass?)       data/final/        + manifest.json
 ```
 
@@ -26,7 +26,7 @@ Two ideas shape everything:
   repository stays code-only. `core.py` also holds the shared logger and the JSONL
   read/write and hashing helpers used by every stage.
 - **Security is part of the flow, not a layer on top.** A version-controlled
-  source allowlist gates extraction; reject logs are metadata-only; every release
+  source allowlist gates ingestion; reject logs are metadata-only; every release
   ships a content-hashed manifest so a bad batch can be scoped and rolled back.
   See [Security controls](#security-controls).
 
@@ -36,8 +36,8 @@ The same logical work runs in one of two ways:
 
 | | Sequential (`cybersec-slm all`) | Parallel / streaming (`cybersec-slm run` / `flow`) |
 |---|---|---|
-| Driver | `cli.py` | `extraction/parallel.py`, `orchestration/flows.py` |
-| Extraction + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
+| Driver | `cli.py` | `ingestion/parallel.py`, `orchestration/flows.py` |
+| Ingestion + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
 | Dedup | global, inline during cleaning | per-source workers skip it; one final cross-source pass |
 | Output | `data/clean/` | `data/clean/` |
 
@@ -48,25 +48,25 @@ feed the same EDA gate and normalizer.
 
 `cybersec-slm source` (`sourcing/run.py`) proposes new candidate sources. For each
 cybersecurity sub-domain it runs keyword searches through Google Programmable
-Search, builds a candidate row per hit, drops any URL already in the tracking
-sheet (or seen earlier in the run), writes the survivors to a CSV under
+Search, builds a candidate row per hit, drops any URL already in the catalog
+(or seen earlier in the run), writes the survivors to a CSV under
 `logs/discovered/`, and — unless `--dry-run` — appends them to the local catalog
 (`sources/Sources.csv`).
 
 This stage only *proposes* sources for a human to review. Nothing here reaches
-extraction directly; the gate between "discovered" and "fetched" is the allowlist.
+ingestion directly; the gate between "discovered" and "fetched" is the allowlist.
 
-## Stage 1 — Extraction → `data/raw/`
+## Stage 1 — Ingestion → `data/raw/`
 
-`cybersec-slm extract` (`extraction/run.py`) pulls each source through its handler
-and normalizes everything to JSONL:
+Ingestion (`ingestion/parallel.py`, driven by `cybersec-slm run` / `all`) pulls
+each source through its handler and normalizes everything to JSONL:
 
 - **fetch** — dataset platforms (HuggingFace, Kaggle, raw URLs, GitHub)
 - **scrape** — PDFs and JSON feeds
 - **html** — a few crawlable sites (Playwright/Chromium)
 - **nvd** — the NVD CVE feed (optional API key for higher rate limits)
 
-The **source allowlist** (`extraction/allowlist.py`) is the key control here. Only
+The **source allowlist** (`ingestion/allowlist.py`) is the key control here. Only
 sources marked `status: approved` in `sources/allowlist.yaml` are fetched;
 everything else is skipped and logged. This is the anti-poisoning gate: a
 substituted or compromised upstream cannot enter the corpus under a trusted name.
@@ -74,9 +74,9 @@ It fails open (allow-all, with a warning) when the file is absent so a fresh
 checkout still runs, and `CYBERSEC_SLM_ENFORCE_ALLOWLIST=1` forces enforcement
 (the Docker image sets this).
 
-Extraction maintains a SQLite ingest log, a provenance ledger
+Ingestion maintains a SQLite ingest log, a provenance ledger
 (`logs/provenance/ledger.csv`), and a summary table of every source's size, row
-count, and license. In the parallel path, `extraction/worker.py` handles one
+count, and license. In the parallel path, `ingestion/worker.py` handles one
 source per process; a bad source returns `status="failed"` instead of crashing the
 pool.
 
@@ -159,7 +159,7 @@ contract.
 ## Orchestration, versioning, deployment
 
 - **Prefect** (`orchestration/flows.py`) — `cybersec-slm flow` wraps the same stage
-  functions in a `build-corpus` flow: load secrets → extract + clean per source
+  functions in a `build-corpus` flow: load secrets → ingest + clean per source
   (mapped, retried, isolated) → cross-source dedup → EDA gate → normalize →
   optional DVC snapshot. Prefect is optional; the decorators degrade to no-ops so
   the helpers stay unit-testable.
@@ -177,7 +177,7 @@ response toward something traceable, reversible, and auditable.
 | Stage | Controls |
 |---|---|
 | Sourcing | Discovered sources seeded `pending` (human review before fetch); dry-run + CSV audit artifact |
-| Extraction | Version-controlled source allowlist (anti-poisoning); per-source process isolation; provenance ingest ledger |
+| Ingestion | Version-controlled source allowlist (anti-poisoning); per-source process isolation; provenance ingest ledger |
 | Cleaning | PII redaction (Presidio + regex fallback); documented PII blind spots + sampled manual review; anomaly quarantine to `flagged/`; auditable `dropped/` reasons |
 | EDA | Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned append-only run history |
 | Normalization | Strict schema validation (closed enums); metadata-only reject logs; per-source failure escalation; per-record near-dup scores; content hashing |
@@ -196,7 +196,7 @@ All generated corpus artifacts live under one `data/` folder, with run logs in
 
 | Folder | Produced by | Purpose |
 |---|---|---|
-| `data/raw/` | extraction | normalized JSONL per source |
+| `data/raw/` | ingestion | normalized JSONL per source |
 | `data/clean/` | cleaning | the cleaned corpus → EDA handoff |
 | `data/flagged/` | cleaning | behavioral anomalies for human review |
 | `data/dropped/` | cleaning / dedup | removed records, each with a `_reason` |
@@ -211,4 +211,4 @@ Both `data/` and `logs/` are resolved relative to `CYBERSEC_SLM_DATA_ROOT`
 Optional API keys are read from `.env` (auto-loaded; shell environment wins). See
 the [README configuration table](../../README.md#configuration) for the full list.
 EDA gate thresholds and the allowlist enforcement flag are environment-overridable;
-see `eda/config.py` and `extraction/allowlist.py`.
+see `eda/config.py` and `ingestion/allowlist.py`.

@@ -3,7 +3,7 @@
 
 Runs many sources concurrently across CPU cores. Each source flows
 fetch -> JSONL -> clean -> data/clean/ -> delete raw inside a worker process
-(:func:`cybersec_slm.extraction.worker.process_source`). The parent owns the
+(:func:`cybersec_slm.ingestion.worker.process_source`). The parent owns the
 SQLite ingest log (workers buffer rows and return them, so SQLite is only ever
 written from one process), and runs the single cross-source dedup pass after the
 pool drains.
@@ -20,7 +20,7 @@ from concurrent.futures.process import BrokenProcessPool
 
 from .. import core
 from ..cleaning import pipeline
-from . import run as extraction_run
+from . import run as ingestion_run
 from . import sources, worker
 from .common import IngestLog, logger
 
@@ -89,4 +89,4 @@ def run_streaming(spec: str | None = None, *,
         pipeline.final_global_dedup(core.CLEAN_DATA)
     if clean_rows:
         pipeline._write_report(clean_rows)
-    extraction_run.show_table()
+    ingestion_run.show_table()

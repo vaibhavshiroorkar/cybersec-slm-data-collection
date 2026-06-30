@@ -120,7 +120,7 @@ def dump_allowlist_yaml(descriptors: list[dict], status: str = APPROVED) -> str:
         })
     rows.sort(key=lambda r: (r["domain"] or "", r["id"]))
     header = ("# Version-controlled source allowlist. Only `status: approved` sources\n"
-              "# are fetched (extraction/allowlist.py). Edit deliberately; changes here\n"
+              "# are fetched (ingestion/allowlist.py). Edit deliberately; changes here\n"
               "# should go through peer review (threat model: Access Control).\n")
     body = yaml.safe_dump({"version": 1, "enforce": True, "sources": rows},
                           sort_keys=False, allow_unicode=True, width=100)

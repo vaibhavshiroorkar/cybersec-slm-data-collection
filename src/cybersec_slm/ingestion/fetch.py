@@ -4,7 +4,7 @@
 One handler per source kind (hf, kaggle, github, url), all sharing common.py.
 Files over the 5 GB cap are skipped but still recorded in the ingest log so they
 appear in the final table. The per-source streaming worker
-(:func:`cybersec_slm.extraction.worker.process_source`) calls these handlers.
+(:func:`cybersec_slm.ingestion.worker.process_source`) calls these handlers.
 """
 
 import os

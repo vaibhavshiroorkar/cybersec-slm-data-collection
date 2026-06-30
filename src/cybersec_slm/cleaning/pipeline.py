@@ -3,7 +3,7 @@
 
     Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> data/clean/
 
-Reads the extraction output under data/raw/ and mirrors its layout into
+Reads the ingestion output under data/raw/ and mirrors its layout into
 data/clean/ (passed), flagged/ (behavioral anomalies for annotation) and dropped/
 (structural + dedup + language drops, each annotated with a reason). A per-file
 report is written to logs/clean_report.csv.
@@ -177,7 +177,7 @@ def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
     files = list(find_input_files(input_dir))
     if not files:
         logger.warning(f"no .jsonl files under {input_dir} "
-                       "(run the extraction stage first)")
+                       "(run the ingestion stage first)")
         return []
 
     rows = clean_files(files, deduper=deduper, redactor=redactor, langf=langf,

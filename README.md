@@ -21,7 +21,7 @@ or quarantined rather than passed downstream silently.
 | Stage | In plain terms | Output |
 |---|---|---|
 | **Sourcing** *(optional)* | Goes looking for new sources by searching the web, and adds the candidates to a tracking catalog for a human to review. Nothing here is trusted automatically. | `sources/Sources.csv` |
-| **Extraction** | Downloads each *approved* source — datasets, PDFs, feeds, crawlable sites — and converts everything to one simple line-per-record format. | `data/raw/` |
+| **Ingestion** | Downloads each *approved* source — datasets, PDFs, feeds, crawlable sites — and converts everything to one simple line-per-record format. | `data/raw/` |
 | **Cleaning** | Tidies the text, flags suspicious records, removes duplicates, redacts personal data, and translates non-English text into English. | `data/clean/` (+ `flagged/`, `dropped/`) |
 | **EDA gate** | Checks whether the corpus is actually good enough — enough volume, balanced across topics, not dominated by one source. If it isn't, the run stops here. | `logs/eda/` |
 | **Normalization** | Maps every record onto one canonical 22-field schema, removes near-duplicates, and writes the final dataset alongside a provenance manifest. | `data/final/dataset.jsonl` |
@@ -47,7 +47,7 @@ Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 ```bash
 cp .env.example .env                    # API keys (all optional for a basic run)
 uv sync                                 # install the pipeline
-uv run cybersec-slm all                 # extract → clean → EDA gate → normalize
+uv run cybersec-slm all                 # ingest → clean → EDA gate → normalize
 ```
 
 That writes the finished corpus to `data/final/dataset.jsonl`. To run the stages
@@ -62,9 +62,9 @@ individually, tune them with flags, or deploy with Docker, see
 ```
 src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
-  cli.py         the single entry point (source / extract / clean / eda / normalize / run / flow / all)
+  cli.py         the single entry point (source / run / clean / eda / normalize / flow / all)
   sourcing/      search-engine source discovery → Sources.csv catalog
-  extraction/    fetch, scrape, crawl, allowlist gate, parallel worker
+  ingestion/     fetch, scrape, crawl, allowlist gate, parallel worker
   cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
@@ -76,7 +76,7 @@ infra/           Terraform skeleton (ECR / ECS / S3 / IAM / Secrets Manager)
 ```
 
 Generated data stays out of git and lives under one `data/` folder: `data/raw/`
-(extraction), `data/clean/` (the cleaning → EDA handoff), `data/flagged/` (records a
+(ingestion), `data/clean/` (the cleaning → EDA handoff), `data/flagged/` (records a
 human should review), `data/dropped/` (removed records, with reasons), and
 `data/final/` (the release). Run logs go to `logs/`.
 

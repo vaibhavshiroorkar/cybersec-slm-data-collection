@@ -4,7 +4,7 @@
 The catalog's columns (exact order) are the contract between this crawler and the
 ``sources/Sources.csv`` catalog. Only the fields that are knowable at *sourcing*
 time are filled; the rest (counts, sizes, cleaned/verification status) are left
-blank for the extraction/cleaning stages and a human to complete.
+blank for the ingestion/cleaning stages and a human to complete.
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ import re
 from datetime import date
 from urllib.parse import urlparse
 
-from ..extraction.sources import CATALOG_COLUMNS
+from ..ingestion.sources import CATALOG_COLUMNS
 from .classify import infer_category_and_format, refine_domain
 from .search import Result
 
-# The catalog columns, in order (single source of truth lives in extraction.sources).
+# The catalog columns, in order (single source of truth lives in ingestion.sources).
 SHEET_COLUMNS: tuple[str, ...] = CATALOG_COLUMNS
 
-# Fields the crawler fills vs. leaves for extraction/humans.
+# Fields the crawler fills vs. leaves for ingestion/humans.
 _BLANK = ""
 
 

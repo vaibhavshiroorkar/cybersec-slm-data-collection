@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record -> text mapping — runs before the anomaly gate.
 
-Extraction emits two record shapes: scrape/crawl outputs already carry a
+Ingestion emits two record shapes: scrape/crawl outputs already carry a
 ``text`` field, while dataset rows keep their original column names
 (``{question, answer}``, ``{instruction, output}``, ``{body, label}``, ...).
 The cleaning stages all operate on ``text``, so this step builds a ``text``

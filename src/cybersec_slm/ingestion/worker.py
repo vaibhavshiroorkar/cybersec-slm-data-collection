@@ -4,7 +4,7 @@
 `process_source` is a top-level (picklable) function so it can run inside a
 ``ProcessPoolExecutor``. Each call handles ONE source end to end and is fully
 isolated — it never touches the shared SQLite ingest log (it buffers rows in a
-:class:`~cybersec_slm.extraction.common._Collector` and returns them for the
+:class:`~cybersec_slm.ingestion.common._Collector` and returns them for the
 parent to write) and it runs cleaning with global dedup disabled (cross-source
 dedup is a single final pass in the parent). One bad source returns a
 ``status="failed"`` dict instead of crashing the pool.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cybersec_slm.extraction import allowlist
+from cybersec_slm.ingestion import allowlist
 
 
 @pytest.fixture(autouse=True)
