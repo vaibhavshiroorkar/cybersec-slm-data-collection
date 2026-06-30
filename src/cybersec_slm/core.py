@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared core used by every pipeline stage — one place per purpose.
 
-Holds what extraction and cleaning both need: an optional-dependency loader,
+Holds what ingestion and cleaning both need: an optional-dependency loader,
 a single configured logger (loguru if present, else stdlib), the workspace data
 paths, and line-oriented JSONL helpers + hashing.
 
@@ -47,7 +47,7 @@ def data_root() -> str:
 
 DATA_ROOT = data_root()
 DATA_DIR = os.path.join(DATA_ROOT, "data")          # all generated corpus artifacts
-RAW_DATA = os.path.join(DATA_DIR, "raw")            # extraction output / cleaning input
+RAW_DATA = os.path.join(DATA_DIR, "raw")            # ingestion output / cleaning input
 CLEAN_DATA = os.path.join(DATA_DIR, "clean")        # streaming per-source clean output
 FINAL_DATA = os.path.join(DATA_DIR, "final")        # canonical release dataset + sidecars
 FLAGGED = os.path.join(DATA_DIR, "flagged")         # -> Data Annotation Team

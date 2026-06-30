@@ -3,7 +3,7 @@
 cleaned output out per sub-domain, and mark Cleaned?=Yes back in the CSV.
 
 For each row in ``sources/Sources.csv`` this:
-  1. maps the row to a source descriptor (extraction.sources._row_to_descriptor),
+  1. maps the row to a source descriptor (ingestion.sources._row_to_descriptor),
   2. fetches it, cleans it through the full cleaning pipeline, and writes the
      result to  data/clean/<Sub-Domain>/<source>/...  (folder per sub-domain),
   3. deletes the intermediate raw files,
@@ -43,7 +43,7 @@ os.environ["CYBERSEC_SLM_DATA_ROOT"] = PROJECT
 
 from cybersec_slm import core                              # noqa: E402
 from cybersec_slm.cleaning import pipeline                 # noqa: E402
-from cybersec_slm.extraction import sources, worker        # noqa: E402
+from cybersec_slm.ingestion import sources, worker        # noqa: E402
 
 
 # --------------------------------------------------------------- dependencies --
@@ -307,7 +307,7 @@ def collect_stats(rows) -> dict[int, tuple[float, int]]:
 
     Several rows can resolve to the *same* data/clean/<Sub-Domain>/<owner> folder:
     two Hugging Face / Kaggle datasets published under one owner both clean into
-    data/clean/<domain>/<owner> (see clean_dir_for, which mirrors the extraction
+    data/clean/<domain>/<owner> (see clean_dir_for, which mirrors the ingestion
     worker's owner-based naming). Crediting that shared folder to each colliding
     row would count its records once per row and inflate the corpus total — the
     bug that pushed the catalog total above the real ~538k. So a folder is

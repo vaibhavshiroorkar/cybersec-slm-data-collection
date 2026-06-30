@@ -18,7 +18,7 @@ pull:
 deployments:
   - name: build-corpus
     entrypoint: src/cybersec_slm/orchestration/flows.py:build_corpus
-    description: Extract -> clean -> EDA gate -> normalize -> DVC snapshot.
+    description: Ingest -> clean -> EDA gate -> normalize -> DVC snapshot.
     parameters:
       enforce_eda: true
       dvc_push: true

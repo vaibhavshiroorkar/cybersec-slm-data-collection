@@ -5,7 +5,7 @@ The catalog is a single local CSV (``sources/Sources.csv``) — no network, no
 Google auth. ``existing_links`` reads it to dedup discovered candidates, and
 ``append_rows`` adds the survivors. New rows are aligned to the *live* file's
 header (falling back to the canonical schema when creating the file), so the
-extraction/cleaning columns (Cleaned?, sizes, ...) are preserved and never
+ingestion/cleaning columns (Cleaned?, sizes, ...) are preserved and never
 shifted.
 
 URL normalization (:func:`normalize_url`) is what makes "already exists" robust:
@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from urllib.parse import urlparse
 
-from ..extraction.sources import CATALOG_COLUMNS
+from ..ingestion.sources import CATALOG_COLUMNS
 
 # Header names (lowercased) that may hold a source link, in preference order.
 _LINK_HEADERS = ("dataset link", "url", "link", "dataset_link", "source url")

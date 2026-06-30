@@ -1,4 +1,7 @@
-# Extraction Tools
+# Ingestion Tools
+
+Notes on the tools used to pull data from sources during the ingestion stage.
+
 
 ## Scrapy
 - Best for: crawling security blogs, static websites, writeup archives

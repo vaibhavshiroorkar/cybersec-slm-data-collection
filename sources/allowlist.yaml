@@ -1,5 +1,5 @@
 # Version-controlled source allowlist. Only `status: approved` sources
-# are fetched (extraction/allowlist.py). Edit deliberately; changes here
+# are fetched (ingestion/allowlist.py). Edit deliberately; changes here
 # should go through peer review (threat model: Access Control).
 version: 1
 enforce: true

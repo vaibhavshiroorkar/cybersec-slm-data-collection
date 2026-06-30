@@ -1,7 +1,7 @@
 # Cleaning
 
 Second stage of the pipeline. Reads the raw JSONL produced by
-[extraction](../extraction) under `data/raw/` and turns it into a clean,
+[ingestion](../ingestion) under `data/raw/` and turns it into a clean,
 de-duplicated, PII-free, English-only corpus ready for EDA.
 
 ```

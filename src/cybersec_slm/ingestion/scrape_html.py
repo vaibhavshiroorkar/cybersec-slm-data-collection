@@ -4,7 +4,7 @@
 Static pages: httpx + selectolax (fast). JS-rendered pages: Playwright (chromium).
 Respects robots.txt (urllib.robotparser). Same-domain BFS with page/depth caps.
 ``crawl`` is invoked per ``website`` source by the streaming worker
-(:func:`cybersec_slm.extraction.worker.process_source`).
+(:func:`cybersec_slm.ingestion.worker.process_source`).
 """
 
 import json

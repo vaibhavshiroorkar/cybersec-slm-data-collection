@@ -3,7 +3,7 @@
 
 The flow is a thin wrapper over the existing stage functions — it adds
 scheduling, per-source isolation/retries/timeouts, secret loading, and the DVC
-snapshot, but the actual work still lives in extraction/cleaning/eda/normalize.
+snapshot, but the actual work still lives in ingestion/cleaning/eda/normalize.
 
     build_corpus:
         load_secrets
@@ -52,7 +52,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__f
 
 
 def _load_descriptors(spec: str | None = None) -> list[dict]:
-    from ..extraction import sources
+    from ..ingestion import sources
     return sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
 
 
@@ -82,7 +82,7 @@ def load_secrets() -> list[str]:
 def extract_clean_source(descriptor: dict) -> dict:
     """Fetch + clean ONE source into data/clean/ (allowlist-gated in the worker)."""
     from ..core import CLEAN_DATA
-    from ..extraction import worker
+    from ..ingestion import worker
     return worker.process_source(descriptor, data_root=DATA_ROOT,
                                  clean_data_dir=CLEAN_DATA)
 
@@ -130,7 +130,7 @@ def dvc_snapshot(push: bool = False) -> None:
 @flow(name="build-corpus")
 def build_corpus(sources_spec: str | None = None, *, enforce_eda: bool = True,
                  dvc_push: bool = False) -> dict:
-    """End-to-end: extract+clean per source -> dedup -> EDA gate -> normalize -> DVC."""
+    """End-to-end: ingest+clean per source -> dedup -> EDA gate -> normalize -> DVC."""
     present = load_secrets()
     logger.info(f"orchestration: secrets present for {present}")
 
@@ -143,7 +143,7 @@ def build_corpus(sources_spec: str | None = None, *, enforce_eda: bool = True,
         results = [extract_clean_source(d) for d in descriptors]
     ok = sum(1 for r in results if r.get("status") == "ok")
     skipped = sum(1 for r in results if r.get("status") == "skipped")
-    logger.info(f"orchestration: extract+clean ok={ok} skipped={skipped} "
+    logger.info(f"orchestration: ingest+clean ok={ok} skipped={skipped} "
                 f"failed={len(results) - ok - skipped}")
 
     cross_source_dedup()

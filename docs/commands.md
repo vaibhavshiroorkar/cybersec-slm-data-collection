@@ -14,13 +14,13 @@ Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 ```bash
 cp .env.example .env                    # add API keys (all optional for a basic run)
 uv sync                                 # install the pipeline + dev tools
-uv run playwright install chromium      # browser for the HTML crawler (extract html)
+uv run playwright install chromium      # browser for the website crawler (scrape_html)
 ```
 
 ## Run the whole pipeline
 
 ```bash
-uv run cybersec-slm all                 # extract → clean → EDA gate → normalize
+uv run cybersec-slm all                 # ingest → clean → EDA gate → normalize
 ```
 
 `all` runs the streaming path: it fetches and cleans each source together, runs one
@@ -29,22 +29,24 @@ and rebuilds the canonical dataset. Output lands in `data/final/dataset.jsonl`.
 
 ## Run one stage at a time
 
+Ingestion isn't a standalone command — it runs fused with cleaning via `run`. The
+other stages can be re-run on their own:
+
 ```bash
-uv run cybersec-slm extract all         # collect allowlisted sources       -> data/raw/
-uv run cybersec-slm clean all           # clean + flag + drop + report       -> data/clean/
-uv run cybersec-slm eda                 # validate corpus + sufficiency gate -> logs/eda/
-uv run cybersec-slm normalize           # canonical 22-field dataset         -> data/final/
+uv run cybersec-slm run                 # ingest + clean each source (streaming) -> data/clean/
+uv run cybersec-slm clean all           # (re)clean the data/raw/ tree           -> data/clean/
+uv run cybersec-slm eda                 # validate corpus + sufficiency gate     -> logs/eda/
+uv run cybersec-slm normalize           # canonical 22-field dataset             -> data/final/
 ```
 
 ### Command summary
 
 | Command | Purpose |
 |---|---|
-| `extract [scrape\|fetch\|html\|nvd\|all\|table]` | Fetch and normalize allowlisted sources → `data/raw/` |
-| `clean [all\|sanitize\|dedup\|pii\|lang\|report\|balance]` | Clean the raw corpus → `data/clean/` (+ `data/flagged/`, `data/dropped/`) |
+| `run [--workers N]` | Ingest + clean each allowlisted source, in parallel (streaming) → `data/clean/` |
+| `clean [all\|sanitize\|dedup\|pii\|lang\|report\|balance]` | (Re)clean the raw corpus → `data/clean/` (+ `data/flagged/`, `data/dropped/`) |
 | `eda [--no-enforce] [--profile]` | Validate the corpus and apply the sufficiency gate → `logs/eda/` |
 | `normalize [--fresh]` | Schema-normalize into `data/final/dataset.jsonl` + manifest |
-| `run [--workers N]` | Parallel per-source fetch + clean (streaming) → `data/clean/` |
 | `source [--dry-run]` | Discover sources via search engines → `sources/Sources.csv` |
 | `flow [--dvc-push]` | Run the pipeline via Prefect (needs the `orchestration` extra) |
 | `validate` | Check `data/clean/` records against the schema |
@@ -52,12 +54,11 @@ uv run cybersec-slm normalize           # canonical 22-field dataset         -> 
 
 ### Per-command flags
 
-**`extract <action>`** — `scrape` (PDFs + JSON feeds), `fetch` (HuggingFace / Kaggle
-/ GitHub / raw URLs), `html` (crawlable sites, needs Chromium), `nvd` (the NVD CVE
-feed), `all` (everything), `table` (print the per-source summary). Sources are read
+**Ingestion (runs inside `run` / `all`)** — each source is dispatched to a handler
+by kind: dataset platforms (HuggingFace / Kaggle / GitHub / raw URLs), PDFs and JSON
+feeds, crawlable websites (needs Chromium), and the NVD CVE API. Sources are read
 from `sources/Sources.csv`; only rows approved in `sources/allowlist.yaml` are
-fetched. `extract nvd` reads `NVD_API_KEY` from the environment for a higher rate
-limit.
+fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
 
 **`clean <action>`** — `all` runs the full chain; `sanitize` / `dedup` / `pii` /
 `lang` run a single step; `report` recounts the existing `data/clean`, `data/flagged`,
@@ -105,7 +106,7 @@ The same logical work runs two ways:
 
 | | Sequential (`all`) | Parallel / streaming (`run`, `flow`) |
 |---|---|---|
-| Extraction + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
+| Ingestion + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
 | Dedup | global, inline during cleaning | per-source workers skip it; one final cross-source pass |
 | Output | `data/clean/` | `data/clean/` |
 
@@ -126,7 +127,7 @@ runtime and are never baked into the image. To run a single stage, append it aft
 the image name:
 
 ```bash
-docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm cybersec-slm extract all
+docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm cybersec-slm clean all
 ```
 
 See [operations/deploy.md](operations/deploy.md) for the AWS path (ECR / ECS /
@@ -139,11 +140,11 @@ environment variables take precedence. None are required for a basic local run.
 
 | Variable | Used by | Required? |
 |---|---|---|
-| `NVD_API_KEY` | `extract nvd` (higher CVE rate limit) | optional |
+| `NVD_API_KEY` | NVD CVE feed (higher rate limit) | optional |
 | `KAGGLE_API_TOKEN` | Kaggle sources | only for Kaggle sources |
 | `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID` | `source` | only for sourcing |
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` are written) | optional |
-| `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | extraction allowlist gate | optional |
+| `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | ingestion allowlist gate | optional |
 
 EDA gate thresholds are environment-overridable too; see `src/cybersec_slm/eda/config.py`.
 

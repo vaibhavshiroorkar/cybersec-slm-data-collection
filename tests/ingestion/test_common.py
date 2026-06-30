@@ -1,5 +1,5 @@
 from cybersec_slm.core import count_lines, sha256_file
-from cybersec_slm.extraction.common import category_of, group_key
+from cybersec_slm.ingestion.common import category_of, group_key
 
 
 def test_category_of():

@@ -4,7 +4,7 @@
 PDFs via PyMuPDF (one record per page); JSON feeds via httpx + orjson; the MITRE
 CWE XML-in-ZIP via :func:`scrape_cwe`. Shares common.py and records everything in
 the ingest log. The per-source streaming worker
-(:func:`cybersec_slm.extraction.worker.process_source`) calls these handlers.
+(:func:`cybersec_slm.ingestion.worker.process_source`) calls these handlers.
 """
 
 import json
