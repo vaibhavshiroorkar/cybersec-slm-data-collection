@@ -10,7 +10,7 @@ in a SQLite ingest log under `logs/`.
 | `common.py` | Ingestion helpers: HTTP (httpx + tenacity), robust readers (pandas + json-repair), JSONL conversion, and the SQLite `IngestLog`. Shared logger/paths/hashing come from `cybersec_slm.core`. |
 | `sources.py` | Reads the curated catalog (`sources/Sources.csv`) and maps each row to a source descriptor (kind: hf/kaggle/github/url/pdf/feed/website/api/xml). |
 | `allowlist.py` | The fetch gate: only sources `approved` in `sources/allowlist.yaml` are pulled. |
-| `fetch.py` | Dataset fetcher — one handler per kind (hf, kaggle, github, url). |
+| `fetch.py` | Dataset fetcher, one handler per kind (hf, kaggle, github, url). |
 | `scrape.py` | PDFs (PyMuPDF, one record per page) and JSON feeds (httpx + orjson). |
 | `scrape_html.py` | Crawls robots.txt-permitted sites (selectolax; Playwright for JS pages). |
 | `fetch_nvd.py` | The NVD CVE 2.0 paginated API handler. |
@@ -27,7 +27,7 @@ directory):
 - table     → `logs/final_table.csv`
 
 ## Usage
-Ingestion is not a standalone command — it runs fused with cleaning, one process
+Ingestion is not a standalone command, it runs fused with cleaning, one process
 per source, via the streaming path:
 
 ```bash

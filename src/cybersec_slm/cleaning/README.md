@@ -31,12 +31,12 @@ data/clean/  → handoff for EDA
 - **Input:** `data/raw/<Sub-Domain>/<source>/*.jsonl`
   (records shaped `{source, url, license, page?, text}`; tolerant of missing/extra fields).
 - **Outputs** (under `data/`, mirroring the `data/raw` layout):
-  - `data/clean/…jsonl` — passed every stage. Original schema preserved
+  - `data/clean/…jsonl`: passed every stage. Original schema preserved
     (translated records gain `_orig_lang` and an English `text`).
-  - `data/flagged/…jsonl` — behavioral anomalies for the annotation team (`_reason` added).
-  - `data/dropped/…jsonl` — structural / duplicate / untranslatable-non-English drops (`_reason` added).
-  - `logs/clean_report.csv` — per-file counts + a TOTAL row.
-  - `logs/cleaning.log` — run log.
+  - `data/flagged/…jsonl`: behavioral anomalies for the annotation team (`_reason` added).
+  - `data/dropped/…jsonl`: structural / duplicate / untranslatable-non-English drops (`_reason` added).
+  - `logs/clean_report.csv`: per-file counts + a TOTAL row.
+  - `logs/cleaning.log`: run log.
 
 ## Modules
 | File | Purpose |
@@ -65,7 +65,7 @@ cybersec-slm clean report           # recount existing data/clean, data/flagged,
 
 ## Dependencies
 Every named tool (ftfy, dateutil, datasketch, presidio, fastText, langdetect,
-deep-translator) plus the spaCy model presidio loads is a **base dependency** —
+deep-translator) plus the spaCy model presidio loads is a **base dependency**.
 `uv sync` from the repo root installs all of it, and `pytest` is there too (dev
 group). Each module still has a standard-library fallback and logs which backend
 it chose, so the stage never hard-fails if something is missing.
@@ -83,7 +83,7 @@ uv sync                      # the cleaning stack + spaCy model + dev tools
 
 ## Notes
 - Deduplication is **global across the corpus** and holds an in-memory MinHash/LSH
-  index — fine at the current corpus size. For a much larger corpus, swap to a
+  index, fine at the current corpus size. For a much larger corpus, swap to a
   disk-backed index (e.g. datasketch's Redis/Cassandra backends) or shard by sub-domain.
 - Records keep their original schema in `data/clean/`; provenance/`_reason` fields
   are attached only in `data/flagged/` and `data/dropped/`.

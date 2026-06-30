@@ -44,27 +44,27 @@ The same logical work runs in one of two ways:
 Downstream stages auto-detect the input directory (`data/clean/`), so both modes
 feed the same EDA gate and normalizer.
 
-## Stage 0 — Sourcing *(optional)*
+## Stage 0: Sourcing *(optional)*
 
 `cybersec-slm source` (`sourcing/run.py`) proposes new candidate sources. For each
 cybersecurity sub-domain it runs keyword searches through Google Programmable
 Search, builds a candidate row per hit, drops any URL already in the catalog
 (or seen earlier in the run), writes the survivors to a CSV under
-`logs/discovered/`, and — unless `--dry-run` — appends them to the local catalog
+`logs/discovered/`, and, unless `--dry-run`, appends them to the local catalog
 (`sources/Sources.csv`).
 
 This stage only *proposes* sources for a human to review. Nothing here reaches
 ingestion directly; the gate between "discovered" and "fetched" is the allowlist.
 
-## Stage 1 — Ingestion → `data/raw/`
+## Stage 1: Ingestion → `data/raw/`
 
 Ingestion (`ingestion/parallel.py`, driven by `cybersec-slm run` / `all`) pulls
 each source through its handler and normalizes everything to JSONL:
 
-- **fetch** — dataset platforms (HuggingFace, Kaggle, raw URLs, GitHub)
-- **scrape** — PDFs and JSON feeds
-- **html** — a few crawlable sites (Playwright/Chromium)
-- **nvd** — the NVD CVE feed (optional API key for higher rate limits)
+- **fetch**: dataset platforms (HuggingFace, Kaggle, raw URLs, GitHub)
+- **scrape**: PDFs and JSON feeds
+- **html**: a few crawlable sites (Playwright/Chromium)
+- **nvd**: the NVD CVE feed (optional API key for higher rate limits)
 
 The **source allowlist** (`ingestion/allowlist.py`) is the key control here. Only
 sources marked `status: approved` in `sources/allowlist.yaml` are fetched;
@@ -80,19 +80,19 @@ count, and license. In the parallel path, `ingestion/worker.py` handles one
 source per process; a bad source returns `status="failed"` instead of crashing the
 pool.
 
-## Stage 2 — Cleaning → `data/clean/` (+ `data/flagged/`, `data/dropped/`)
+## Stage 2: Cleaning → `data/clean/` (+ `data/flagged/`, `data/dropped/`)
 
 `cybersec-slm clean` (`cleaning/pipeline.py`) runs each record through a fixed
 order:
 
-1. **Text mapping** — build a `text` field from prose columns; feature-table rows
+1. **Text mapping**: build a `text` field from prose columns; feature-table rows
    with no prose are excluded from the text corpus.
-2. **Anomaly classification + sanitize** — structural problems → `data/dropped/`;
+2. **Anomaly classification + sanitize**: structural problems → `data/dropped/`;
    behavioral anomalies → `data/flagged/` for human review; sanitize can rescue a
    record.
-3. **Dedup** — exact and near-duplicate detection; duplicates → `data/dropped/`.
-4. **PII redaction** — Presidio (with a regex fallback) redacts PII in place.
-5. **Language** — non-English text is translated into English and kept; only
+3. **Dedup**: exact and near-duplicate detection; duplicates → `data/dropped/`.
+4. **PII redaction**: Presidio (with a regex fallback) redacts PII in place.
+5. **Language**: non-English text is translated into English and kept; only
    untranslatable text is dropped.
 
 Survivors land in `data/clean/`, mirroring the `data/raw/` layout. Drops and flags
@@ -105,11 +105,11 @@ In the parallel path, per-source workers run with dedup disabled, then
 `final_global_dedup()` makes one pass over `data/clean/` to catch duplicates shared
 across sources.
 
-## Stage 3 — EDA sufficiency gate → `logs/eda/`
+## Stage 3: EDA sufficiency gate → `logs/eda/`
 
 `cybersec-slm eda` (`eda/pipeline.py`) turns analysis into an enforcement point:
 
-1. Compute metrics over `data/clean/` — volume, per-subdomain balance, source
+1. Compute metrics over `data/clean/`: volume, per-subdomain balance, source
    concentration, text quality, duplicate rate.
 2. Compute drift versus the previous run (max change in subdomain distribution).
 3. Evaluate the gate against thresholds in `eda/config.py` (all env-overridable).
@@ -124,16 +124,16 @@ A blocker raises `SufficiencyError`, which halts the pipeline so you loop back t
 ingestion instead of advancing. Warnings are logged and tracked but do not stop the
 run. `--no-enforce` makes it report-only.
 
-## Stage 4 — Normalization → `data/final/dataset.jsonl`
+## Stage 4: Normalization → `data/final/dataset.jsonl`
 
 `cybersec-slm normalize` (`normalize/pipeline.py`) maps every surviving record onto
 the canonical 22-field schema and produces the release. Each record flows through:
 
-1. **Source mapper + registry dispatch** (`normalize/mappers.py`) — a `ProseMapper`
+1. **Source mapper + registry dispatch** (`normalize/mappers.py`): a `ProseMapper`
    for natural-language records, a `StructuredMapper` that renders table rows into
    readable "key: value" sentences. Unknown sources dispatch by record shape and
    raise a first-sight alert.
-2. **Enrichment** (`normalize/enrich.py`) — fills everything the mapper can't: a
+2. **Enrichment** (`normalize/enrich.py`): fills everything the mapper can't: a
    uuid4 `id`, the `content_hash`, auto-computed `lang` / `token_count` /
    `char_count`, pipeline version and timestamp, the resolved `domain_name` /
    `subdomain_name`, and placeholders for downstream-owned fields (snorkel labels →
@@ -143,14 +143,14 @@ the canonical 22-field schema and produces the release. Each record flows throug
    `rejected.jsonl`; raw text is gated behind `CYBERSEC_SLM_DEBUG_REJECTS=1`. A
    `FailureTracker` counts rejects per source, warns at 5, and hard-pauses a source
    at 20.
-4. **Near-duplicate check** (`normalize/dedup.py`) — MinHash/LSH at Jaccard 0.65,
+4. **Near-duplicate check** (`normalize/dedup.py`): MinHash/LSH at Jaccard 0.65,
    with every record's best-match score logged to `dedup_scores.jsonl`. Duplicates
    go to `duplicates.jsonl`.
-5. **Output** — survivors are appended to `dataset.jsonl` and the hash index is
+5. **Output**: survivors are appended to `dataset.jsonl` and the hash index is
    updated. State is rebuilt from any existing `dataset.jsonl`, so runs are
    resumable.
 
-Finally, the run writes the **provenance manifest** (`normalize/manifest.py`) — a
+Finally, the run writes the **provenance manifest** (`normalize/manifest.py`), a
 "datasheet for datasets": record counts by domain / source / license / format /
 language, the EDA snapshot, pipeline version, git commit, and a sha256 of the
 dataset file. See [canonical_schema.md](canonical_schema.md) for the field-by-field
@@ -158,15 +158,15 @@ contract.
 
 ## Orchestration, versioning, deployment
 
-- **Prefect** (`orchestration/flows.py`) — `cybersec-slm flow` wraps the same stage
+- **Prefect** (`orchestration/flows.py`): `cybersec-slm flow` wraps the same stage
   functions in a `build-corpus` flow: load secrets → ingest + clean per source
   (mapped, retried, isolated) → cross-source dedup → EDA gate → normalize →
   optional DVC snapshot. Prefect is optional; the decorators degrade to no-ops so
   the helpers stay unit-testable.
-- **DVC** (`dvc.yaml`) — `dvc repro` rebuilds the corpus and versions the outputs
+- **DVC** (`dvc.yaml`): `dvc repro` rebuilds the corpus and versions the outputs
   to an S3 remote, with the EDA and normalize reports tracked as metrics. See
   [dvc.md](../operations/dvc.md).
-- **AWS** — Dockerized, with a Terraform skeleton (ECR / ECS / S3 / IAM / Secrets
+- **AWS**: Dockerized, with a Terraform skeleton (ECR / ECS / S3 / IAM / Secrets
   Manager) and CI/CD. See [deploy.md](../operations/deploy.md).
 
 ## Security controls

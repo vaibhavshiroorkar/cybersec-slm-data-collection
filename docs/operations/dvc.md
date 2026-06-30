@@ -45,4 +45,4 @@ dvc checkout                           # restore that dataset.jsonl from S3
 
 To scope a contaminated source: read its rows from `logs/provenance/ledger.csv`
 and `data/final/manifest.json`, remove that source from `sources/allowlist.yaml`,
-and `dvc repro` to rebuild without it — the rest of the corpus is unaffected.
+and `dvc repro` to rebuild without it; the rest of the corpus is unaffected.

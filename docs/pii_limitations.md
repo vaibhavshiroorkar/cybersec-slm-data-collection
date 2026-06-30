@@ -1,9 +1,9 @@
-# PII Redaction — Known Limitations (Security Corpus)
+# PII Redaction: Known Limitations (Security Corpus)
 
 The cleaning stage redacts PII with Microsoft **Presidio** (regex recognizers +
 spaCy NER), falling back to a regex redactor when Presidio is not installed
 (`src/cybersec_slm/cleaning/pii.py`). Presidio's dominant failure mode is the
-**false negative** — sensitive data it lets through — and a *security* corpus is
+**false negative**: sensitive data it lets through, and a *security* corpus is
 unusually prone to it because the sensitive tokens don't look like the
 general-purpose PII Presidio was tuned for (threat model Stage 2: "PII Filter
 Blind Spots").
@@ -22,8 +22,8 @@ Blind Spots").
 
 ## Controls
 
-1. **Documented boundary** — this file. Treat it as the checklist when reviewing.
-2. **Scheduled manual review** — sample a random slice of "clean" data and check it
+1. **Documented boundary**: this file. Treat it as the checklist when reviewing.
+2. **Scheduled manual review**: sample a random slice of "clean" data and check it
    against the table above *before* it propagates downstream:
 
    ```bash
@@ -33,12 +33,12 @@ Blind Spots").
    Cadence: **every release**, and whenever a new source is added to the allowlist.
    Record findings; if a category recurs, add a custom Presidio recognizer or a
    regex rule to `cleaning/pii.py` and re-run cleaning for the affected sources.
-3. **Provenance** — because every record is traceable via the ingest ledger and the
+3. **Provenance**: because every record is traceable via the ingest ledger and the
    normalize `content_hash`, a leak found late can be scoped to its source and
    removed surgically (see `logs/provenance/ledger.csv`).
 
 ## Out of scope (handled elsewhere)
 
-- Emails, credit cards, phone numbers, person names — covered by the default
+- Emails, credit cards, phone numbers, person names: covered by the default
   Presidio/regex pass with acceptable recall.
-- License compliance — tracked separately in `sources/allowlist.yaml` + the ledger.
+- License compliance: tracked separately in `sources/allowlist.yaml` + the ledger.
