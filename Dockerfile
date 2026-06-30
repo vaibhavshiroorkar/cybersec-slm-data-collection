@@ -16,7 +16,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    CYBERSEC_SLM_DATA_ROOT=/data \
+    CYBERSEC_SLM_DATA_ROOT=/work \
     CYBERSEC_SLM_ENFORCE_ALLOWLIST=1
 
 WORKDIR /app
@@ -51,14 +51,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ── Unprivileged runtime user ──────────────────────────────────────────────────
 # Read access to /app + the browser cache is enough (root-created, world-readable).
-# Only /data (outputs) and /app/src (editable .pyc cache) need to be writable, so
-# chown just those — avoids duplicating the multi-GB venv into a `chown -R` layer.
+# Only /work (outputs: data/ + logs/) and /app/src (editable .pyc cache) need to be
+# writable, so chown just those — avoids duplicating the multi-GB venv into a
+# `chown -R` layer.
 RUN useradd --create-home --uid 10001 app \
-    && mkdir -p /data \
-    && chown -R app:app /data /app/src
+    && mkdir -p /work \
+    && chown -R app:app /work /app/src
 USER app
 
-VOLUME ["/data"]
+VOLUME ["/work"]
 
 # Default: full local build. The Prefect ECS worker overrides the command to run
 # the flow; secrets are injected at runtime from AWS Secrets Manager (not baked in).

@@ -18,7 +18,7 @@ yielded no records and decides, per source, whether the cause is recoverable:
 
 Retries run SERIALLY by default (--workers 1, in-process): the WinError 2 flood
 in the original run was a filesystem race between 6 workers creating/cleaning/
-deleting raw_data/ folders concurrently (made worse by Defender scanning the
+deleting data/raw/ folders concurrently (made worse by Defender scanning the
 malware-sample datasets), so healing one-at-a-time removes the race entirely.
 
     python tools/heal.py                       # heal all sub-domains, serial
@@ -147,12 +147,12 @@ def _heal_serial(candidates: list[dict], attempts: int,
         if max_source_mb:
             size_mb = _remote_size_mb(d)
             if size_mb and size_mb > max_source_mb:
-                print(f"[heal {n}/{len(candidates)}] row{r['excel_row']} "
+                print(f"[heal {n}/{len(candidates)}] row{r['row_idx']} "
                       f"{str(d.get('kind')):7} -> oversize_skipped "
                       f"({size_mb:.0f} MB > {max_source_mb:.0f})  {str(label)[:45]}",
                       flush=True)
-                results[r["excel_row"]] = {
-                    "excel_row": r["excel_row"], "name": label, "url": r["url"],
+                results[r["row_idx"]] = {
+                    "row_idx": r["row_idx"], "name": label, "url": r["url"],
                     "sub_domain": r["sub_domain"], "kind": d.get("kind"),
                     "status": "skipped", "in": 0, "out": 0,
                     "error": f"raw {size_mb:.0f} MB exceeds {max_source_mb:.0f} MB cap",
@@ -168,14 +168,14 @@ def _heal_serial(candidates: list[dict], attempts: int,
             except Exception as ex:               # never let one source stop healing
                 status, err = "failed", f"{type(ex).__name__}: {ex}"
             tag = _bucket(err, in_recs, out_recs)
-            print(f"[heal {n}/{len(candidates)}] row{r['excel_row']} "
+            print(f"[heal {n}/{len(candidates)}] row{r['row_idx']} "
                   f"{str(d.get('kind')):7} try{attempt} -> {tag} "
                   f"in={in_recs} out={out_recs}  {str(label)[:50]}", flush=True)
             if out_recs > 0 or not _is_transient(err):
                 break
             time.sleep(2 * attempt)               # brief backoff before retry
-        results[r["excel_row"]] = {
-            "excel_row": r["excel_row"], "name": label, "url": r["url"],
+        results[r["row_idx"]] = {
+            "row_idx": r["row_idx"], "name": label, "url": r["url"],
             "sub_domain": r["sub_domain"], "kind": d.get("kind"),
             "status": status, "in": in_recs, "out": out_recs, "error": err,
             "bucket": _bucket(err, in_recs, out_recs),
@@ -188,13 +188,13 @@ def _build_ledger(rows: list[dict], heal_results: dict[int, dict],
     """Reconcile every spreadsheet row into a final bucket and write the ledger."""
     buckets: dict[str, list[dict]] = {}
     for r in rows:
-        er = r["excel_row"]
+        er = r["row_idx"]
         if r["descriptor"] is None:
-            entry = {"excel_row": er, "name": r["name"], "url": r["url"],
+            entry = {"row_idx": er, "name": r["name"], "url": r["url"],
                      "sub_domain": r["sub_domain"], "kind": None,
                      "bucket": "unmappable", "error": "row did not map to a source"}
         else:
-            # ground truth: does clean_data/ now hold records for this row?
+            # ground truth: does data/clean/ now hold records for this row?
             _mb, lines = cs.clean_stats(cs.clean_dir_for(r["descriptor"]))
             src = heal_results.get(er) or prior.get(er) or {}
             in_recs = int(src.get("in", 0))
@@ -206,7 +206,7 @@ def _build_ledger(rows: list[dict], heal_results: dict[int, dict],
                 bucket = "oversize_skipped"
             else:
                 bucket = _bucket(err, in_recs, 0)
-            entry = {"excel_row": er, "name": r["name"], "url": r["url"],
+            entry = {"row_idx": er, "name": r["name"], "url": r["url"],
                      "sub_domain": r["sub_domain"],
                      "kind": r["descriptor"].get("kind"),
                      "bucket": bucket, "in": in_recs, "out": lines, "error": err}
@@ -252,7 +252,7 @@ def _write_ledger_md(ledger: dict) -> None:
             lines.append(f"### {k} — {blurb.get(k,'')}")
             for e in ledger["buckets"][k]:
                 err = f" — {e.get('error')}" if e.get("error") else ""
-                lines.append(f"- row {e['excel_row']} · {e['sub_domain']} · "
+                lines.append(f"- row {e['row_idx']} · {e['sub_domain']} · "
                              f"{e['name']} · {e.get('url','')}{err}")
             lines.append("")
     with open(LEDGER_MD, "w", encoding="utf-8") as f:
@@ -260,7 +260,7 @@ def _write_ledger_md(ledger: dict) -> None:
 
 
 def _defender_exclusion(path: str) -> None:
-    """Best-effort: exclude raw_data/ from Defender real-time scanning so fetching
+    """Best-effort: exclude data/raw/ from Defender real-time scanning so fetching
     the malware-sample datasets doesn't trigger quarantine mid-run. Needs admin;
     on failure we print the manual command instead of aborting."""
     try:
@@ -277,15 +277,15 @@ def _defender_exclusion(path: str) -> None:
               f"'{path}'\"", flush=True)
 
 
-def heal(sheet: str, subdomain: str | None, workers: int, attempts: int,
+def heal(subdomain: str | None, workers: int, attempts: int,
          add_exclusion: bool, max_source_mb: float = DEFAULT_MAX_SOURCE_MB) -> None:
     if add_exclusion:
         _defender_exclusion(core.RAW_DATA)
 
-    rows = cs.load_rows(sheet, subdomain)
+    rows = cs.load_rows(subdomain)
     prior = _prior_results()
 
-    # A row needs healing when clean_data/ holds no records for it AND it isn't a
+    # A row needs healing when data/clean/ holds no records for it AND it isn't a
     # known text-less table (prior run: ok, in>0, out==0) — those aren't failures.
     candidates = []
     for r in rows:
@@ -294,13 +294,13 @@ def heal(sheet: str, subdomain: str | None, workers: int, attempts: int,
         _mb, lines = cs.clean_stats(cs.clean_dir_for(r["descriptor"]))
         if lines > 0:
             continue
-        p = prior.get(r["excel_row"], {})
+        p = prior.get(r["row_idx"], {})
         if p.get("status") == "ok" and int(p.get("in", 0)) > 0 and int(p.get("out", 0)) == 0:
             continue                                   # text-less table: skip retry
         candidates.append(r)
 
     scope = subdomain or "all sub-domains"
-    print(f"[heal] sheet '{sheet}' / {scope}: {len(rows)} rows, "
+    print(f"[heal] {scope}: {len(rows)} rows, "
           f"{len(candidates)} need healing (workers={workers}, attempts={attempts})",
           flush=True)
 
@@ -317,7 +317,8 @@ def heal(sheet: str, subdomain: str | None, workers: int, attempts: int,
     except Exception as ex:
         print(f"[heal] final dedup skipped: {ex}", flush=True)
 
-    cs.mark_spreadsheet(sheet, cs.collect_stats(rows))
+    mappable = {r["row_idx"] for r in rows if r["descriptor"]}
+    cs.mark_csv(cs.collect_stats(rows), mappable)
     ledger = _build_ledger(rows, heal_results, prior)
 
     print("\n===== HEAL SUMMARY =====", flush=True)
@@ -338,13 +339,13 @@ def _heal_parallel(candidates: list[dict], workers: int, attempts: int,
     for r in candidates:
         size_mb = _remote_size_mb(r["descriptor"]) if max_source_mb else None
         if size_mb and size_mb > max_source_mb:
-            results[r["excel_row"]] = {
-                "excel_row": r["excel_row"], "name": r["name"], "url": r["url"],
+            results[r["row_idx"]] = {
+                "row_idx": r["row_idx"], "name": r["name"], "url": r["url"],
                 "sub_domain": r["sub_domain"], "kind": r["descriptor"].get("kind"),
                 "status": "skipped", "in": 0, "out": 0,
                 "error": f"raw {size_mb:.0f} MB exceeds {max_source_mb:.0f} MB cap",
                 "bucket": "oversize_skipped"}
-            print(f"[heal] row{r['excel_row']} oversize_skipped "
+            print(f"[heal] row{r['row_idx']} oversize_skipped "
                   f"({size_mb:.0f} MB)  {str(r['name'])[:45]}", flush=True)
         else:
             runnable.append(r)
@@ -364,12 +365,12 @@ def _heal_parallel(candidates: list[dict], workers: int, attempts: int,
                 status, err = meta.get("status"), meta.get("error")
             except Exception as ex2:
                 status, in_recs, out_recs, err = "failed", 0, 0, f"{type(ex2).__name__}: {ex2}"
-            results[r["excel_row"]] = {
-                "excel_row": r["excel_row"], "name": r["name"], "url": r["url"],
+            results[r["row_idx"]] = {
+                "row_idx": r["row_idx"], "name": r["name"], "url": r["url"],
                 "sub_domain": r["sub_domain"], "kind": r["descriptor"].get("kind"),
                 "status": status, "in": in_recs, "out": out_recs, "error": err,
                 "bucket": _bucket(err, in_recs, out_recs)}
-            print(f"[heal {n}/{len(candidates)}] row{r['excel_row']} "
+            print(f"[heal {n}/{len(candidates)}] row{r['row_idx']} "
                   f"{_bucket(err, in_recs, out_recs)} in={in_recs} out={out_recs} "
                   f"{str(r['name'])[:50]}", flush=True)
     return results
@@ -378,27 +379,26 @@ def _heal_parallel(candidates: list[dict], workers: int, attempts: int,
 def main():
     p = argparse.ArgumentParser(description="Retry failed/empty sources and ledger the rest")
     p.add_argument("action", nargs="?", default="heal", choices=["heal", "report"])
-    p.add_argument("--sheet", default=cs.DEFAULT_SHEET)
     p.add_argument("--subdomain", default=None)
     p.add_argument("--workers", type=int, default=1,
                    help="serial (1, default) avoids the WinError 2 folder race")
     p.add_argument("--attempts", type=int, default=2,
                    help="retries per source for transient failures")
     p.add_argument("--no-defender-exclusion", action="store_true",
-                   help="skip trying to add a raw_data/ Defender exclusion")
+                   help="skip trying to add a data/raw/ Defender exclusion")
     p.add_argument("--max-source-mb", type=float, default=DEFAULT_MAX_SOURCE_MB,
                    help="skip (ledger) sources whose raw exceeds this many MB "
                         "(0 = no cap)")
     args = p.parse_args()
 
     if args.action == "report":
-        rows = cs.load_rows(args.sheet, args.subdomain)
+        rows = cs.load_rows(args.subdomain)
         ledger = _build_ledger(rows, {}, _prior_results())
         for k, v in ledger["summary"].items():
             print(f"  {k:18}: {v}")
         print(f"ledger -> {LEDGER_MD}")
     else:
-        heal(args.sheet, args.subdomain, args.workers, args.attempts,
+        heal(args.subdomain, args.workers, args.attempts,
              add_exclusion=not args.no_defender_exclusion,
              max_source_mb=args.max_source_mb)
 

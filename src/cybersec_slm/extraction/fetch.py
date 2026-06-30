@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Unified dataset fetcher -> raw_data/<domain>/<owner>/ (original + jsonl).
+"""Unified dataset fetcher -> data/raw/<domain>/<owner>/ (original + jsonl).
 
 One handler per source kind (hf, kaggle, github, url), all sharing common.py.
 Files over the 5 GB cap are skipped but still recorded in the ingest log so they
-appear in the final table.
-
-    py -3.13 fetch.py            # fetch everything in manifest.DATASETS
-    py -3.13 fetch.py hf ai4privacy/pii-masking-200k "Data Security and Privacy" topic
+appear in the final table. The per-source streaming worker
+(:func:`cybersec_slm.extraction.worker.process_source`) calls these handlers.
 """
 
 import os
 import shutil
-import sys
 from urllib.parse import urlparse
 
 from .common import (
@@ -20,8 +17,6 @@ from .common import (
     ONE_MB,
     RAW_DATA,
     SKIP_SUBSTRINGS,
-    IngestLog,
-    OversizeError,
     category_of,
     count_lines,
     download,
@@ -319,41 +314,3 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         return
     _convert_and_log(orig, os.path.join(folder, stem + ".jsonl"), log,
                      kind=kind, name=stem, domain=domain, desc=desc, url=url, lic=lic)
-
-
-# --------------------------------------------------------------- driver ------
-def run(datasets, log=None):
-    log = log or IngestLog()
-    counts = {}
-    for entry in datasets:
-        kind, ref = entry[0], entry[1]
-        owner = ref.split("/")[0] if "/" in ref and kind in ("hf", "kaggle") else kind
-        counts[owner] = counts.get(owner, 0) + 1
-    for entry in datasets:
-        kind, ref, domain, desc, lic = entry[:5]
-        name = ref.split("/")[-1]
-        owner = ref.split("/")[0] if "/" in ref and kind in ("hf", "kaggle") else name
-        folder = _folder(domain, owner, name, counts)
-        logger.info(f"=== {kind}: {ref}  [{domain} / {desc}] ===")
-        try:
-            if kind == "hf":
-                fetch_hf(ref, domain, desc, lic, folder, log)
-            elif kind == "kaggle":
-                fetch_kaggle(ref, domain, desc, lic, folder, log)
-            elif kind in ("github", "url"):
-                fetch_url(entry[5], domain, desc, lic, folder, log, kind=kind)
-        except OversizeError as ex:
-            logger.warning(f"  oversize: {ex}")
-        except Exception as ex:
-            logger.error(f"  FAILED {ref}: {type(ex).__name__}: {ex}")
-            log.record(kind=kind, name=name, category=category_of(kind), domain=domain,
-                       description=desc, license=lic, status=f"failed: {type(ex).__name__}")
-
-
-if __name__ == "__main__":
-    if len(sys.argv) >= 5:
-        run([tuple(sys.argv[1:6])])
-    else:
-        from .manifest import DATASETS
-        run(DATASETS)
-    logger.info("=== FETCH DONE ===")

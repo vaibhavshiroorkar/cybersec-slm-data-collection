@@ -1,18 +1,18 @@
 # Cleaning
 
 Second stage of the pipeline. Reads the raw JSONL produced by
-[extraction](../extraction) under [`../raw_data`](../raw_data) and turns it into
-a clean, de-duplicated, PII-free, English-only corpus ready for EDA.
+[extraction](../extraction) under `data/raw/` and turns it into a clean,
+de-duplicated, PII-free, English-only corpus ready for EDA.
 
 ```
-raw_data/
+data/raw/
    │
    ▼
 Structural Sanitization     fix encoding, missing fields, date formats
    │
    ▼
-Anomaly Check ─ behavioral ──▶ ../flagged/  (→ Data Annotation Team)
-   │  structural: fix or drop ──▶ ../dropped/
+Anomaly Check ─ behavioral ──▶ data/flagged/  (→ Data Annotation Team)
+   │  structural: fix or drop ──▶ data/dropped/
    ▼
 Deduplication               exact (sha256) + near-dup (MinHash/LSH)
    │
@@ -22,21 +22,21 @@ PII Removal                 Presidio (→ regex fallback)
    ▼
 Language filtering          fastText lid.176 (→ langdetect/heuristic)
    │  non-English → translate to English (deep-translator → argos); keep
-   │  untranslatable non-English ──▶ ../dropped/
+   │  untranslatable non-English ──▶ data/dropped/
    ▼
-../clean_data/  → handoff for EDA
+data/clean/  → handoff for EDA
 ```
 
 ## Data flow
-- **Input:** `../raw_data/<Sub-Domain>/<source>/*.jsonl`
+- **Input:** `data/raw/<Sub-Domain>/<source>/*.jsonl`
   (records shaped `{source, url, license, page?, text}`; tolerant of missing/extra fields).
-- **Outputs** (project root, mirroring the raw_data layout):
-  - `../clean_data/…jsonl` — passed every stage. Original schema preserved
+- **Outputs** (under `data/`, mirroring the `data/raw` layout):
+  - `data/clean/…jsonl` — passed every stage. Original schema preserved
     (translated records gain `_orig_lang` and an English `text`).
-  - `../flagged/…jsonl` — behavioral anomalies for the annotation team (`_reason` added).
-  - `../dropped/…jsonl` — structural / duplicate / untranslatable-non-English drops (`_reason` added).
-  - `../logs/clean_report.csv` — per-file counts + a TOTAL row.
-  - `../logs/cleaning.log` — run log.
+  - `data/flagged/…jsonl` — behavioral anomalies for the annotation team (`_reason` added).
+  - `data/dropped/…jsonl` — structural / duplicate / untranslatable-non-English drops (`_reason` added).
+  - `logs/clean_report.csv` — per-file counts + a TOTAL row.
+  - `logs/cleaning.log` — run log.
 
 ## Modules
 | File | Purpose |
@@ -48,19 +48,19 @@ Language filtering          fastText lid.176 (→ langdetect/heuristic)
 | `pii.py` | Presidio analyze+anonymize → regex fallback (email/phone/IP/CC/SSN) |
 | `langfilter.py` | fastText `lid.176` → langdetect → stopword/script heuristic |
 | `translate.py` | non-English → English: deep-translator (Google) → argostranslate → no-op |
-| `pipeline.py` | runs the stages in order over raw_data + writes the report |
+| `pipeline.py` | runs the stages in order over `data/raw` + writes the report |
 | `run.py` | CLI: `all` / `sanitize` / `dedup` / `pii` / `lang` / `report` |
 Tests live in the top-level `tests/cleaning/` (pytest, no heavy deps needed).
 
 ## Usage
 ```bash
-cybersec-slm clean all              # full pipeline -> clean_data/ flagged/ dropped/ + report
+cybersec-slm clean all              # full pipeline -> data/clean/ data/flagged/ data/dropped/ + report
 cybersec-slm clean all --limit 100  # smoke run: cap 100 records per file
-cybersec-slm clean sanitize         # diagnostic single-stage run -> _stages/sanitize/
-cybersec-slm clean dedup            # -> _stages/dedup/
-cybersec-slm clean pii              # -> _stages/pii/
-cybersec-slm clean lang             # -> _stages/lang/
-cybersec-slm clean report           # recount existing clean_data/flagged/dropped trees
+cybersec-slm clean sanitize         # diagnostic single-stage run -> data/_stages/sanitize/
+cybersec-slm clean dedup            # -> data/_stages/dedup/
+cybersec-slm clean pii              # -> data/_stages/pii/
+cybersec-slm clean lang             # -> data/_stages/lang/
+cybersec-slm clean report           # recount existing data/clean, data/flagged, data/dropped trees
 ```
 
 ## Dependencies
@@ -85,5 +85,5 @@ uv sync                      # the cleaning stack + spaCy model + dev tools
 - Deduplication is **global across the corpus** and holds an in-memory MinHash/LSH
   index — fine at the current corpus size. For a much larger corpus, swap to a
   disk-backed index (e.g. datasketch's Redis/Cassandra backends) or shard by sub-domain.
-- Records keep their original schema in `clean_data/`; provenance/`_reason` fields
-  are attached only in `flagged/` and `dropped/`.
+- Records keep their original schema in `data/clean/`; provenance/`_reason` fields
+  are attached only in `data/flagged/` and `data/dropped/`.

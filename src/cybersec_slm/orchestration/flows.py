@@ -25,7 +25,7 @@ import os
 import shutil
 import subprocess
 
-from ..core import DATA_ROOT, logger
+from ..core import DATA_ROOT, FINAL_DATA, logger
 
 try:
     from prefect import flow, task
@@ -47,13 +47,13 @@ except Exception:                       # prefect not installed -> no-op decorat
 # Secrets the stages read from the environment. In AWS these come from Secrets
 # Manager (via prefect-aws blocks); locally from .env. Never embedded in the image.
 SECRET_KEYS = ("NVD_API_KEY", "KAGGLE_API_TOKEN", "GOOGLE_SEARCH_API_KEY",
-               "GOOGLE_SEARCH_ENGINE_ID", "GOOGLE_SHEETS_CREDENTIALS")
+               "GOOGLE_SEARCH_ENGINE_ID")
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 
 def _load_descriptors(spec: str | None = None) -> list[dict]:
     from ..extraction import sources
-    return sources.load_descriptors(spec) if spec else sources.manifest_descriptors()
+    return sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
 
 
 # --------------------------------------------------------------------- tasks ---
@@ -80,7 +80,7 @@ def load_secrets() -> list[str]:
 
 @task(retries=2, retry_delay_seconds=30, timeout_seconds=3600)
 def extract_clean_source(descriptor: dict) -> dict:
-    """Fetch + clean ONE source into clean_data/ (allowlist-gated in the worker)."""
+    """Fetch + clean ONE source into data/clean/ (allowlist-gated in the worker)."""
     from ..core import CLEAN_DATA
     from ..extraction import worker
     return worker.process_source(descriptor, data_root=DATA_ROOT,
@@ -111,7 +111,7 @@ def _dvc_snapshot(push: bool) -> None:
         logger.warning("orchestration: dvc not installed; skipping snapshot")
         return
     cmd = (["dvc", "repro"] if os.path.exists(os.path.join(_REPO_ROOT, "dvc.yaml"))
-           else ["dvc", "add", os.path.join(DATA_ROOT, "final_data", "dataset.jsonl")])
+           else ["dvc", "add", os.path.join(FINAL_DATA, "dataset.jsonl")])
     try:
         subprocess.run(cmd, cwd=_REPO_ROOT, check=True)
         if push:

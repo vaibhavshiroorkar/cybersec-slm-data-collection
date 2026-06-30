@@ -2,13 +2,13 @@
 """Parallel streaming orchestrator.
 
 Runs many sources concurrently across CPU cores. Each source flows
-fetch -> JSONL -> clean -> clean_data/ -> delete raw inside a worker process
+fetch -> JSONL -> clean -> data/clean/ -> delete raw inside a worker process
 (:func:`cybersec_slm.extraction.worker.process_source`). The parent owns the
 SQLite ingest log (workers buffer rows and return them, so SQLite is only ever
 written from one process), and runs the single cross-source dedup pass after the
 pool drains.
 
-    cybersec-slm run --sources sources.xlsx --workers 4
+    cybersec-slm run --sources sources/Sources.csv --workers 4
 """
 
 from __future__ import annotations
@@ -29,20 +29,19 @@ def _default_workers() -> int:
     return min(os.cpu_count() or 4, 8)
 
 
-def run_streaming(spec: str | None = None, *, sheet: str | int | None = None,
+def run_streaming(spec: str | None = None, *,
                   workers: int | None = None, keep_raw: bool = False,
                   limit: int | None = None, final_dedup: bool = True) -> None:
     """Fetch + clean every source in parallel; one final global dedup pass.
 
-    `spec` is a path/URL to a sources spreadsheet; when omitted the built-in
-    `manifest.py` catalog is used.
+    `spec` is a local path to a sources CSV; when omitted the default catalog
+    `sources/Sources.csv` (``sources.DEFAULT_CATALOG``) is used.
     """
-    # Pin the data root so spawned workers resolve the same raw_data/clean_data
+    # Pin the data root so spawned workers resolve the same data/raw + data/clean
     # paths as the parent (core.DATA_ROOT is frozen at import from this value).
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
 
-    descriptors = (sources.load_descriptors(spec, sheet) if spec
-                   else sources.manifest_descriptors())
+    descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
     if not descriptors:
         logger.warning("no sources to process")
         return

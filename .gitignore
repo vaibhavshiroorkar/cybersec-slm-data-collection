@@ -22,19 +22,14 @@ __pycache__
 build/
 dist/
 
-# Pipeline data (generated, too large for git)
-# (READMEs inside these are force-added so the folders survive a clone)
-raw_data/
+# Pipeline data — every generated corpus artifact lives under data/
+# (raw, clean, final, flagged, dropped, _stages). Regenerated, too large for git.
+data/
 
-# Source tracking belongs in sources/, not raw_data/
-# Move Sources.xlsx -> sources/Sources.xlsx
+# Spreadsheets — the curated catalog is sources/Sources.csv (committed); any
+# stray .xlsx/.xls export stays out of git.
 *.xlsx
 *.xls
-final_data/
-clean_data/
-flagged/
-dropped/
-_stages/
 
 # fastText language-id model (downloaded locally, or set FASTTEXT_LID_MODEL)
 lid.176.ftz

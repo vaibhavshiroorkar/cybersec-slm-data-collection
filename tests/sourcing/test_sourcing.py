@@ -4,11 +4,7 @@ from cybersec_slm.sourcing import keywords as kw
 from cybersec_slm.sourcing.classify import infer_category_and_format, refine_domain
 from cybersec_slm.sourcing.row import SHEET_COLUMNS, build_row, row_to_list
 from cybersec_slm.sourcing.search import Result, _parse_items
-from cybersec_slm.sourcing.sheet import (
-    _links_from_csv,
-    extract_spreadsheet_id,
-    normalize_url,
-)
+from cybersec_slm.sourcing.sheet import append_rows, existing_links, normalize_url
 
 # ----------------------------------------------------------------- keywords ---
 
@@ -65,8 +61,9 @@ def test_build_row_fills_known_fields_only():
     assert row["Dataset Link"] == res.link
     assert row["Category"] == "Dataset"
     assert row["Date Added"] == "01/01/2026"
-    # Extraction-dependent fields stay blank.
-    for blank in ("File Count", "Total Lines", "Verified?", "Uploaded?", "License"):
+    # Extraction/cleaning-dependent fields stay blank.
+    for blank in ("File Count", "Total Lines", "Verified?", "Uploaded?", "License",
+                  "Cleaned?", "Cleaned Size (MB)", "Cleaned Lines"):
         assert row[blank] == ""
 
 
@@ -87,20 +84,30 @@ def test_normalize_url_canonicalizes():
     assert a == b == "example.com/path"
 
 
-def test_extract_spreadsheet_id():
-    url = ("https://docs.google.com/spreadsheets/d/ABC_123-xyz/edit#gid=0")
-    assert extract_spreadsheet_id(url) == "ABC_123-xyz"
-    assert extract_spreadsheet_id("ABC_123-xyz") == "ABC_123-xyz"
+def test_append_rows_and_existing_links_round_trip(tmp_path):
+    import csv as _csv
 
+    csv_path = str(tmp_path / "Sources.csv")
+    res = Result(title="Foo", link="https://huggingface.co/datasets/foo/bar",
+                 snippet="desc")
+    rows = [build_row(res, "Cloud Security", today="01/01/2026")]
 
-def test_links_from_csv_reads_dataset_link_column():
-    csv_text = (
-        "Name,Sub-Domain,Description,Dataset Link,Category\n"
-        "Foo,Cloud Security,desc,https://huggingface.co/datasets/foo/bar,Dataset\n"
-        "Bar,Network Security,desc,https://github.com/baz/qux,Repository\n")
-    links = _links_from_csv(csv_text)
+    # Append to a fresh catalog -> creates it with the 19-col header.
+    assert append_rows(csv_path, rows) == 1
+    with open(csv_path, encoding="utf-8") as f:
+        header, *data = list(_csv.reader(f))
+    assert header == list(SHEET_COLUMNS)              # 19 cols, canonical order
+    assert len(data) == 1
+    # Unfilled cells are blank strings, never the literal "nan".
+    assert "nan" not in [c.strip().lower() for c in data[0]]
+
+    # existing_links recognizes the appended link (normalized).
+    links = existing_links(csv_path)
     assert normalize_url("https://huggingface.co/datasets/foo/bar") in links
-    assert normalize_url("https://github.com/baz/qux") in links
+
+    # A second append with the same link still writes (dedup is the caller's job),
+    # and existing_links on a missing file is just empty.
+    assert existing_links(str(tmp_path / "nope.csv")) == set()
 
 
 # ----------------------------------------------------------- search parsing ---

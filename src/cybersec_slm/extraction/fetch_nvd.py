@@ -131,21 +131,3 @@ def fetch_nvd(domain: str, slug: str, title: str, lic: str, base_url: str,
                description=title, source_url=base_url, origin_format="json",
                jsonl_mb=round(size / ONE_MB, 1), rows=written,
                sha256=sha256_file(out_path), license=lic, status="ok")
-
-
-def run(log: IngestLog | None = None, api_key: str | None = None) -> None:
-    from .manifest import APIS
-    log = log or IngestLog()
-    key = api_key or os.environ.get("NVD_API_KEY")
-    for entry in APIS:
-        try:
-            fetch_nvd(*entry, log=log, api_key=key)
-        except Exception as ex:
-            logger.error(f"  FAILED {entry[1]}: {type(ex).__name__}: {ex}")
-
-
-if __name__ == "__main__":
-    import sys
-    key = sys.argv[1] if len(sys.argv) > 1 else None
-    run(api_key=key)
-    logger.info("=== NVD DONE ===")

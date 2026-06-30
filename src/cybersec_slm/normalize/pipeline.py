@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Schema-normalization orchestrator — walks the flowchart end to end.
 
-    Raw cleaned record (clean_data/)
+    Raw cleaned record (data/clean/)
         -> Source Mapper (prose / structured)  -> Registry Dispatch
         -> build_record (id, content_hash, lang/counts, labels, placeholders)
         -> Pydantic Validation ──invalid──> rejected.jsonl (metadata-only) ;
@@ -12,7 +12,7 @@
         -> Update Hash List (seen + LSH)
         -> Handoff to annotation team
 
-Outputs land under ``final_data/``: ``dataset.jsonl`` (the corpus),
+Outputs land under ``data/final/``: ``dataset.jsonl`` (the corpus),
 ``rejected.jsonl`` and ``duplicates.jsonl`` sinks, and ``dedup_scores.jsonl``
 (near-dup audit). State is rebuilt from an existing ``dataset.jsonl`` so the run
 is resumable.
@@ -63,7 +63,7 @@ def _short_reason(exc: Exception) -> str:
 
 
 def _default_input() -> str:
-    """Use clean_data/ (streaming per-source output)."""
+    """Use data/clean/ (streaming per-source output)."""
     return CLEAN_DATA
 
 
@@ -216,9 +216,9 @@ def run_normalization(input_dir: str | None = None, *, resume: bool = True,
 
 def main():
     p = argparse.ArgumentParser(
-        description="Schema-normalize cleaned records into final_data/dataset.jsonl")
+        description="Schema-normalize cleaned records into data/final/dataset.jsonl")
     p.add_argument("--input", default=None,
-                   help="cleaned-records root (default: clean_data/)")
+                   help="cleaned-records root (default: data/clean/)")
     p.add_argument("--fresh", action="store_true",
                    help="ignore any existing dataset.jsonl (do not resume/append)")
     p.add_argument("--limit", type=int, default=None, help="cap records per file (debug)")

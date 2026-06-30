@@ -250,3 +250,15 @@ sources:
   license: to-verify
   url: https://www.kaggle.com/datasets/shashwatwork/web-page-phishing-detection-dataset
   status: approved
+- id: https://services.nvd.nist.gov/rest/json/cves/2.0
+  kind: api
+  domain: Penetration Testing and Vulnerability Management
+  license: Public Domain (U.S. Government work, 17 U.S.C. 105)
+  url: https://services.nvd.nist.gov/rest/json/cves/2.0
+  status: approved
+- id: https://cwe.mitre.org/data/xml/cwec_latest.xml.zip
+  kind: xml
+  domain: Penetration Testing and Vulnerability Management
+  license: MITRE CWE Terms of Use (free use with attribution)
+  url: https://cwe.mitre.org/data/xml/cwec_latest.xml.zip
+  status: approved

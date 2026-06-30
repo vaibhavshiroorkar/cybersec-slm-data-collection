@@ -7,23 +7,24 @@ explains what happens inside.
 ## Overview
 
 The pipeline turns scattered cybersecurity text into a single clean,
-schema-standardized, training-ready corpus (`final_data/dataset.jsonl`) plus a
+schema-standardized, training-ready corpus (`data/final/dataset.jsonl`) plus a
 provenance manifest. It is an installable package (`cybersec_slm`) driven by one
 CLI (`src/cybersec_slm/cli.py`).
 
 ```
 Sourcing  →  Extraction  →  Cleaning   →  EDA gate  →  Normalization  →  dataset.jsonl
-(optional)    raw_data/     clean_data/   (pass?)       final_data/        + manifest.json
+(optional)    data/raw/     data/clean/   (pass?)       data/final/        + manifest.json
 ```
 
 Two ideas shape everything:
 
 - **Everything resolves around a data root.** `core.py` defines the working
-  folders (`raw_data/`, `clean_data/`, `final_data/`, `flagged/`, `dropped/`,
-  `logs/`) relative to `CYBERSEC_SLM_DATA_ROOT`, falling back to the current
-  directory. These folders are generated and git-ignored, so the repository stays
-  code-only. `core.py` also holds the shared logger and the JSONL read/write and
-  hashing helpers used by every stage.
+  folders relative to `CYBERSEC_SLM_DATA_ROOT` (falling back to the current
+  directory). Every generated corpus artifact lives under a single `data/` folder
+  (`data/raw/`, `data/clean/`, `data/final/`, `data/flagged/`, `data/dropped/`),
+  with run logs in `logs/` alongside it. These are generated and git-ignored, so the
+  repository stays code-only. `core.py` also holds the shared logger and the JSONL
+  read/write and hashing helpers used by every stage.
 - **Security is part of the flow, not a layer on top.** A version-controlled
   source allowlist gates extraction; reject logs are metadata-only; every release
   ships a content-hashed manifest so a bad batch can be scoped and rolled back.
@@ -38,9 +39,9 @@ The same logical work runs in one of two ways:
 | Driver | `cli.py` | `extraction/parallel.py`, `orchestration/flows.py` |
 | Extraction + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
 | Dedup | global, inline during cleaning | per-source workers skip it; one final cross-source pass |
-| Output | `clean_data/` | `clean_data/` |
+| Output | `data/clean/` | `data/clean/` |
 
-Downstream stages auto-detect the input directory (`clean_data/`), so both modes
+Downstream stages auto-detect the input directory (`data/clean/`), so both modes
 feed the same EDA gate and normalizer.
 
 ## Stage 0 — Sourcing *(optional)*
@@ -49,12 +50,13 @@ feed the same EDA gate and normalizer.
 cybersecurity sub-domain it runs keyword searches through Google Programmable
 Search, builds a candidate row per hit, drops any URL already in the tracking
 sheet (or seen earlier in the run), writes the survivors to a CSV under
-`logs/discovered/`, and — unless `--dry-run` — appends them to a Google Sheet.
+`logs/discovered/`, and — unless `--dry-run` — appends them to the local catalog
+(`sources/Sources.csv`).
 
 This stage only *proposes* sources for a human to review. Nothing here reaches
 extraction directly; the gate between "discovered" and "fetched" is the allowlist.
 
-## Stage 1 — Extraction → `raw_data/`
+## Stage 1 — Extraction → `data/raw/`
 
 `cybersec-slm extract` (`extraction/run.py`) pulls each source through its handler
 and normalizes everything to JSONL:
@@ -78,36 +80,36 @@ count, and license. In the parallel path, `extraction/worker.py` handles one
 source per process; a bad source returns `status="failed"` instead of crashing the
 pool.
 
-## Stage 2 — Cleaning → `clean_data/` (+ `flagged/`, `dropped/`)
+## Stage 2 — Cleaning → `data/clean/` (+ `data/flagged/`, `data/dropped/`)
 
 `cybersec-slm clean` (`cleaning/pipeline.py`) runs each record through a fixed
 order:
 
 1. **Text mapping** — build a `text` field from prose columns; feature-table rows
    with no prose are excluded from the text corpus.
-2. **Anomaly classification + sanitize** — structural problems → `dropped/`;
-   behavioral anomalies → `flagged/` for human review; sanitize can rescue a
+2. **Anomaly classification + sanitize** — structural problems → `data/dropped/`;
+   behavioral anomalies → `data/flagged/` for human review; sanitize can rescue a
    record.
-3. **Dedup** — exact and near-duplicate detection; duplicates → `dropped/`.
+3. **Dedup** — exact and near-duplicate detection; duplicates → `data/dropped/`.
 4. **PII redaction** — Presidio (with a regex fallback) redacts PII in place.
 5. **Language** — non-English text is translated into English and kept; only
    untranslatable text is dropped.
 
-Survivors land in `clean_data/`, mirroring the `raw_data/` layout. Drops and flags
+Survivors land in `data/clean/`, mirroring the `data/raw/` layout. Drops and flags
 are annotated with `_stage` and `_reason`, and a per-file report is written to
 `logs/clean_report.csv`. Every step degrades gracefully: if an optional tool is
 missing it falls back to a standard-library heuristic and logs which backend it
 used.
 
 In the parallel path, per-source workers run with dedup disabled, then
-`final_global_dedup()` makes one pass over `clean_data/` to catch duplicates shared
+`final_global_dedup()` makes one pass over `data/clean/` to catch duplicates shared
 across sources.
 
 ## Stage 3 — EDA sufficiency gate → `logs/eda/`
 
 `cybersec-slm eda` (`eda/pipeline.py`) turns analysis into an enforcement point:
 
-1. Compute metrics over `clean_data/` — volume, per-subdomain balance, source
+1. Compute metrics over `data/clean/` — volume, per-subdomain balance, source
    concentration, text quality, duplicate rate.
 2. Compute drift versus the previous run (max change in subdomain distribution).
 3. Evaluate the gate against thresholds in `eda/config.py` (all env-overridable).
@@ -122,7 +124,7 @@ A blocker raises `SufficiencyError`, which halts the pipeline so you loop back t
 ingestion instead of advancing. Warnings are logged and tracked but do not stop the
 run. `--no-enforce` makes it report-only.
 
-## Stage 4 — Normalization → `final_data/dataset.jsonl`
+## Stage 4 — Normalization → `data/final/dataset.jsonl`
 
 `cybersec-slm normalize` (`normalize/pipeline.py`) maps every surviving record onto
 the canonical 22-field schema and produces the release. Each record flows through:
@@ -189,17 +191,20 @@ in [pii_limitations.md](../pii_limitations.md).
 
 ## Data layout
 
+All generated corpus artifacts live under one `data/` folder, with run logs in
+`logs/` alongside it:
+
 | Folder | Produced by | Purpose |
 |---|---|---|
-| `raw_data/` | extraction | normalized JSONL per source |
-| `clean_data/` | cleaning | the cleaned corpus → EDA handoff |
-| `flagged/` | cleaning | behavioral anomalies for human review |
-| `dropped/` | cleaning / dedup | removed records, each with a `_reason` |
-| `final_data/` | normalization | `dataset.jsonl` + `manifest.json` + reject/dup sinks |
+| `data/raw/` | extraction | normalized JSONL per source |
+| `data/clean/` | cleaning | the cleaned corpus → EDA handoff |
+| `data/flagged/` | cleaning | behavioral anomalies for human review |
+| `data/dropped/` | cleaning / dedup | removed records, each with a `_reason` |
+| `data/final/` | normalization | `dataset.jsonl` + `manifest.json` + reject/dup sinks |
 | `logs/` | all stages | run logs, EDA history, clean/normalize reports, provenance ledger |
 
-All of these are resolved from `CYBERSEC_SLM_DATA_ROOT` (default: current
-directory) and are git-ignored.
+Both `data/` and `logs/` are resolved relative to `CYBERSEC_SLM_DATA_ROOT`
+(default: current directory) and are git-ignored.
 
 ## Configuration
 
