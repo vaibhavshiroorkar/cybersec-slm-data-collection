@@ -50,6 +50,7 @@ uv run cybersec-slm normalize           # canonical 22-field dataset            
 | `source [--dry-run]` | Discover sources via search engines → `sources/Sources.csv` |
 | `flow [--dvc-push]` | Run the pipeline via Prefect (needs the `orchestration` extra) |
 | `validate` | Check `data/clean/` records against the schema |
+| `dashboard [--port N]` | Read-only Streamlit monitor + dataset explorer (needs `--extra dashboard`) |
 | `all [--resume]` | Run the full pipeline, end to end |
 
 ### Per-command flags
@@ -117,6 +118,23 @@ Re-runs are cheap: `--resume` skips sources already fetched+cleaned and picks th
 final dedup pass back up where it stopped, so an interrupted build doesn't
 re-download multi-GB sources. See
 [architecture.md](architecture/architecture.md) for what happens inside each stage.
+
+## Dashboard
+
+A local-first, read-only web UI to monitor the pipeline (live + historical) and
+explore the corpus. It's an optional extra, so a plain install stays lean:
+
+```bash
+uv sync --extra dashboard          # installs Streamlit
+uv run cybersec-slm dashboard      # -> http://localhost:8501  (--port to change)
+```
+
+Two pages: **Pipeline** (live run strip, EDA sufficiency gate, trends over past
+runs, source table, stage reports, manifest) and **Dataset** (filter/search/browse
+the final corpus + the rejected/duplicate sinks). It reads whatever the pipeline
+wrote under `CYBERSEC_SLM_DATA_ROOT`, so pointing that at a synced location serves a
+hosted deploy without code changes. See
+[src/cybersec_slm/dashboard/README.md](../src/cybersec_slm/dashboard/README.md).
 
 ## Docker
 
