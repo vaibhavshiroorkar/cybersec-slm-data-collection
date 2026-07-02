@@ -353,6 +353,22 @@ class IngestLog:
             f"VALUES ({','.join('?' * len(self.COLS))})", vals)
         self.con.commit()
 
+    def record_many(self, rows: list[dict]) -> None:
+        """Insert many rows in one transaction (a single commit/fsync).
+
+        Used by the streaming parent to replay each source's buffered ingest rows;
+        far cheaper than committing per row when there are many sources/files.
+        """
+        if not rows:
+            return
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        vals = [[(kw.get("ts") or now) if c == "ts" else kw.get(c)
+                 for c in self.COLS] for kw in rows]
+        self.con.executemany(
+            f"INSERT INTO ingest ({','.join(self.COLS)}) "
+            f"VALUES ({','.join('?' * len(self.COLS))})", vals)
+        self.con.commit()
+
     def table(self) -> pd.DataFrame:
         return pd.read_sql_query("SELECT * FROM ingest ORDER BY domain, name", self.con)
 

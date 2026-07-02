@@ -21,6 +21,7 @@ from ..core import (  # noqa: F401
     STAGES,
     JsonlWriter,
     iter_jsonl,
+    json_dumps,
     logger,
     try_import,
 )

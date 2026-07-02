@@ -30,19 +30,22 @@ Two ideas shape everything:
   ships a content-hashed manifest so a bad batch can be scoped and rolled back.
   See [Security controls](#security-controls).
 
-## Two run modes
+## One run mode: parallel streaming
 
-The same logical work runs in one of two ways:
+Ingestion and cleaning are fused and run in parallel. `cybersec-slm run` and
+`cybersec-slm all` both drive `ingestion/parallel.py::run_streaming`; the Prefect
+`flow` wraps the same per-source function. One worker process per source does
+fetch → clean → delete raw (`ingestion/worker.py`), sources are isolated (a bad one
+returns `status="failed"` instead of crashing the pool), and after the pool drains a
+single cross-source dedup pass runs over `data/clean/`. `run` stops there; `all` and
+`flow` continue into the EDA gate and normalizer.
 
-| | Sequential (`cybersec-slm all`) | Parallel / streaming (`cybersec-slm run` / `flow`) |
-|---|---|---|
-| Driver | `cli.py` | `ingestion/parallel.py`, `orchestration/flows.py` |
-| Ingestion + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
-| Dedup | global, inline during cleaning | per-source workers skip it; one final cross-source pass |
-| Output | `data/clean/` | `data/clean/` |
-
-Downstream stages auto-detect the input directory (`data/clean/`), so both modes
-feed the same EDA gate and normalizer.
+**Resumable, cheap re-runs.** `--resume` skips sources already fetched+cleaned in a
+prior run (recorded per-source in `logs/completed_sources.txt`, keyed by the
+allowlist `descriptor_key`) and picks the final dedup pass back up where it stopped,
+so an interrupted build never re-downloads multi-GB sources. A fresh run (the
+default) resets that ledger and the dedup checkpoint so nothing is silently skipped.
+Failed sources are never recorded, so they retry on the next run.
 
 ## Stage 0: Sourcing *(optional)*
 
@@ -76,14 +79,15 @@ checkout still runs, and `CYBERSEC_SLM_ENFORCE_ALLOWLIST=1` forces enforcement
 
 Ingestion maintains a SQLite ingest log, a provenance ledger
 (`logs/provenance/ledger.csv`), and a summary table of every source's size, row
-count, and license. In the parallel path, `ingestion/worker.py` handles one
-source per process; a bad source returns `status="failed"` instead of crashing the
-pool.
+count, and license. `ingestion/worker.py` handles one source per process; a bad
+source returns `status="failed"` instead of crashing the pool. The parent also
+appends each completed source to `logs/completed_sources.txt`, the ledger that
+`--resume` reads to skip already-finished work.
 
 ## Stage 2: Cleaning → `data/clean/` (+ `data/flagged/`, `data/dropped/`)
 
-`cybersec-slm clean` (`cleaning/pipeline.py`) runs each record through a fixed
-order:
+Cleaning (`cleaning/pipeline.py`, run per source inside the worker) runs each
+record through a fixed order:
 
 1. **Text mapping**: build a `text` field from prose columns; feature-table rows
    with no prose are excluded from the text corpus.
@@ -101,9 +105,13 @@ are annotated with `_stage` and `_reason`, and a per-file report is written to
 missing it falls back to a standard-library heuristic and logs which backend it
 used.
 
-In the parallel path, per-source workers run with dedup disabled, then
+Per-source workers run with dedup disabled; after the pool drains,
 `final_global_dedup()` makes one pass over `data/clean/` to catch duplicates shared
-across sources.
+across sources. That pass is deterministic (files processed in sorted order, so
+which of two cross-source duplicates survives is stable) and checkpointed: the
+exact-hash set (`logs/dedup_checkpoint.json`) and the list of finished files
+(`logs/dedup_done.json`) are written after each file, so `--resume` restarts an
+interrupted dedup where it stopped instead of from zero.
 
 ## Stage 3: EDA sufficiency gate → `logs/eda/`
 

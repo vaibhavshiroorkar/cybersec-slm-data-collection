@@ -41,10 +41,9 @@ os.makedirs(os.path.join(PROJECT, "logs"), exist_ok=True)
 os.chdir(PROJECT)
 os.environ["CYBERSEC_SLM_DATA_ROOT"] = PROJECT
 
-from cybersec_slm import core                              # noqa: E402
-from cybersec_slm.cleaning import pipeline                 # noqa: E402
-from cybersec_slm.ingestion import sources, worker        # noqa: E402
-
+from cybersec_slm import core  # noqa: E402
+from cybersec_slm.cleaning import pipeline  # noqa: E402
+from cybersec_slm.ingestion import sources, worker  # noqa: E402
 
 # --------------------------------------------------------------- dependencies --
 # import-name -> (pip package, what it does). We install ONLY the modules that

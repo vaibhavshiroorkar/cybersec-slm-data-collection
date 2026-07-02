@@ -31,7 +31,7 @@ import os
 from pydantic import ValidationError
 
 from ..cleaning.common import find_input_files
-from ..core import CLEAN_DATA, FINAL_DATA, LOGS, iter_jsonl, logger
+from ..core import CLEAN_DATA, FINAL_DATA, LOGS, iter_jsonl, json_dumps, logger
 from . import mappers
 from .dedup import FailureTracker, NearDuplicateIndex
 from .enrich import build_record
@@ -79,7 +79,7 @@ class _Sink:
         if self._fh is None:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             self._fh = open(self.path, self._mode, encoding="utf-8")
-        self._fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._fh.write(json_dumps(rec) + "\n")
 
     def close(self) -> None:
         if self._fh is not None:

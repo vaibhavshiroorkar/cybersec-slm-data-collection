@@ -25,18 +25,22 @@ directory):
 - logs      → `logs/pipeline.log`
 - ingest db → `logs/ingest_log.sqlite`
 - table     → `logs/final_table.csv`
+- resume    → `logs/completed_sources.txt` (sources finished this build; read by `--resume`)
 
 ## Usage
 Ingestion is not a standalone command, it runs fused with cleaning, one process
 per source, via the streaming path:
 
 ```bash
-cybersec-slm run    # parallel per-source fetch + clean -> data/clean/
-cybersec-slm all    # run + EDA gate + normalize (full pipeline)
+cybersec-slm run             # parallel per-source fetch + clean -> data/clean/
+cybersec-slm run --resume    # skip sources already fetched+cleaned; resume the dedup
+cybersec-slm all             # run + EDA gate + normalize (full pipeline)
 ```
 
 Sources come from `sources/Sources.csv` (see `sources.py`); only rows `approved`
-in `sources/allowlist.yaml` are fetched.
+in `sources/allowlist.yaml` are fetched. Each completed source is appended to
+`logs/completed_sources.txt`, the ledger `--resume` reads to skip finished work
+(a fresh run resets it).
 
 ## Notes
 - A 5 GB cap (`common.CAP_BYTES`) guards both downloads and produced JSONL;

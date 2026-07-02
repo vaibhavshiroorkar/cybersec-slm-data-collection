@@ -15,6 +15,7 @@ import csv
 import json
 import os
 import tempfile
+import time
 
 from . import anomaly, sanitize, textmap
 from .common import (
@@ -29,6 +30,7 @@ from .common import (
     JsonlWriter,
     find_input_files,
     iter_jsonl,
+    json_dumps,
     logger,
     text_of,
 )
@@ -37,7 +39,9 @@ from .langfilter import LangFilter
 from .pii import Redactor
 from .translate import Translator
 
-DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")
+DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")   # exact-hash set
+DEDUP_DONE = os.path.join(LOGS, "dedup_done.json")         # files finished this pass
+DEDUP_CKPT_INTERVAL_S = 30.0                               # min seconds between checkpoints
 
 REPORT_COLS = ["sub_domain", "source", "file", "in", "mapped_text",
                "excluded_no_text", "sanitized", "struct_fixed", "struct_dropped",
@@ -60,14 +64,14 @@ def _new_counts():
 
 
 def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
-                out_flagged, out_dropped, limit: int | None = None,
-                checkpoint_path: str | None = None) -> list[dict]:
+                out_flagged, out_dropped, limit: int | None = None) -> list[dict]:
     """Run the cleaning stages over `files` into the given output roots.
 
     `files` is an iterable of (abs_path, sub_domain, source, rel) as produced by
     `find_input_files`. The stateful objects (deduper/redactor/langf/translator)
-    are passed in so callers control sharing — one global deduper for `run_all`,
-    a disabled per-source deduper for `clean_one_source`. Returns report rows.
+    are passed in so callers control sharing — the parallel per-source worker
+    passes a disabled deduper (`clean_one_source`), because global cross-source
+    dedup runs later in one pass (`final_global_dedup`). Returns report rows.
     """
     rows: list[dict] = []
     for ap, sub, source, rel in files:
@@ -96,7 +100,6 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
                     c["mapped_text"] += 1
                     rec = {**rec, "text": mapped, "_text_field": tfield}
 
-                pre_bucket, _ = anomaly.classify(rec)
                 rec2, changed = sanitize.sanitize_record(rec)
                 if changed:
                     c["sanitized"] += 1
@@ -106,14 +109,21 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
                     c["struct_dropped"] += 1
                     dw.write(_annotate(rec2, sub, source, rel, "anomaly", reason))
                     continue
-                if pre_bucket == "structural":      # sanitize rescued it
+                # struct_fixed = sanitize rescued a structurally-broken record. An
+                # unchanged record classifies identically pre/post, so the (heavy)
+                # pre-sanitize classify runs only for changed survivors — it exists
+                # purely for this counter.
+                if changed and anomaly.classify(rec)[0] == "structural":
                     c["struct_fixed"] += 1
                 if bucket == "behavioral":
                     c["behavioral_flagged"] += 1
                     fw.write(_annotate(rec2, sub, source, rel, "anomaly", reason))
                     continue
 
-                is_dup, dreason = deduper.add(text_of(rec2))
+                # One text extraction per record, threaded through the remaining
+                # stages (text_of rescans fields + strips on every call).
+                txt = text_of(rec2)
+                is_dup, dreason = deduper.add(txt)
                 if is_dup:
                     if "exact" in dreason:
                         c["exact_dups"] += 1
@@ -122,16 +132,17 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
                     dw.write(_annotate(rec2, sub, source, rel, "dedup", dreason))
                     continue
 
-                new_text, npii = redactor.redact(text_of(rec2))
+                new_text, npii = redactor.redact(txt)
                 if npii:
                     c["pii_redacted"] += 1
                     rec2["text"] = new_text
+                    txt = new_text
 
-                lang = langf.detect(text_of(rec2))
+                lang = langf.detect(txt)
                 if not langf.lang_allowed(lang):
                     # Confidently non-allowed: translate into English and keep,
                     # rather than dropping. Drop only if translation is impossible.
-                    translated, ok = translator.translate(text_of(rec2), src=lang)
+                    translated, ok = translator.translate(txt, src=lang)
                     if ok:
                         c["translated"] += 1
                         rec2["text"] = translated
@@ -152,40 +163,30 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
                     f"flagged={c['behavioral_flagged']} "
                     f"dropped={c['struct_dropped']+c['exact_dups']+c['near_dups']+c['non_en_dropped']}")
         rows.append({"sub_domain": sub, "source": source, "file": rel, **c})
-        if checkpoint_path is not None:
-            deduper.save_state(checkpoint_path)
     return rows
 
 
-def run_all(input_dir: str = RAW_DATA, limit: int | None = None,
-            resume: bool = True) -> list[dict]:
-    """Full pipeline (legacy global pass). `limit` caps records per file.
+# Process-local cache of the stateless cleaning transformers. Building a Redactor
+# (Presidio + spaCy) or LangFilter (fastText model) costs seconds and hundreds of
+# MB, so a pooled worker builds each ONCE and reuses it across every source it
+# handles instead of paying that cost per source. Keyed by the factory class so a
+# monkeypatched stub in tests transparently rebuilds. The Deduper is intentionally
+# NOT cached — it is stateful and created (disabled) per source.
+_cleaner_cache: dict = {}
 
-    `resume=True` (default) reloads the dedup checkpoint if one exists, so an
-    interrupted run can continue without re-processing previously seen hashes.
-    """
-    deduper = Deduper()
-    if resume:
-        deduper.load_state(DEDUP_CKPT)
-    redactor = Redactor()
-    langf = LangFilter()
-    translator = Translator()
-    logger.info(f"cleaning input: {input_dir}")
-    logger.info(f"backends -> dedup:{deduper.backend} pii:{redactor.engine} "
-                f"lang:{langf.backend} translate:{translator.backend}")
 
-    files = list(find_input_files(input_dir))
-    if not files:
-        logger.warning(f"no .jsonl files under {input_dir} "
-                       "(run the ingestion stage first)")
-        return []
+def _cleaner(factory):
+    """Return a process-cached instance of `factory` (built once, then reused)."""
+    inst = _cleaner_cache.get(factory)
+    if inst is None:
+        inst = factory()
+        _cleaner_cache[factory] = inst
+    return inst
 
-    rows = clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
-                       translator=translator, out_cleaned=OUT_CLEAN_DATA,
-                       out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
-                       limit=limit, checkpoint_path=DEDUP_CKPT)
-    _write_report(rows)
-    return rows
+
+def reset_cleaner_cache() -> None:
+    """Drop the cached transformers (used by tests; harmless in production)."""
+    _cleaner_cache.clear()
 
 
 def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
@@ -197,6 +198,10 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     to `final_global_dedup`; here the deduper is disabled so each worker stays
     isolated. Output mirrors the data/raw layout (rel paths are relative to
     `raw_root`). Returns report rows for the parent to aggregate.
+
+    The PII/language/translation transformers are stateless across sources, so
+    they are reused from a process-local cache (`_cleaner`) rather than rebuilt for
+    every source.
     """
     source_dir = os.path.abspath(source_dir)
     files = [t for t in find_input_files(raw_root)
@@ -205,33 +210,94 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     if not files:
         return []
     deduper = Deduper(enabled=False)
-    redactor = Redactor()
-    langf = LangFilter()
-    translator = Translator()
+    redactor = _cleaner(Redactor)
+    langf = _cleaner(LangFilter)
+    translator = _cleaner(Translator)
     return clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
                        translator=translator, out_cleaned=clean_data_dir,
                        out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
                        limit=limit)
 
 
-def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA) -> dict:
+def reset_dedup_state() -> None:
+    """Remove the dedup checkpoint + done-list so the next pass starts fresh.
+
+    Called at the start of a fresh (non-resume) build so a stale checkpoint from a
+    previous corpus can never flag this build's records as duplicates.
+    """
+    for p in (DEDUP_CKPT, DEDUP_DONE):
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+
+
+def _load_dedup_done(path: str) -> set[str]:
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {str(x) for x in data} if isinstance(data, list) else set()
+    except (ValueError, OSError):
+        return set()
+
+
+def _save_dedup_done(path: str, done: set[str]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(done), f)
+    os.replace(tmp, path)
+
+
+def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
+                       resume: bool = False) -> dict:
     """One cross-source dedup pass over `data/clean/`, rewriting files in place.
 
     The per-source workers skip global dedup, so this single pass (run once in
     the parent after the pool drains) is what catches duplicates shared across
     sources. Removed records are appended to `dropped/` with a `dedup` reason.
+
+    Deterministic and resumable. Files are processed in sorted order, so which of
+    two cross-source duplicates survives ("first wins") is stable across runs. The
+    exact-hash set is checkpointed (DEDUP_CKPT) and finished files recorded
+    (DEDUP_DONE) after each file. ``resume=True`` reloads both and skips
+    already-finished files, so a crashed pass restarts where it stopped instead of
+    from zero; a fresh run (default) clears the sidecars first. Only the exact-hash
+    set is persisted (cheap to keep), so on a resumed pass near-duplicate matching
+    against already-finished files is not restored — exact dedup is.
     """
     deduper = Deduper()
-    stats = {"files": 0, "in": 0, "kept": 0, "exact_dups": 0, "near_dups": 0}
+    if resume:
+        deduper.load_state(DEDUP_CKPT)
+        done = _load_dedup_done(DEDUP_DONE)
+        if done:
+            logger.info(f"final dedup: resuming — {len(done)} files already done")
+    else:
+        reset_dedup_state()
+        done = set()
+
+    stats = {"files": 0, "in": 0, "kept": 0, "exact_dups": 0, "near_dups": 0,
+             "skipped": 0}
     logger.info(f"final global dedup over {clean_data_dir} "
                 f"(backend={deduper.backend})")
-    for ap, sub, source, rel in find_input_files(clean_data_dir):
+    last_ckpt = time.monotonic()
+    # Sorted for determinism: cross-source "first duplicate wins" must not depend
+    # on os.walk order.
+    for ap, sub, source, rel in sorted(find_input_files(clean_data_dir),
+                                       key=lambda t: t[3]):
+        if rel in done:
+            stats["skipped"] += 1
+            continue
         stats["files"] += 1
         # Append (don't truncate): the per-source clean already wrote structural
         # / language drops to dropped/<rel>; cross-source dups go to the same file.
         dropped_path = os.path.join(OUT_DROPPED, rel)
         dropped_fh = None
-        fd, tmp = tempfile.mkstemp(suffix=".jsonl", dir=os.path.dirname(ap))
+        # ".jsonl.tmp" so a crash-orphaned temp is NOT picked up as a data file by
+        # find_input_files (which matches *.jsonl) on the next run.
+        fd, tmp = tempfile.mkstemp(suffix=".jsonl.tmp", dir=os.path.dirname(ap))
         os.close(fd)
         try:
             with open(tmp, "w", encoding="utf-8") as out:
@@ -248,17 +314,30 @@ def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA) -> dict:
                         if dropped_fh is None:
                             os.makedirs(os.path.dirname(dropped_path) or ".", exist_ok=True)
                             dropped_fh = open(dropped_path, "a", encoding="utf-8")
-                        dropped_fh.write(json.dumps(
-                            _annotate(rec, sub, source, rel, "dedup", dreason),
-                            ensure_ascii=False) + "\n")
+                        dropped_fh.write(json_dumps(
+                            _annotate(rec, sub, source, rel, "dedup", dreason)) + "\n")
                         continue
-                    out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    out.write(json_dumps(rec) + "\n")
                     stats["kept"] += 1
         finally:
             if dropped_fh is not None:
                 dropped_fh.close()
         os.replace(tmp, ap)
-    logger.info("final dedup: files={files} in={in} kept={kept} "
+        done.add(rel)
+        # Amortized checkpoint: persist at most every DEDUP_CKPT_INTERVAL_S so a
+        # large corpus doesn't re-serialize the whole hash set once per file. A
+        # crash loses at most that interval of dedup work; those files are simply
+        # reprocessed on resume (idempotent, since their duplicates are gone).
+        now = time.monotonic()
+        if now - last_ckpt >= DEDUP_CKPT_INTERVAL_S:
+            deduper.save_state(DEDUP_CKPT)
+            _save_dedup_done(DEDUP_DONE, done)
+            last_ckpt = now
+    # Final checkpoint so a cleanly finished pass is fully recorded for resume.
+    if stats["files"]:
+        deduper.save_state(DEDUP_CKPT)
+        _save_dedup_done(DEDUP_DONE, done)
+    logger.info("final dedup: files={files} skipped={skipped} in={in} kept={kept} "
                 "exact_dups={exact_dups} near_dups={near_dups}".format(**stats))
     return stats
 
@@ -290,7 +369,8 @@ def run_single_stage(stage: str, input_dir: str = RAW_DATA,
                      limit: int | None = None) -> dict:
     """Apply one stage across the input into _stages/<stage>/ for inspection.
 
-    Not the production path (use run_all); a debugging aid for one transform.
+    Not the production path (that is the parallel per-source worker); a debugging
+    aid for looking at one transform in isolation.
     """
     if stage not in ("sanitize", "dedup", "pii", "lang"):
         raise ValueError(f"unknown stage: {stage}")

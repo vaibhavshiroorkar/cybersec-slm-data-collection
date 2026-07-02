@@ -34,7 +34,7 @@ other stages can be re-run on their own:
 
 ```bash
 uv run cybersec-slm run                 # ingest + clean each source (streaming) -> data/clean/
-uv run cybersec-slm clean all           # (re)clean the data/raw/ tree           -> data/clean/
+uv run cybersec-slm run --resume        # re-run, skipping sources already fetched+cleaned
 uv run cybersec-slm eda                 # validate corpus + sufficiency gate     -> logs/eda/
 uv run cybersec-slm normalize           # canonical 22-field dataset             -> data/final/
 ```
@@ -43,14 +43,14 @@ uv run cybersec-slm normalize           # canonical 22-field dataset            
 
 | Command | Purpose |
 |---|---|
-| `run [--workers N]` | Ingest + clean each allowlisted source, in parallel (streaming) → `data/clean/` |
-| `clean [all\|sanitize\|dedup\|pii\|lang\|report\|balance]` | (Re)clean the raw corpus → `data/clean/` (+ `data/flagged/`, `data/dropped/`) |
+| `run [--workers N] [--resume]` | Ingest + clean each allowlisted source, in parallel (streaming) → `data/clean/` |
+| `clean [sanitize\|dedup\|pii\|lang\|report\|balance]` | Cleaning diagnostics/ops: inspect one transform → `data/_stages/`, `report`, or `balance` |
 | `eda [--no-enforce] [--profile]` | Validate the corpus and apply the sufficiency gate → `logs/eda/` |
 | `normalize [--fresh]` | Schema-normalize into `data/final/dataset.jsonl` + manifest |
 | `source [--dry-run]` | Discover sources via search engines → `sources/Sources.csv` |
 | `flow [--dvc-push]` | Run the pipeline via Prefect (needs the `orchestration` extra) |
 | `validate` | Check `data/clean/` records against the schema |
-| `all` | Run the full pipeline, end to end |
+| `all [--resume]` | Run the full pipeline, end to end |
 
 ### Per-command flags
 
@@ -60,9 +60,10 @@ feeds, crawlable websites (needs Chromium), and the NVD CVE API. Sources are rea
 from `sources/Sources.csv`; only rows approved in `sources/allowlist.yaml` are
 fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
 
-**`clean <action>`**: `all` runs the full chain; `sanitize` / `dedup` / `pii` /
-`lang` run a single step; `report` recounts the existing `data/clean`, `data/flagged`,
-and `data/dropped` trees; `balance` reports per-domain volume.
+**`clean <action>`** (diagnostics/ops; production cleaning runs inside `run` / `all`):
+`sanitize` / `dedup` / `pii` / `lang` run a single transform in isolation into
+`data/_stages/<action>/` for inspection; `report` recounts the existing `data/clean`,
+`data/flagged`, and `data/dropped` trees; `balance` reports per-domain volume.
 - `--limit N`: cap records per file (smoke test).
 - `--cap N`: max records per domain (with the `balance` action).
 
@@ -83,6 +84,10 @@ and `data/dropped` trees; `balance` reports per-domain volume.
 - `--limit N`: cap records per file.
 - `--keep-raw`: keep `data/raw/` instead of deleting it after cleaning.
 - `--no-final-dedup`: skip the final cross-source dedup pass.
+- `--resume`: skip sources already fetched+cleaned in a prior run (recorded in
+  `logs/completed_sources.txt`) and resume the final dedup pass, so a re-run won't
+  re-download. A fresh run resets the ledger so nothing is silently skipped.
+  (`all` accepts `--resume` too.)
 
 **`source`** (search-engine source discovery)
 - `--sources PATH`: catalog CSV to append to (default: `sources/Sources.csv`).
@@ -100,17 +105,17 @@ and `data/dropped` trees; `balance` reports per-domain volume.
 - `--no-enforce-eda`: run the EDA gate in report-only mode.
 - `--dvc-push`: snapshot and push the dataset to the DVC remote.
 
-## Two run modes
+## How a run executes
 
-The same logical work runs two ways:
+Ingestion and cleaning are fused and run in parallel: one worker process per source
+does fetch → clean → delete raw, sources are isolated (a bad one fails on its own),
+and after the pool drains a single deterministic cross-source dedup pass runs over
+`data/clean/`. `run` stops there; `all` and `flow` continue into the EDA gate and
+normalizer.
 
-| | Sequential (`all`) | Parallel / streaming (`run`, `flow`) |
-|---|---|---|
-| Ingestion + cleaning | all sources, then clean all | one process per source: fetch → clean → delete raw |
-| Dedup | global, inline during cleaning | per-source workers skip it; one final cross-source pass |
-| Output | `data/clean/` | `data/clean/` |
-
-Both feed the same EDA gate and normalizer. See
+Re-runs are cheap: `--resume` skips sources already fetched+cleaned and picks the
+final dedup pass back up where it stopped, so an interrupted build doesn't
+re-download multi-GB sources. See
 [architecture.md](architecture/architecture.md) for what happens inside each stage.
 
 ## Docker
@@ -127,7 +132,7 @@ runtime and are never baked into the image. To run a single stage, append it aft
 the image name:
 
 ```bash
-docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm cybersec-slm clean all
+docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm cybersec-slm eda
 ```
 
 See [operations/deploy.md](operations/deploy.md) for the AWS path (ECR / ECS /

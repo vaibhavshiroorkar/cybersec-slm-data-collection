@@ -48,19 +48,23 @@ data/clean/  → handoff for EDA
 | `pii.py` | Presidio analyze+anonymize → regex fallback (email/phone/IP/CC/SSN) |
 | `langfilter.py` | fastText `lid.176` → langdetect → stopword/script heuristic |
 | `translate.py` | non-English → English: deep-translator (Google) → argostranslate → no-op |
-| `pipeline.py` | runs the stages in order over `data/raw` + writes the report |
-| `run.py` | CLI: `all` / `sanitize` / `dedup` / `pii` / `lang` / `report` |
+| `pipeline.py` | per-source cleaning (`clean_one_source`) + deterministic, resumable cross-source `final_global_dedup`; writes the report |
+| `run.py` | CLI diagnostics: `sanitize` / `dedup` / `pii` / `lang` / `report` / `balance` |
 Tests live in the top-level `tests/cleaning/` (pytest, no heavy deps needed).
 
 ## Usage
+Production cleaning runs fused with ingestion, one worker per source, via
+`cybersec-slm run` (or `all`) — there is no batch `clean all`. The `clean` command
+is for diagnostics and ops: inspecting one transform in isolation, or reporting.
+
 ```bash
-cybersec-slm clean all              # full pipeline -> data/clean/ data/flagged/ data/dropped/ + report
-cybersec-slm clean all --limit 100  # smoke run: cap 100 records per file
+cybersec-slm run                    # ingest + clean every source -> data/clean/ (production path)
 cybersec-slm clean sanitize         # diagnostic single-stage run -> data/_stages/sanitize/
 cybersec-slm clean dedup            # -> data/_stages/dedup/
 cybersec-slm clean pii              # -> data/_stages/pii/
 cybersec-slm clean lang             # -> data/_stages/lang/
 cybersec-slm clean report           # recount existing data/clean, data/flagged, data/dropped trees
+cybersec-slm clean balance          # per-domain record counts (--cap N to downsample)
 ```
 
 ## Dependencies
