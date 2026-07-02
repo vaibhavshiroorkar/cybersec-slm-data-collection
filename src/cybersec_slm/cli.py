@@ -5,8 +5,8 @@ Full pipeline (end-to-end):
     cybersec-slm all
 
 Individual stages:
-    cybersec-slm run      [--sources X.csv] [--workers N]    # streaming fetch+clean from CSV
-    cybersec-slm clean    [all|sanitize|dedup|pii|lang|report|balance] [--limit N] [--cap N]
+    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # streaming fetch+clean
+    cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
     cybersec-slm normalize | eda | validate
     cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv
 
@@ -27,11 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="stage", required=True)
 
-    # ── clean ─────────────────────────────────────────────────────────────────
-    c = sub.add_parser("clean", help="clean data/raw/ -> data/clean/")
-    c.add_argument("action", nargs="?", default="all",
-                   choices=["all", "sanitize", "dedup", "pii", "lang",
-                            "report", "balance"])
+    # ── clean (diagnostics / ops) ─────────────────────────────────────────────
+    c = sub.add_parser("clean",
+                       help="cleaning diagnostics/ops (single-stage, report, balance)")
+    c.add_argument("action",
+                   choices=["sanitize", "dedup", "pii", "lang", "report", "balance"],
+                   help="sanitize|dedup|pii|lang: run one transform -> data/_stages/ "
+                        "for inspection; report: recount output trees; "
+                        "balance: per-domain record counts")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     c.add_argument("--cap", type=int, default=None,
@@ -75,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keep data/raw/ instead of deleting after clean")
     r.add_argument("--no-final-dedup", action="store_true",
                    help="skip the final cross-source dedup pass")
+    r.add_argument("--resume", action="store_true",
+                   help="skip sources already fetched+cleaned in a prior run "
+                        "(logs/completed_sources.txt) and resume the final dedup")
 
     # ── source (search-engine source discovery) ─────────────────────────────
     d = sub.add_parser("source",
@@ -109,7 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="snapshot + push the dataset to the DVC remote")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    sub.add_parser("all", help="ingest -> clean -> normalize (full pipeline)")
+    a = sub.add_parser("all", help="ingest -> clean -> normalize (full pipeline)")
+    a.add_argument("--resume", action="store_true",
+                   help="skip sources already fetched+cleaned in a prior run "
+                        "(logs/completed_sources.txt) and resume the final dedup")
     return p
 
 
@@ -131,7 +140,8 @@ def main(argv: list[str] | None = None) -> None:
         parallel.run_streaming(args.sources,
                                workers=args.workers, limit=args.limit,
                                keep_raw=args.keep_raw,
-                               final_dedup=not args.no_final_dedup)
+                               final_dedup=not args.no_final_dedup,
+                               resume=args.resume)
 
     elif args.stage == "normalize":
         from .normalize import run_normalization
@@ -170,7 +180,7 @@ def main(argv: list[str] | None = None) -> None:
         from .normalize import run_normalization
         # Streaming ingestion from sources/Sources.csv: fetch + clean fused per
         # source, then one final cross-source dedup pass (no separate clean stage).
-        parallel.run_streaming()
+        parallel.run_streaming(resume=args.resume)
         # EDA sufficiency gate: a blocker means loop back to ingestion, not advance.
         try:
             run_eda(enforce=True)

@@ -37,11 +37,11 @@ import time
 
 # clean_sources.py pins the project paths / env and exposes the helpers we reuse.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import clean_sources as cs                                     # noqa: E402
+import clean_sources as cs  # noqa: E402
 
-from cybersec_slm import core                                  # noqa: E402
-from cybersec_slm.cleaning import pipeline                     # noqa: E402
-from cybersec_slm.ingestion import worker                     # noqa: E402
+from cybersec_slm import core  # noqa: E402
+from cybersec_slm.cleaning import pipeline  # noqa: E402
+from cybersec_slm.ingestion import worker  # noqa: E402
 
 LEDGER_JSON = os.path.join(cs.PROJECT, "logs", "heal_ledger.json")
 LEDGER_MD = os.path.join(cs.PROJECT, "logs", "heal_ledger.md")
@@ -59,9 +59,9 @@ def _remote_size_mb(descriptor: dict) -> float | None:
     kind = descriptor.get("kind")
     try:
         if kind == "hf":
-            from cybersec_slm.ingestion.common import (EXT_PRIORITY,
-                                                        SKIP_SUBSTRINGS)
             from huggingface_hub import HfApi
+
+            from cybersec_slm.ingestion.common import EXT_PRIORITY, SKIP_SUBSTRINGS
             info = HfApi().dataset_info(descriptor["ref"], files_metadata=True)
             sizes = [(s.size or 0) for s in info.siblings
                      if s.rfilename.lower().endswith(EXT_PRIORITY)

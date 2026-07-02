@@ -100,6 +100,33 @@ def sha256_file(path: str) -> str:
 # ------------------------------------------------------------- JSONL I/O -----
 PARSE_ERROR = "_parse_error"     # marker key on lines that failed to parse
 
+# orjson is a base dependency and parses/serializes JSON several times faster
+# than the stdlib; every stage funnels through these helpers, so the speedup is
+# corpus-wide. Both helpers fall back to stdlib json so semantics never change:
+# orjson rejects a few things stdlib accepts (NaN/Infinity literals on read,
+# >64-bit ints on write) and those cases retry through stdlib.
+_orjson = try_import("orjson")
+
+
+def json_loads(line: str):
+    """Parse one JSON document (orjson fast path, stdlib fallback)."""
+    if _orjson is not None:
+        try:
+            return _orjson.loads(line)
+        except ValueError:
+            pass                 # stricter than stdlib (e.g. NaN literal) -> retry
+    return json.loads(line)
+
+
+def json_dumps(obj) -> str:
+    """Serialize one record to a compact JSON string (non-ASCII kept raw)."""
+    if _orjson is not None:
+        try:
+            return _orjson.dumps(obj).decode("utf-8")
+        except TypeError:        # exotic type / >64-bit int -> stdlib handles
+            pass
+    return json.dumps(obj, ensure_ascii=False)
+
 
 def iter_jsonl(path: str) -> Iterator[dict]:
     """Yield one dict per line. Malformed lines yield {PARSE_ERROR: True, ...}
@@ -110,7 +137,7 @@ def iter_jsonl(path: str) -> Iterator[dict]:
             if not line:
                 continue
             try:
-                obj = json.loads(line)
+                obj = json_loads(line)
             except json.JSONDecodeError:
                 yield {PARSE_ERROR: True, "_line": n}
                 continue
@@ -137,7 +164,7 @@ class JsonlWriter:
         if self._fh is None:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
             self._fh = open(self.path, "w", encoding="utf-8")
-        self._fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._fh.write(json_dumps(rec) + "\n")
         self.count += 1
 
     def close(self) -> None:

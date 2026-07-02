@@ -51,6 +51,7 @@ Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 cp .env.example .env                    # API keys (all optional for a basic run)
 uv sync                                 # install the pipeline
 uv run cybersec-slm all                 # ingest → clean → EDA gate → normalize
+uv run cybersec-slm all --resume        # re-run without re-downloading finished sources
 ```
 
 That writes the finished corpus to `data/final/dataset.jsonl`. To run the stages

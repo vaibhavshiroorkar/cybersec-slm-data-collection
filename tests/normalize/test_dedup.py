@@ -42,6 +42,33 @@ def test_rebuild_from_jsonl(tmp_path):
     assert is_dup and reason == "exact"
 
 
+def test_signature_computed_once_per_record():
+    """check-then-commit (is_duplicate + add) on one record must tokenize/hash it
+    once, not once per call — the index memoizes the last text's signature."""
+    import cybersec_slm.normalize.dedup as nd
+
+    calls = {"n": 0}
+    real = nd._norm_tokens
+
+    def counting(text):
+        calls["n"] += 1
+        return real(text)
+
+    try:
+        nd._norm_tokens = counting
+        idx = NearDuplicateIndex()
+        is_dup, _, _ = idx.is_duplicate(_A)
+        assert not is_dup
+        idx.add(_A, "k1")                       # same text object -> memo hit
+        assert calls["n"] == 1
+
+        other = _A + " extra tail"
+        idx.is_duplicate(other)                 # new text -> one fresh computation
+        assert calls["n"] == 2
+    finally:
+        nd._norm_tokens = real
+
+
 def test_categorize_failure():
     assert categorize_failure("domain not in allowlist: 'X'") == "DIRTY_DATA"
     assert categorize_failure("text shorter than 20 chars") == "DIRTY_DATA"
