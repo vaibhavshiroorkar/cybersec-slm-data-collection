@@ -9,6 +9,7 @@ Individual stages:
     cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
     cybersec-slm normalize | eda | validate
     cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv
+    cybersec-slm dashboard [--port N]                        # Streamlit monitor + explorer
 
 Ingestion reads sources/Sources.csv. NVD needs no flag — set NVD_API_KEY (env) to
 raise its rate limit.
@@ -114,6 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
     fl.add_argument("--dvc-push", action="store_true",
                     help="snapshot + push the dataset to the DVC remote")
 
+    # ── dashboard (Streamlit monitor + explorer) ──────────────────────────────
+    db = sub.add_parser("dashboard",
+                        help="launch the read-only monitor + dataset explorer "
+                             "(needs the dashboard extra)")
+    db.add_argument("--port", type=int, default=8501,
+                    help="Streamlit server port (default 8501)")
+    db.add_argument("--headless", action="store_true",
+                    help="run headless (don't auto-open a browser; for remote use)")
+
     # ── all ───────────────────────────────────────────────────────────────────
     a = sub.add_parser("all", help="ingest -> clean -> normalize (full pipeline)")
     a.add_argument("--resume", action="store_true",
@@ -159,6 +169,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
+
+    elif args.stage == "dashboard":
+        from .dashboard.launch import launch
+        launch(port=args.port, headless=args.headless)
 
     elif args.stage == "source":
         from .sourcing import run as sourcing

@@ -73,6 +73,13 @@ orchestration = [
     "prefect-aws>=0.5.0",
 ]
 
+# Local-first monitoring + dataset-exploration dashboard (`cybersec-slm dashboard`).
+# Streamlit bundles Altair, so charts need no extra dependency. Opt-in because the
+# core pipeline never needs a web server:  uv sync --extra dashboard
+dashboard = [
+    "streamlit>=1.40",
+]
+
 # Dev-only tooling. uv installs this group by default on `uv sync`; the
 # production image opts out with `uv sync --no-dev` to stay lean.
 [dependency-groups]
