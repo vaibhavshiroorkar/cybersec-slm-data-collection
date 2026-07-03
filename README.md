@@ -80,7 +80,7 @@ src/cybersec_slm/
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
   orchestration/ Prefect build-corpus flow
-  dashboard/     read-only Streamlit monitor + dataset explorer
+  dashboard/     read-only Streamlit monitor + dataset explorer + Q&A agent
 sources/         Sources.csv (the curated catalog) + allowlist.yaml + the research behind them
 tests/           pytest suite covering every stage
 docs/            architecture, commands, schema, deployment, and security notes

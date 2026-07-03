@@ -80,6 +80,14 @@ dashboard = [
     "streamlit>=1.40",
 ]
 
+# Q&A agent on the dashboard's Agent page (`pages/3_Agent.py`), backed by
+# NVIDIA NIM. NIM exposes an OpenAI-compatible endpoint, so the standard
+# `openai` SDK works unmodified by pointing `base_url` at NIM. Opt-in, same as
+# `dashboard`:  uv sync --extra dashboard --extra agent
+agent = [
+    "openai>=1.0",
+]
+
 # Dev-only tooling. uv installs this group by default on `uv sync`; the
 # production image opts out with `uv sync --no-dev` to stay lean.
 [dependency-groups]
