@@ -77,6 +77,17 @@ It fails open (allow-all, with a warning) when the file is absent so a fresh
 checkout still runs, and `CYBERSEC_SLM_ENFORCE_ALLOWLIST=1` forces enforcement
 (the Docker image sets this).
 
+A second gate, the **license gate** (`ingestion/license_gate.py`), runs
+immediately after the allowlist in the worker: a source is fetched only if its
+`Sources.csv` license clearly permits unencumbered commercial use. It is
+**default-deny** — copyleft (GPL/LGPL), share-alike / non-commercial Creative
+Commons (`-SA` / `-NC`), and any license string it doesn't recognise as clearly
+commercial are skipped with a `license: …` reason, distinct from the allowlist's
+`allowlist: …` skip. This keeps legally-unusable data out of a commercially-trained
+corpus without depending on the manual license triage having been applied
+consistently before a source was approved. `CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0`
+disables it for local runs.
+
 Ingestion maintains a SQLite ingest log, a provenance ledger
 (`logs/provenance/ledger.csv`), and a summary table of every source's size, row
 count, and license. `ingestion/worker.py` handles one source per process; a bad
@@ -185,7 +196,7 @@ response toward something traceable, reversible, and auditable.
 | Stage | Controls |
 |---|---|
 | Sourcing | Discovered sources seeded `pending` (human review before fetch); dry-run + CSV audit artifact |
-| Ingestion | Version-controlled source allowlist (anti-poisoning); per-source process isolation; provenance ingest ledger |
+| Ingestion | Version-controlled source allowlist (anti-poisoning); default-deny commercial-license gate; per-source process isolation; provenance ingest ledger |
 | Cleaning | PII redaction (Presidio + regex fallback); documented PII blind spots + sampled manual review; anomaly quarantine to `flagged/`; auditable `dropped/` reasons |
 | EDA | Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned append-only run history |
 | Normalization | Strict schema validation (closed enums); metadata-only reject logs; per-source failure escalation; per-record near-dup scores; content hashing |

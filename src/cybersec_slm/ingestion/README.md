@@ -10,6 +10,7 @@ in a SQLite ingest log under `logs/`.
 | `common.py` | Ingestion helpers: HTTP (httpx + tenacity), robust readers (pandas + json-repair), JSONL conversion, and the SQLite `IngestLog`. Shared logger/paths/hashing come from `cybersec_slm.core`. |
 | `sources.py` | Reads the curated catalog (`sources/Sources.csv`) and maps each row to a source descriptor (kind: hf/kaggle/github/url/pdf/feed/website/api/xml). |
 | `allowlist.py` | The fetch gate: only sources `approved` in `sources/allowlist.yaml` are pulled. |
+| `license_gate.py` | The second fetch gate: only sources whose license clearly permits commercial use are pulled (default-deny; copyleft/share-alike/non-commercial/unverified are blocked). |
 | `fetch.py` | Dataset fetcher, one handler per kind (hf, kaggle, github, url). |
 | `scrape.py` | PDFs (PyMuPDF, one record per page) and JSON feeds (httpx + orjson). |
 | `scrape_html.py` | Crawls robots.txt-permitted sites (selectolax; Playwright for JS pages). |
@@ -37,10 +38,18 @@ cybersec-slm run --resume    # skip sources already fetched+cleaned; resume the 
 cybersec-slm all             # run + EDA gate + normalize (full pipeline)
 ```
 
-Sources come from `sources/Sources.csv` (see `sources.py`); only rows `approved`
-in `sources/allowlist.yaml` are fetched. Each completed source is appended to
-`logs/completed_sources.txt`, the ledger `--resume` reads to skip finished work
+Sources come from `sources/Sources.csv` (see `sources.py`); a source is fetched
+only if it clears both gates — `approved` in `sources/allowlist.yaml` **and** a
+commercially-usable license (`license_gate.py`). Each completed source is appended
+to `logs/completed_sources.txt`, the ledger `--resume` reads to skip finished work
 (a fresh run resets it).
+
+The license gate is **default-deny**: copyleft (GPL/LGPL), share-alike/
+non-commercial (CC-BY-SA / -NC), and any license string it doesn't recognise as
+clearly commercial (`to-verify`, `Unknown`, region-specific gov opens it hasn't
+been taught, …) are skipped with a `license: …` reason until a human either fixes
+the `Sources.csv` license text or extends the allow patterns in `license_gate.py`.
+Set `CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0` to disable it (local dev/testing).
 
 ## Notes
 - A 5 GB cap (`common.CAP_BYTES`) guards both downloads and produced JSONL;

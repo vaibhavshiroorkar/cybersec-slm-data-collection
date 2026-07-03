@@ -168,6 +168,7 @@ environment variables take precedence. None are required for a basic local run.
 | `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID` | `source` | only for sourcing |
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` are written) | optional |
 | `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | ingestion allowlist gate | optional |
+| `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` | ingestion commercial-license gate (on by default; `0` disables) | optional |
 
 EDA gate thresholds are environment-overridable too; see `src/cybersec_slm/eda/config.py`.
 
