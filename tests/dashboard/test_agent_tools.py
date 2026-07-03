@@ -146,12 +146,28 @@ def test_search_dataset_limit_clamped_up_from_zero(tmp_path, monkeypatch):
     assert len(result["rows"]) == 1   # clamped to at least 1, not 0
 
 
+def test_search_dataset_limit_none_defaults_like_unset(tmp_path, monkeypatch):
+    # A tool-calling model may emit `"limit": null` for an unset optional field;
+    # json.loads() turns that into Python None, which must default rather than raise.
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    result = agent_tools.search_dataset(limit=None)
+    assert result == agent_tools.search_dataset()
+
+
 def test_rejected_or_dupes(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
     rows = agent_tools.get_rejected_or_dupes("rejected")
     assert rows[0]["reason"].startswith("domain")
     assert agent_tools.get_rejected_or_dupes("duplicates") == []
+
+
+def test_rejected_or_dupes_limit_none_defaults_like_unset(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    assert (agent_tools.get_rejected_or_dupes("rejected", limit=None)
+            == agent_tools.get_rejected_or_dupes("rejected"))
 
 
 def test_bare_root_degrades_gracefully(tmp_path, monkeypatch):
