@@ -36,7 +36,7 @@ location is all it takes to serve a hosted deploy later, no code change.
 - **Agent** — a chat box that answers questions about run status, the EDA gate,
   sources, the manifest, and corpus content by calling read-only tools over the
   same data the other pages show. Every answer comes with a "what I looked up"
-  trace. Needs `uv sync --extra agent` and `NVIDIA_API_KEY`; shows setup
+  trace. Needs `uv sync --extra dashboard --extra agent` and `NVIDIA_API_KEY`; shows setup
   instructions instead of a chat box until both are present.
 
 ## Notes

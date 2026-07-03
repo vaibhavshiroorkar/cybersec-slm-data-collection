@@ -20,7 +20,7 @@ if not agent_client.is_available():
     st.info(
         "Not configured yet. Install the optional extra and set an API key:\n\n"
         "```bash\n"
-        "uv sync --extra agent\n"
+        "uv sync --extra dashboard --extra agent\n"
         "export NVIDIA_API_KEY=...   # from build.nvidia.com\n"
         "```"
     )

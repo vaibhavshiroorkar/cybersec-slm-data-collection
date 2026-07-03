@@ -133,7 +133,7 @@ Three pages: **Pipeline** (live run strip, EDA sufficiency gate, trends over pas
 runs, per-source table, stage reports, manifest), **Dataset** (search/filter
 the final corpus + the rejected/duplicate sinks), and **Agent** (a chat box
 answering pipeline/dataset questions via read-only tool-calling; needs
-`uv sync --extra agent` and `NVIDIA_API_KEY`). It reads whatever the pipeline
+`uv sync --extra dashboard --extra agent` and `NVIDIA_API_KEY`). It reads whatever the pipeline
 wrote under `CYBERSEC_SLM_DATA_ROOT`, so pointing that at a synced location serves a
 hosted deploy without code changes. See
 [src/cybersec_slm/dashboard/README.md](../src/cybersec_slm/dashboard/README.md).

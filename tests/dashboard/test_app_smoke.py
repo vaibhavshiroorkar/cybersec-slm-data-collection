@@ -64,4 +64,4 @@ def test_agent_page_shows_setup_instructions_when_not_configured(tmp_path, monke
     at = AppTest.from_file(os.path.join(_DASH, "pages/3_Agent.py"), default_timeout=30)
     at.run()
     assert not at.exception
-    assert any("uv sync --extra agent" in info.value for info in at.info)
+    assert any("uv sync --extra dashboard --extra agent" in info.value for info in at.info)
