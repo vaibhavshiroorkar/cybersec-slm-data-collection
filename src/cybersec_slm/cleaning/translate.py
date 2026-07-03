@@ -22,9 +22,15 @@ Public API:
 from __future__ import annotations
 
 import concurrent.futures as _cf
+import os
 import re
 
 from .common import logger, try_import
+
+# Operator kill switch: set to a falsey value (off/0/false/no/none) to skip
+# online translation entirely, so callers drop non-English instead of paying
+# slow per-record network calls. Mirrors CYBERSEC_SLM_ENFORCE_* env gates.
+_TRANSLATE_OFF = {"off", "0", "false", "no", "none"}
 
 # Google's free endpoint rejects requests over ~5000 chars; stay well under.
 _MAX_CHUNK = 4500
@@ -75,6 +81,8 @@ def _chunk(text: str, limit: int = _MAX_CHUNK) -> list[str]:
 
 class Translator:
     def __init__(self, backend="auto", target="en"):
+        if os.environ.get("CYBERSEC_SLM_TRANSLATE", "").strip().lower() in _TRANSLATE_OFF:
+            backend = "off"            # env kill switch overrides the requested backend
         self.target = target
         self.backend = "none"
         self._google = None
