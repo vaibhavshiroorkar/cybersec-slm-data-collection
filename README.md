@@ -29,9 +29,10 @@ or quarantined instead of slipping downstream unnoticed.
 
 A few ideas hold it together:
 
-- **One vetted source list.** A source only gets fetched if it's marked `approved` in
-  `sources/allowlist.yaml`, so a compromised or swapped-out upstream can't sneak into
-  the corpus under a trusted name.
+- **Two gates before a fetch.** A source is pulled only if it's marked `approved` in
+  `sources/allowlist.yaml` — so a swapped-out or compromised upstream can't sneak into
+  the corpus under a trusted name — *and* its license clearly allows commercial use.
+  Anything else is skipped and logged.
 - **Nothing is thrown away quietly.** Removed records go to `data/dropped/` with a
   reason, and records that need a human eye go to `data/flagged/`. Everything stays
   auditable.
@@ -54,8 +55,8 @@ uv run cybersec-slm all                 # ingest → clean → EDA gate → norm
 uv run cybersec-slm all --resume        # re-run without re-downloading finished sources
 ```
 
-That writes the finished corpus to `data/final/dataset.jsonl`. To watch a run and
-browse the result in a browser:
+That writes the finished corpus to `data/final/dataset.jsonl`. To watch a run live,
+browse the result, and ask a built-in Q&A agent about the corpus — all in the browser:
 
 ```bash
 uv sync --extra dashboard               # installs Streamlit (opt-in extra)
@@ -75,7 +76,7 @@ src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
   cli.py         the single entry point (source / run / clean / eda / normalize / flow / dashboard / all)
   sourcing/      search-engine source discovery → Sources.csv catalog
-  ingestion/     fetch, scrape, crawl, allowlist gate, parallel worker
+  ingestion/     fetch, scrape, crawl, allowlist + license gate, parallel worker
   cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
@@ -87,21 +88,15 @@ docs/            architecture, commands, schema, deployment, and security notes
 infra/           Terraform skeleton (ECR / ECS / S3 / IAM / Secrets Manager)
 ```
 
-Generated data stays out of git and lives under one `data/` folder: `data/raw/`
-(ingestion), `data/clean/` (the cleaning → EDA handoff), `data/flagged/` (records a
-human should review), `data/dropped/` (removed records, with reasons), and
-`data/final/` (the release). Run logs go to `logs/`.
-
 ## Security
 
-Security isn't a layer bolted on at the end. It's part of how each stage behaves. An
-allowlist gates every fetch, PII is redacted and anomalies quarantined during cleaning,
-a blocking sufficiency gate sits between cleaning and release, normalization validates
-against a strict schema with per-source failure limits, and every release is
-content-hashed into a provenance manifest. CI adds secret scanning (gitleaks) and
-dependency auditing (pip-audit). The reasoning is in
-[architecture.md](docs/architecture/architecture.md#security-controls), and the known
-limits of automated PII redaction on a security corpus are documented honestly in
+Security isn't a layer bolted on at the end — it's part of how each stage behaves, and
+the design consistently favors choices that are traceable, reversible, and auditable.
+Beyond the ingestion gates and the provenance manifest described above, CI scans the
+full git history for secrets (gitleaks) and audits dependencies (pip-audit). The full
+reasoning is in
+[architecture.md](docs/architecture/architecture.md#security-controls), and the honest
+limits of automated PII redaction on a security corpus are documented in
 [pii_limitations.md](docs/pii_limitations.md).
 
 ## Documentation
@@ -120,7 +115,13 @@ limits of automated PII redaction on a security corpus are documented honestly i
 
 ## Project status
 
-**Week 4: orchestration and deployment.** All five stages are implemented, wired end to
-end, and covered by the test suite. With the pipeline feature-complete, the focus has
-shifted to operations: hardening the security baseline and standing up the automated
-Prefect + DVC deployment on AWS for scheduled, versioned corpus releases.
+**v1 — complete.** Week 4 (orchestration and deployment) is done, and with it the whole
+v1 pipeline. All five stages are built, wired end to end, and covered by the test suite,
+and the operational layer around them is in place: ingestion sits behind two gates (the
+source allowlist and a default-deny commercial-license gate), releases are
+content-hashed into a provenance manifest and can be versioned and shipped through
+Prefect + DVC on AWS, and a read-only Streamlit dashboard adds live run monitoring, a
+dataset explorer, and a natural-language Q&A agent over the corpus.
+
+From here the work is incremental: adding vetted sources, widening PII coverage, and
+tuning the sufficiency thresholds as the corpus grows.
