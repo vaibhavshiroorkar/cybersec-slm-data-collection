@@ -18,9 +18,12 @@ location is all it takes to serve a hosted deploy later, no code change.
 |---|---|
 | `data.py` | **The read layer.** The only code that touches disk/SQLite; pure functions -> plain data, no Streamlit import, fully unit-tested. |
 | `charts.py` | Formatting + trend-series helpers (no Streamlit). |
+| `agent_tools.py` | Read-only tool wrappers over `data.py` for the Agent page; no Streamlit import, fully unit-tested. |
+| `agent_client.py` | NVIDIA NIM client + tool-calling loop; no Streamlit import, tested against a fake client. |
 | `app.py` | Streamlit entrypoint / landing overview. |
 | `pages/1_Pipeline.py` | Monitor: live strip + EDA gate + trends + sources + reports + manifest. |
 | `pages/2_Dataset.py` | Explore: filter/search/paginate the corpus + rejected/duplicate sinks. |
+| `pages/3_Agent.py` | Ask: a chat agent that answers pipeline/dataset questions via tool-calling. |
 
 ## Pages
 - **Pipeline** — a live strip (auto-refreshing ~3s while a run is detected, from
@@ -30,6 +33,11 @@ location is all it takes to serve a hosted deploy later, no code change.
 - **Dataset** — filter by domain/subdomain/source/type/lang (facets from the
   manifest), full-text substring search, a paginated results table with a full
   22-field record detail, and previews of what was rejected or de-duplicated.
+- **Agent** — a chat box that answers questions about run status, the EDA gate,
+  sources, the manifest, and corpus content by calling read-only tools over the
+  same data the other pages show. Every answer comes with a "what I looked up"
+  trace. Needs `uv sync --extra agent` and `NVIDIA_API_KEY`; shows setup
+  instructions instead of a chat box until both are present.
 
 ## Notes
 - **Read-only** by design: no triggering runs, no auth, no editing. It reflects the
@@ -40,3 +48,6 @@ location is all it takes to serve a hosted deploy later, no code change.
   signature with no UI change.
 - The ingest-log SQLite is written at run end, so the **Sources** table and stage
   reports populate once a run finishes; the live strip covers the in-flight view.
+- The Agent page is the one exception to "no network": it calls NVIDIA NIM.
+  It still writes nothing to disk — chat history lives only in the browser
+  session and is lost on reload.
