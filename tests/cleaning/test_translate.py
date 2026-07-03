@@ -43,3 +43,15 @@ def test_empty_text_is_not_translated():
     tr = Translator(backend="none")
     out, ok = tr.translate("", src="fr")
     assert ok is False
+
+
+def test_env_toggle_disables_translation(monkeypatch):
+    # CYBERSEC_SLM_TRANSLATE=off forces the translator inert even when an online
+    # backend would otherwise be available, so a run can skip slow per-record
+    # network translation and drop non-English instead of hanging on it.
+    monkeypatch.setenv("CYBERSEC_SLM_TRANSLATE", "off")
+    tr = Translator()          # default "auto" would normally select an online backend
+    assert tr.available is False
+    out, ok = tr.translate("bonjour le monde", src="fr")
+    assert out == "bonjour le monde"
+    assert ok is False

@@ -171,6 +171,7 @@ environment variables take precedence. None are required for a basic local run.
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` are written) | optional |
 | `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | ingestion allowlist gate | optional |
 | `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` | ingestion commercial-license gate (on by default; `0` disables) | optional |
+| `CYBERSEC_SLM_TRANSLATE` | cleaning translate stage; set `off` to skip online translation and drop non-English instead | optional |
 | `NVIDIA_API_KEY` | dashboard Agent page | only for the Agent page |
 | `CYBERSEC_SLM_NIM_MODEL` | dashboard Agent page (model override) | optional |
 | `CYBERSEC_SLM_NIM_BASE_URL` | dashboard Agent page (NIM endpoint override) | optional |
