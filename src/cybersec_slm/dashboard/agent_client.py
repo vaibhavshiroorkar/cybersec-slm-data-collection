@@ -17,9 +17,13 @@ import os
 
 from . import agent_tools
 
-DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+DEFAULT_MODEL = "meta/llama-3.1-8b-instruct"
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 MAX_TOOL_ITERATIONS = 6
+# Per-request timeout (seconds). A model that stalls must surface as an error
+# bubble in the page, never hang the chat indefinitely -- the openai SDK's own
+# default is 600s, far too long for an interactive dashboard.
+DEFAULT_TIMEOUT = 60.0
 
 SYSTEM_PROMPT = (
     "You are a read-only assistant for the cybersec-slm data pipeline "
@@ -118,7 +122,8 @@ def is_available() -> bool:
 def _client():
     from openai import OpenAI
     return OpenAI(api_key=os.environ["NVIDIA_API_KEY"],
-                  base_url=os.environ.get("CYBERSEC_SLM_NIM_BASE_URL", DEFAULT_BASE_URL))
+                  base_url=os.environ.get("CYBERSEC_SLM_NIM_BASE_URL", DEFAULT_BASE_URL),
+                  timeout=DEFAULT_TIMEOUT, max_retries=1)
 
 
 def _call_tool(name: str, args: dict):
