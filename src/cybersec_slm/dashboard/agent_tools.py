@@ -74,13 +74,14 @@ def get_stage_reports() -> dict:
 
 def search_dataset(query: str = "", domain: str | None = None, subdomain: str | None = None,
                     source: str | None = None, record_type: str | None = None,
-                    lang: str | None = None, limit: int = 10) -> dict:
+                    lang: str | None = None, limit: int | None = 10) -> dict:
     """Keyword substring + facet search over the corpus; trimmed snippets, not full text."""
     filters = {k: v for k, v in {
         "domain": domain, "subdomain": subdomain, "source": source,
         "record_type": record_type, "lang": lang,
     }.items() if v}
-    limit = max(1, min(int(limit), _MAX_SEARCH_LIMIT))
+    limit = 10 if limit is None else int(limit)
+    limit = max(1, min(limit, _MAX_SEARCH_LIMIT))
     result = data.dataset_page(filters=filters, search=query or "", offset=0, limit=limit)
     rows = [{
         "id": r.get("id"), "source": r.get("source"), "subdomain": r.get("subdomain_name"),
@@ -91,7 +92,8 @@ def search_dataset(query: str = "", domain: str | None = None, subdomain: str | 
     return {"rows": rows, "match_count": result["match_count"], "capped": result["capped"]}
 
 
-def get_rejected_or_dupes(kind: str = "rejected", limit: int = 10) -> list[dict]:
+def get_rejected_or_dupes(kind: str = "rejected", limit: int | None = 10) -> list[dict]:
     """Preview records that didn't make it into the corpus (``kind`` selects the sink)."""
-    limit = max(1, min(int(limit), _MAX_SIDECAR_LIMIT))
+    limit = 10 if limit is None else int(limit)
+    limit = max(1, min(limit, _MAX_SIDECAR_LIMIT))
     return data.sidecar(kind, limit=limit)
