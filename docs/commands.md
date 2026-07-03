@@ -129,9 +129,11 @@ uv sync --extra dashboard          # installs Streamlit
 uv run cybersec-slm dashboard      # -> http://localhost:8501  (--port to change)
 ```
 
-Two pages: **Pipeline** (live run strip, EDA sufficiency gate, trends over past
-runs, source table, stage reports, manifest) and **Dataset** (filter/search/browse
-the final corpus + the rejected/duplicate sinks). It reads whatever the pipeline
+Three pages: **Pipeline** (live run strip, EDA sufficiency gate, trends over past
+runs, per-source table, stage reports, manifest), **Dataset** (search/filter
+the final corpus + the rejected/duplicate sinks), and **Agent** (a chat box
+answering pipeline/dataset questions via read-only tool-calling; needs
+`uv sync --extra dashboard --extra agent` and `NVIDIA_API_KEY`). It reads whatever the pipeline
 wrote under `CYBERSEC_SLM_DATA_ROOT`, so pointing that at a synced location serves a
 hosted deploy without code changes. See
 [src/cybersec_slm/dashboard/README.md](../src/cybersec_slm/dashboard/README.md).
@@ -169,6 +171,9 @@ environment variables take precedence. None are required for a basic local run.
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` are written) | optional |
 | `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | ingestion allowlist gate | optional |
 | `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` | ingestion commercial-license gate (on by default; `0` disables) | optional |
+| `NVIDIA_API_KEY` | dashboard Agent page | only for the Agent page |
+| `CYBERSEC_SLM_NIM_MODEL` | dashboard Agent page (model override) | optional |
+| `CYBERSEC_SLM_NIM_BASE_URL` | dashboard Agent page (NIM endpoint override) | optional |
 
 EDA gate thresholds are environment-overridable too; see `src/cybersec_slm/eda/config.py`.
 
