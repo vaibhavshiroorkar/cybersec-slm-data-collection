@@ -88,3 +88,14 @@ def test_api_exception_is_reported_not_raised():
 def test_is_available_false_without_openai_installed_or_key(monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     assert agent_client.is_available() is False
+
+
+def test_ask_with_no_client_and_no_key_returns_error_not_raise(monkeypatch):
+    # No `client=` passed, so ask() must build its own via _client() -- and
+    # in this venv `openai` isn't installed, so that build fails. This must
+    # surface as a returned error dict, never an uncaught exception, since
+    # this is exactly how Task 3's chat page calls ask().
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    result = agent_client.ask([{"role": "user", "content": "hi"}])
+    assert result["answer"] == ""
+    assert isinstance(result["error"], str) and result["error"]
