@@ -54,8 +54,15 @@ uv run cybersec-slm all                 # ingest → clean → EDA gate → norm
 uv run cybersec-slm all --resume        # re-run without re-downloading finished sources
 ```
 
-That writes the finished corpus to `data/final/dataset.jsonl`. To run the stages
-individually, tune them with flags, or deploy with Docker, see
+That writes the finished corpus to `data/final/dataset.jsonl`. To watch a run and
+browse the result in a browser:
+
+```bash
+uv sync --extra dashboard               # installs Streamlit (opt-in extra)
+uv run cybersec-slm dashboard           # -> http://localhost:8501
+```
+
+To run the stages individually, tune them with flags, or deploy with Docker, see
 **[docs/commands.md](docs/commands.md)**, the full command reference.
 
 > Output folders (`data/`, `logs/`) are created at the project root and are
@@ -66,13 +73,14 @@ individually, tune them with flags, or deploy with Docker, see
 ```
 src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
-  cli.py         the single entry point (source / run / clean / eda / normalize / flow / all)
+  cli.py         the single entry point (source / run / clean / eda / normalize / flow / dashboard / all)
   sourcing/      search-engine source discovery → Sources.csv catalog
   ingestion/     fetch, scrape, crawl, allowlist gate, parallel worker
   cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
   orchestration/ Prefect build-corpus flow
+  dashboard/     read-only Streamlit monitor + dataset explorer
 sources/         Sources.csv (the curated catalog) + allowlist.yaml + the research behind them
 tests/           pytest suite covering every stage
 docs/            architecture, commands, schema, deployment, and security notes
@@ -108,6 +116,7 @@ limits of automated PII redaction on a security corpus are documented honestly i
 | [pii_limitations.md](docs/pii_limitations.md) | What the automated PII pass does and does not catch |
 | [risk_register.md](docs/risk_register.md) | Operational risks and mitigations |
 | `docs/sources/source_*.md` | How sources were researched, evaluated, and accepted |
+| [dashboard/README.md](src/cybersec_slm/dashboard/README.md) | The Streamlit dashboard: pages, what each one shows, how it reads data |
 
 ## Project status
 
