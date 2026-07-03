@@ -19,6 +19,7 @@ from ..core import CLEAN_DATA, RAW_DATA, logger
 from . import fetch, fetch_nvd, scrape, scrape_html
 from .allowlist import descriptor_key, is_allowed
 from .common import _Collector
+from .license_gate import is_license_ok
 
 
 def _fetch_one(descriptor: dict, log) -> str:
@@ -94,6 +95,22 @@ def process_source(descriptor: dict, *, data_root: str | None = None,
                          source_url=descriptor.get("url") or descriptor.get("start_url"),
                          license=descriptor.get("license"),
                          status=f"skipped:allowlist:{reason}")
+        result["ingest_rows"] = collector.rows
+        return result
+
+    # License gate (commercial-only): never fetch a source we can't train on
+    # commercially. Same skip shape as the allowlist so downstream reporting is
+    # unchanged; only the reason prefix differs (license: vs allowlist:).
+    licensed, lreason = is_license_ok(descriptor)
+    if not licensed:
+        result["status"] = "skipped"
+        result["error"] = f"license: {lreason}"
+        logger.warning(f"  SKIPPED (license {lreason}) {descriptor_key(descriptor)}")
+        collector.record(kind=descriptor.get("kind"), name=label,
+                         domain=descriptor.get("domain"),
+                         source_url=descriptor.get("url") or descriptor.get("start_url"),
+                         license=descriptor.get("license"),
+                         status=f"skipped:license:{lreason}")
         result["ingest_rows"] = collector.rows
         return result
     try:
