@@ -106,6 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--cse-id", default=None,
                    help="Programmable Search id (env: GOOGLE_SEARCH_ENGINE_ID)")
 
+    # ── synthetic-scan (curation aid) ─────────────────────────────────────────
+    ss = sub.add_parser("synthetic-scan",
+                        help="suggest which sources look synthetic (keyword scan "
+                             "of Sources.csv); propose-only unless --apply")
+    ss.add_argument("--sources", default=None,
+                    help="catalog CSV to scan (default: sources/Sources.csv)")
+    ss.add_argument("--apply", action="store_true",
+                    help="write Is Synthetic?=Yes for high-confidence gaps "
+                         "(review-level matches are never auto-applied)")
+
     # ── flow (Prefect orchestration) ──────────────────────────────────────────
     fl = sub.add_parser("flow",
                         help="run the Prefect build-corpus flow (needs orchestration extra)")
@@ -169,6 +179,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
+
+    elif args.stage == "synthetic-scan":
+        from .sourcing.synthetic_scan import run_scan
+        run_scan(args.sources, apply=args.apply)
 
     elif args.stage == "dashboard":
         from .dashboard.launch import launch
