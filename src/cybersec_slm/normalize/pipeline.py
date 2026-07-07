@@ -36,18 +36,20 @@ from . import mappers
 from .dedup import FailureTracker, NearDuplicateIndex
 from .enrich import build_record
 from .schema import CanonicalRecord
+from .synthetic import SyntheticFilter
 
 FINAL = FINAL_DATA
 DATASET = os.path.join(FINAL, "dataset.jsonl")
 REJECTED = os.path.join(FINAL, "rejected.jsonl")
 DUPLICATES = os.path.join(FINAL, "duplicates.jsonl")
 DEDUP_SCORES = os.path.join(FINAL, "dedup_scores.jsonl")
+EXCLUDED_SYNTHETIC = os.path.join(FINAL, "excluded_synthetic.jsonl")
 REPORT = os.path.join(LOGS, "normalize_report.json")
 
 DEBUG_REJECTS = os.environ.get("CYBERSEC_SLM_DEBUG_REJECTS", "").strip() in ("1", "true", "yes")
 
-_COUNT_KEYS = ("in", "mapped", "skipped_no_text", "rejected", "exact_dups",
-               "near_dups", "written")
+_COUNT_KEYS = ("in", "synthetic_excluded", "mapped", "skipped_no_text",
+               "rejected", "exact_dups", "near_dups", "written")
 
 
 def _short_reason(exc: Exception) -> str:
@@ -93,6 +95,7 @@ class Normalizer:
     def __init__(self, *, resume: bool = True):
         self.index = NearDuplicateIndex()
         self.failures = FailureTracker()
+        self.synthetic = SyntheticFilter()
         self.counts = {k: 0 for k in _COUNT_KEYS}
         self.resume = resume
         if resume:
@@ -101,6 +104,7 @@ class Normalizer:
         self.rejected = _Sink(REJECTED, append=resume)
         self.duplicates = _Sink(DUPLICATES, append=resume)
         self.scores = _Sink(DEDUP_SCORES, append=resume)
+        self.excluded_synth = _Sink(EXCLUDED_SYNTHETIC, append=resume)
 
     # -- one record through the whole chain ---------------------------------
     def process(self, rec: dict, *, domain: str, source: str, log_id: str) -> None:
@@ -108,6 +112,15 @@ class Normalizer:
 
         # paused source: its records go back to cleaning, skip until re-cleaned
         if source in self.failures.paused_sources():
+            return
+
+        # synthetic source: fetched + cleaned + counted by EDA, but kept out of the
+        # final corpus. Diverted (not deleted) to an auditable sink, like dups.
+        if self.synthetic.is_synthetic(rec):
+            self.counts["synthetic_excluded"] += 1
+            self.excluded_synth.write({"source": source, "domain": domain,
+                                       "log_id": log_id, "url": rec.get("url"),
+                                       "reason": "synthetic-source"})
             return
 
         # 1) Source Mapper + Registry Dispatch
@@ -174,6 +187,7 @@ class Normalizer:
             self.rejected.close()
             self.duplicates.close()
             self.scores.close()
+            self.excluded_synth.close()
         return self._report()
 
     def _report(self) -> dict:
@@ -184,8 +198,10 @@ class Normalizer:
             "reject_reasons": dict(self.failures.reasons.most_common(20)),
             "reject_categories": dict(self.failures.categories),
             "unmapped_sources": mappers.unmapped_sources(),
+            "synthetic_ids": len(self.synthetic),
             "outputs": {"dataset": DATASET, "rejected": REJECTED,
-                        "duplicates": DUPLICATES, "dedup_scores": DEDUP_SCORES},
+                        "duplicates": DUPLICATES, "dedup_scores": DEDUP_SCORES,
+                        "excluded_synthetic": EXCLUDED_SYNTHETIC},
         }
         os.makedirs(os.path.dirname(REPORT) or ".", exist_ok=True)
         with open(REPORT, "w", encoding="utf-8") as f:
@@ -193,6 +209,7 @@ class Normalizer:
         c = self.counts
         logger.info(
             "normalize done: in={in} written={written} "
+            "synthetic_excluded={synthetic_excluded} "
             "skipped_no_text={skipped_no_text} rejected={rejected} "
             "exact_dups={exact_dups} near_dups={near_dups}".format(**c))
         logger.info(f"normalize: handoff-ready corpus -> {DATASET} "
