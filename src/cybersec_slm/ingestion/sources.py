@@ -50,7 +50,8 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "Name", "Sub-Domain", "Description", "Dataset Link", "File Count",
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
     "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
-    "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Date Added", "Note",
+    "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
+    "Date Added", "Note",
 )
 
 # Coarse spreadsheet categories -> the sub-domain folder names used elsewhere.
@@ -232,3 +233,61 @@ def load_descriptors(spec: str) -> list[dict]:
             out.append(d)
     logger.info(f"loaded {len(out)} sources from {os.path.basename(path)}")
     return out
+
+
+# ---------------------------------------------------- synthetic-source lookup ---
+# A source flagged ``Is Synthetic? = Yes`` in the catalog is model-generated,
+# fabricated, or simulated data. It is still fetched + cleaned + counted by EDA,
+# but the normalize stage drops its records from the final corpus (see
+# ``normalize/synthetic.py``). Matching is by a stable *source identity* derived
+# from a URL — the same ``/datasets/<org>/<name>`` ref the allowlist keys on — so
+# a record maps back to its catalog row even when its ``url`` is a per-file
+# ``/resolve/...`` link and even when the folder slug collides across datasets.
+
+_DATASET_REF = re.compile(r"/datasets/([^/?#]+/[^/?#]+)")
+
+
+def source_identity(url: str | None) -> str | None:
+    """Normalized identity for a catalog ``Dataset Link`` or a record ``url``.
+
+    HF/Kaggle dataset URLs collapse to ``<host>:<org>/<name>`` (host distinguishes
+    ``hf`` from ``kaggle``); anything else collapses to ``url:<host><path>`` with
+    scheme/``www.``/query/fragment/trailing-slash stripped. Returns ``None`` for an
+    empty URL. Both the bare dataset link and its ``/resolve/main/...`` file form
+    yield the same key, so catalog and record sides match exactly.
+    """
+    if not url:
+        return None
+    u = str(url).strip().lower()
+    if not u:
+        return None
+    m = _DATASET_REF.search(u)
+    if m:
+        host = "hf" if "huggingface.co" in u else ("kaggle" if "kaggle.com" in u else "ds")
+        return f"{host}:{m.group(1)}"
+    u = re.sub(r"^https?://", "", u).split("?")[0].split("#")[0]
+    u = u.removeprefix("www.").rstrip("/")
+    return f"url:{u}" if u else None
+
+
+def synthetic_identities(spec: str | None = None) -> frozenset[str]:
+    """Identities of every catalog row flagged ``Is Synthetic? = Yes``.
+
+    Reads the catalog CSV and returns the :func:`source_identity` of each flagged
+    row's ``Dataset Link``. The normalize stage matches record URLs against this
+    set to keep synthetic sources out of the final dataset.
+    """
+    import pandas as pd
+
+    path = _resolve(spec or DEFAULT_CATALOG)
+    df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
+    df = _norm_headers(df)
+    ids: set[str] = set()
+    for row in df.to_dict("records"):
+        if not _bool(_val(row, "is_synthetic?", "is_synthetic")):
+            continue
+        ident = source_identity(_val(row, "dataset_link", "url", "link",
+                                     "source_url"))
+        if ident:
+            ids.add(ident)
+    return frozenset(ids)
