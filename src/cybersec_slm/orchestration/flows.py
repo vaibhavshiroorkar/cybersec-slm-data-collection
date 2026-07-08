@@ -5,13 +5,14 @@ The flow is a thin wrapper over the existing stage functions — it adds
 scheduling, per-source isolation/retries/timeouts, secret loading, and the DVC
 snapshot, but the actual work still lives in ingestion/cleaning/eda/normalize.
 
-v2 four-phase structure:
+Flow structure:
     build_corpus:
         load_secrets
         -> extract_source.map(descriptors)   # per-source, license-gated,
         |                                      retried, timed out
         |                                      (fetch + light EDA only — no cleaning)
-        -> aggregated_clean                   # single sequential pass, full dedup
+        -> aggregated_clean                   # sequential clean pass + deterministic
+        |                                      cross-source dedup (final_global_dedup)
         -> deep_eda_gate                      # enhanced EDA with topic balance + feedback
         -> normalize_corpus                   # writes dataset.jsonl + manifest
         -> dvc_snapshot                       # version + push the release (optional)
