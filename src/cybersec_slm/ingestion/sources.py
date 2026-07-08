@@ -235,6 +235,22 @@ def load_descriptors(spec: str) -> list[dict]:
     return out
 
 
+def descriptor_key(d: dict) -> str:
+    """Stable identity string for a source descriptor.
+
+    Used to key the resume ledger (``completed_sources.txt``) so an interrupted
+    build can skip work that already succeeded. hf/kaggle sources key on their
+    ``kind:ref``; everything else keys on its URL (falling back to ``kind:slug``).
+    """
+    kind = d.get("kind")
+    if kind in ("hf", "kaggle"):
+        return f"{kind}:{d.get('ref')}"
+    url = d.get("url") or d.get("start_url")
+    if url:
+        return str(url).strip()
+    return f"{kind}:{d.get('ref') or d.get('slug')}"
+
+
 # ---------------------------------------------------- synthetic-source lookup ---
 # A source flagged ``Is Synthetic? = Yes`` in the catalog is model-generated,
 # fabricated, or simulated data. It is still fetched + cleaned + counted by EDA,

@@ -17,9 +17,9 @@ import shutil
 
 from ..core import CLEAN_DATA, RAW_DATA, logger
 from . import fetch, fetch_nvd, scrape, scrape_html
-from .allowlist import descriptor_key, is_allowed
 from .common import _Collector
 from .license_gate import is_license_ok
+from .sources import descriptor_key
 
 
 def _fetch_one(descriptor: dict, log) -> str:
@@ -83,24 +83,8 @@ def process_source(descriptor: dict, *, data_root: str | None = None,
               "folder": None, "ingest_rows": [], "clean_report_rows": []}
     label = descriptor.get("ref") or descriptor.get("slug") or descriptor.get("kind")
 
-    # Allowlist gate (anti-poisoning): never fetch a source the team has not
-    # explicitly approved. Skipped sources are logged + recorded, not fetched.
-    allowed, reason = is_allowed(descriptor)
-    if not allowed:
-        result["status"] = "skipped"
-        result["error"] = f"allowlist: {reason}"
-        logger.warning(f"  SKIPPED (allowlist {reason}) {descriptor_key(descriptor)}")
-        collector.record(kind=descriptor.get("kind"), name=label,
-                         domain=descriptor.get("domain"),
-                         source_url=descriptor.get("url") or descriptor.get("start_url"),
-                         license=descriptor.get("license"),
-                         status=f"skipped:allowlist:{reason}")
-        result["ingest_rows"] = collector.rows
-        return result
-
     # License gate (commercial-only): never fetch a source we can't train on
-    # commercially. Same skip shape as the allowlist so downstream reporting is
-    # unchanged; only the reason prefix differs (license: vs allowlist:).
+    # commercially. Skipped sources are logged + recorded, not fetched.
     licensed, lreason = is_license_ok(descriptor)
     if not licensed:
         result["status"] = "skipped"

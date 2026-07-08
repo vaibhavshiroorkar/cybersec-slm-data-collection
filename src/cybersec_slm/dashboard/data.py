@@ -135,7 +135,7 @@ def live_progress(tail: int = 40) -> dict:
     """Sources completed so far (from the resume ledger) + a log tail.
 
     ``completed`` counts ``logs/completed_sources.txt`` (each source is appended as
-    it finishes, approved or allowlist-skipped); ``total`` is the catalog size when
+    it finishes, cleaned or license-skipped); ``total`` is the catalog size when
     it can be located, else None (the UI shows a bare count).
     """
     ledger = os.path.join(_logs(), "completed_sources.txt")

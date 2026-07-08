@@ -2,9 +2,8 @@
 """Commercial-only license gate for ingestion.
 
 A source is fetched only if its license clearly permits *unencumbered commercial
-use*. This sits alongside the source allowlist (``allowlist.py``) as a second,
-separately-logged ingestion gate: the allowlist answers "did we vet this exact
-source?"; this answers "are we legally allowed to train commercially on it?".
+use*. This is the ingestion gate: it answers "are we legally allowed to train
+commercially on this source?" before anything is downloaded.
 
 The catalog's ``License`` column is free text and wildly inconsistent (SPDX ids,
 plain English, named-entity terms, blanks), so classification is keyword-based
@@ -19,7 +18,7 @@ compound string like ``"CC BY-NC-SA 4.0"`` (which also contains an allow
 substring) is correctly blocked.
 
 Enforcement is on by default; ``CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0`` disables it
-(mirrors ``CYBERSEC_SLM_ENFORCE_ALLOWLIST``), for local dev/testing.
+for local dev/testing.
 
 Public API:
     classify_license(raw)   -> (commercial_ok, reason)   # pure classifier
@@ -90,9 +89,8 @@ def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     """Return ``(allowed, reason)`` for a source descriptor's license.
 
     Reads ``descriptor["license"]`` (the value ingestion actually fetches with,
-    from the ``Sources.csv`` License column) — not the point-in-time copy stored
-    in ``allowlist.yaml``. Returns ``(True, "license-gate-disabled")`` when the
-    kill switch is set.
+    from the ``Sources.csv`` License column). Returns ``(True,
+    "license-gate-disabled")`` when the kill switch is set.
     """
     if not _enforced():
         return True, "license-gate-disabled"

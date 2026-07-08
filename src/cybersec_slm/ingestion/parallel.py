@@ -22,8 +22,8 @@ from .. import core
 from ..cleaning import pipeline
 from . import run as ingestion_run
 from . import sources, worker
-from .allowlist import descriptor_key
 from .common import IngestLog, logger
+from .sources import descriptor_key
 
 # Append-only ledger of sources fully fetched+cleaned this build. `--resume` reads
 # it to skip work that already succeeded (avoids re-downloading multi-GB sources).
