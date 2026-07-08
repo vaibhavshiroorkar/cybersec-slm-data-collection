@@ -27,7 +27,6 @@ deployments:
       job_variables:
         env:
           CYBERSEC_SLM_DATA_ROOT: /work
-          CYBERSEC_SLM_ENFORCE_ALLOWLIST: "1"
     schedules:
       - cron: "0 6 * * 1"     # weekly, Monday 06:00 UTC
         timezone: UTC

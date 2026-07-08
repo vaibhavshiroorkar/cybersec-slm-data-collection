@@ -16,8 +16,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    CYBERSEC_SLM_DATA_ROOT=/work \
-    CYBERSEC_SLM_ENFORCE_ALLOWLIST=1
+    CYBERSEC_SLM_DATA_ROOT=/work
 
 WORKDIR /app
 
@@ -41,7 +40,7 @@ RUN .venv/bin/playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Phase 2: the project itself (the only layer a code change rebuilds) ─────────
-# Installed editable (uv default) so the package resolves sources/allowlist.yaml
+# Installed editable (uv default) so the package resolves sources/Sources.csv
 # from /app/sources via its __file__ — do not switch to a site-packages install.
 COPY src ./src
 COPY sources ./sources

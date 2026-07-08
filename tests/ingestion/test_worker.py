@@ -1,16 +1,8 @@
-"""Per-source worker gating: allowlist + license checks run before any fetch."""
+"""Per-source worker gating: the license check runs before any fetch."""
 
 from __future__ import annotations
 
-import pytest
-
 from cybersec_slm.ingestion import worker
-
-
-@pytest.fixture
-def _allow_everything(monkeypatch):
-    """Neutralize the source allowlist so tests isolate the license gate."""
-    monkeypatch.setattr(worker, "is_allowed", lambda d: (True, "approved"))
 
 
 def _spy_fetch(monkeypatch):
@@ -25,7 +17,7 @@ def _spy_fetch(monkeypatch):
     return calls
 
 
-def test_non_commercial_license_is_skipped_before_fetch(_allow_everything, monkeypatch):
+def test_non_commercial_license_is_skipped_before_fetch(monkeypatch):
     calls = _spy_fetch(monkeypatch)
     descriptor = {"kind": "hf", "ref": "org/ds", "domain": "Cryptography",
                   "license": "GPL-3.0", "description": "", "url": "https://hf/org/ds"}
@@ -37,7 +29,7 @@ def test_non_commercial_license_is_skipped_before_fetch(_allow_everything, monke
     assert calls == []                       # never fetched
 
 
-def test_commercial_license_passes_the_gate(_allow_everything, monkeypatch):
+def test_commercial_license_passes_the_gate(monkeypatch):
     calls = _spy_fetch(monkeypatch)
     # Stop after the fetch: folder doesn't exist on disk, so no cleaning runs.
     monkeypatch.setattr(worker.os.path, "isdir", lambda p: False)
@@ -50,7 +42,7 @@ def test_commercial_license_passes_the_gate(_allow_everything, monkeypatch):
     assert len(calls) == 1                    # license passed -> fetch attempted
 
 
-def test_kill_switch_lets_any_license_through(_allow_everything, monkeypatch):
+def test_kill_switch_lets_any_license_through(monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", "0")
     calls = _spy_fetch(monkeypatch)
     monkeypatch.setattr(worker.os.path, "isdir", lambda p: False)

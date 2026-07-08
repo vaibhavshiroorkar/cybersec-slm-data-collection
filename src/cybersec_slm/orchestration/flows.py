@@ -7,7 +7,7 @@ snapshot, but the actual work still lives in ingestion/cleaning/eda/normalize.
 
     build_corpus:
         load_secrets
-        -> extract_clean_source.map(descriptors)   # per-source, allowlist-gated,
+        -> extract_clean_source.map(descriptors)   # per-source, license-gated,
         |                                             retried, timed out
         -> cross_source_dedup
         -> eda_gate            # blocker -> SufficiencyError -> flow fails (loop back)
@@ -80,7 +80,7 @@ def load_secrets() -> list[str]:
 
 @task(retries=2, retry_delay_seconds=30, timeout_seconds=3600)
 def extract_clean_source(descriptor: dict) -> dict:
-    """Fetch + clean ONE source into data/clean/ (allowlist-gated in the worker)."""
+    """Fetch + clean ONE source into data/clean/ (license-gated in the worker)."""
     from ..core import CLEAN_DATA
     from ..ingestion import worker
     return worker.process_source(descriptor, data_root=DATA_ROOT,

@@ -9,8 +9,8 @@ record, whether it belongs to such a source.
 
 The decision is a curated-flag lookup, not content analysis: a human marks the
 *source* in the catalog; here we match each record's ``url`` back to a flagged
-catalog row via :func:`cybersec_slm.ingestion.sources.source_identity` (the same
-``/datasets/<org>/<name>`` identity the allowlist keys on). Matching on the URL
+catalog row via :func:`cybersec_slm.ingestion.sources.source_identity` (a stable
+``/datasets/<org>/<name>`` identity). Matching on the URL
 ref — not the folder slug — is what keeps distinct datasets that share a slug
 (e.g. the many ``darkknight25`` sources) cleanly separated.
 
