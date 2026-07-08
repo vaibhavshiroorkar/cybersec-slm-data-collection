@@ -219,6 +219,37 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
                        limit=limit)
 
 
+def clean_source_folder(folder: str, *, redactor, langf, translator,
+                        raw_root: str = RAW_DATA,
+                        clean_data_dir: str = OUT_CLEAN_DATA,
+                        flagged_dir: str = OUT_FLAGGED,
+                        dropped_dir: str = OUT_DROPPED,
+                        limit: int | None = None) -> list[dict]:
+    """Clean ONE already-fetched source folder into data/clean/ (dedup disabled).
+
+    Scans only `folder` (O(files-in-source), not the whole raw tree) but computes
+    `rel` relative to `raw_root` so the data/clean/ layout mirrors data/raw/.
+    The caller supplies the (once-built) transformers so the heavy models load a
+    single time in the parent. Cross-source global dedup is deferred to
+    `final_global_dedup`, so the deduper here is disabled. Returns report rows.
+    """
+    folder = os.path.abspath(folder)
+    raw_root = os.path.abspath(raw_root)
+    files: list[tuple[str, str, str, str]] = []
+    for ap, _sub, _source, _rel in find_input_files(folder):
+        rel = os.path.relpath(ap, raw_root).replace("\\", "/")
+        parts = rel.split("/")
+        sub = parts[0] if parts else "unknown"
+        source = parts[1] if len(parts) > 2 else (parts[0] if parts else "unknown")
+        files.append((ap, sub, source, rel))
+    if not files:
+        return []
+    deduper = Deduper(enabled=False)
+    return clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
+                       translator=translator, out_cleaned=clean_data_dir,
+                       out_flagged=flagged_dir, out_dropped=dropped_dir, limit=limit)
+
+
 def reset_dedup_state() -> None:
     """Remove the dedup checkpoint + done-list so the next pass starts fresh.
 
