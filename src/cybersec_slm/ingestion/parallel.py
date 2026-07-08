@@ -238,6 +238,10 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
                         try:
                             meta = fut.result()
                         except BrokenProcessPool:
+                            # Pool is dead: re-queue this descriptor (already
+                            # discarded from `remaining`) plus the survivors,
+                            # which the outer handler re-queues, then rebuild.
+                            pending_descriptors.append(d)
                             raise
                         except Exception as ex:
                             logger.error(f"  worker crashed for {_label(d)}: "
