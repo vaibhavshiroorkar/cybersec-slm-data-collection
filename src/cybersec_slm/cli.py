@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Unified command-line entry point for the pipeline.
 
-Full pipeline (end-to-end):
+Full pipeline (end-to-end, v2 four-phase):
     cybersec-slm all
 
 Individual stages:
-    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # streaming fetch+clean
+    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # parallel fetch + light EDA + aggregated clean
     cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
     cybersec-slm normalize | eda | validate
     cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv
@@ -58,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="cleaned-records root (default: data/clean/)")
     ed.add_argument("--no-enforce", action="store_true",
                     help="report only; do not fail the run on a blocker")
+    ed.add_argument("--no-auto-rebalance", action="store_true",
+                    help="disable automatic rebalancing of over-represented subdomains")
     ed.add_argument("--profile", action="store_true",
                     help="also write a ydata-profiling HTML report (needs ydata-profiling, "
                          "which requires pandas<3 — run it in a throwaway env; see README)")
@@ -68,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── run (parallel streaming) ──────────────────────────────────────────────
     r = sub.add_parser("run",
-                       help="parallel per-source fetch+clean -> data/clean/")
+                       help="v2: parallel fetch + light EDA + aggregated clean -> data/clean/")
     r.add_argument("--sources", default=None,
                    help="path to a sources .csv (default: sources/Sources.csv)")
     r.add_argument("--workers", type=int, default=None,
@@ -77,11 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cap records per file (smoke test)")
     r.add_argument("--keep-raw", action="store_true",
                    help="keep data/raw/ instead of deleting after clean")
-    r.add_argument("--no-final-dedup", action="store_true",
-                   help="skip the final cross-source dedup pass")
     r.add_argument("--resume", action="store_true",
-                   help="skip sources already fetched+cleaned in a prior run "
-                        "(logs/completed_sources.txt) and resume the final dedup")
+                   help="skip sources already fetched in a prior run "
+                        "(logs/completed_sources.txt)")
+    r.add_argument("--source-timeout", type=float, default=1800.0,
+                   help="per-source wall-clock timeout in seconds "
+                        "(abandon a hung source; default 1800)")
 
     # ── source (search-engine source discovery) ─────────────────────────────
     d = sub.add_parser("source",
@@ -135,10 +138,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run headless (don't auto-open a browser; for remote use)")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    a = sub.add_parser("all", help="ingest -> clean -> normalize (full pipeline)")
+    a = sub.add_parser("all", help="v2: ingest -> clean -> EDA -> normalize (full pipeline)")
     a.add_argument("--resume", action="store_true",
-                   help="skip sources already fetched+cleaned in a prior run "
-                        "(logs/completed_sources.txt) and resume the final dedup")
+                   help="skip sources already fetched in a prior run "
+                        "(logs/completed_sources.txt)")
+    a.add_argument("--keep-raw", action="store_true",
+                   help="keep data/raw/ instead of deleting after clean")
+    a.add_argument("--limit", type=int, default=None,
+                   help="cap records per file (smoke test)")
+    a.add_argument("--no-auto-rebalance", action="store_true",
+                   help="disable automatic rebalancing of over-represented subdomains")
+    a.add_argument("--source-timeout", type=float, default=1800.0,
+                   help="per-source wall-clock timeout in seconds "
+                        "(abandon a hung source; default 1800)")
     return p
 
 
@@ -156,18 +168,25 @@ def main(argv: list[str] | None = None) -> None:
             cleaning.run(args.action, limit=args.limit)
 
     elif args.stage == "run":
+        # v2: parallel ingest + light EDA + aggregated clean
         from .ingestion import parallel
-        parallel.run_streaming(args.sources,
-                               workers=args.workers, limit=args.limit,
-                               keep_raw=args.keep_raw,
-                               final_dedup=not args.no_final_dedup,
-                               resume=args.resume)
+        parallel.run_v2_pipeline(args.sources,
+                                 workers=args.workers,
+                                 resume=args.resume,
+                                 keep_raw=args.keep_raw,
+                                 limit=args.limit,
+                                 source_timeout=args.source_timeout,
+                                 normalize=False)  # 'run' stops after clean
 
     elif args.stage == "normalize":
         from .normalize import run_normalization
         run_normalization(args.input, resume=not args.fresh, limit=args.limit)
 
     elif args.stage == "eda":
+        # Disable auto-rebalance if requested
+        if getattr(args, "no_auto_rebalance", False):
+            from .eda import config as eda_config
+            eda_config.AUTO_REBALANCE = False
         from .eda import run_eda
         run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
 
@@ -202,24 +221,17 @@ def main(argv: list[str] | None = None) -> None:
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        from .core import logger
-        from .eda import SufficiencyError, run_eda
+        # v2 four-phase pipeline
+        if getattr(args, "no_auto_rebalance", False):
+            from .eda import config as eda_config
+            eda_config.AUTO_REBALANCE = False
         from .ingestion import parallel
-        from .normalize import run_normalization
-        # Streaming ingestion from sources/Sources.csv: fetch + clean fused per
-        # source, then one final cross-source dedup pass (no separate clean stage).
-        parallel.run_streaming(resume=args.resume)
-        # EDA sufficiency gate: a blocker means loop back to ingestion, not advance.
-        try:
-            run_eda(enforce=True)
-        except SufficiencyError as exc:
-            logger.error(str(exc))
-            print("Pipeline halted at the EDA sufficiency gate — "
-                  "address the blockers above and re-run.")
-            return
-        # full rebuild: ingestion regenerates data/clean/ upstream, so normalize
-        # fresh (resume=False) instead of appending/deduping against a stale dataset.
-        run_normalization(resume=False)
+        parallel.run_v2_pipeline(
+            resume=args.resume,
+            keep_raw=getattr(args, "keep_raw", False),
+            limit=getattr(args, "limit", None),
+            source_timeout=args.source_timeout,
+        )
 
 
 if __name__ == "__main__":
