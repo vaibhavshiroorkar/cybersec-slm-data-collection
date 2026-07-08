@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Unified command-line entry point for the pipeline.
 
-Full pipeline (end-to-end, v2 four-phase):
-    cybersec-slm all
+Full pipeline (end-to-end):
+    cybersec-slm all      # overlapped ingest+clean -> dedup -> EDA -> normalize
 
 Individual stages:
-    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # parallel fetch + light EDA + aggregated clean
+    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # overlapped parallel fetch + inline sequential clean
     cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
     cybersec-slm normalize | eda | validate
     cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv
@@ -70,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── run (parallel streaming) ──────────────────────────────────────────────
     r = sub.add_parser("run",
-                       help="v2: parallel fetch + light EDA + aggregated clean -> data/clean/")
+                       help="overlapped parallel fetch + inline sequential clean -> data/clean/")
     r.add_argument("--sources", default=None,
                    help="path to a sources .csv (default: sources/Sources.csv)")
     r.add_argument("--workers", type=int, default=None,
@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> None:
             cleaning.run(args.action, limit=args.limit)
 
     elif args.stage == "run":
-        # v2: parallel ingest + light EDA + aggregated clean
+        # overlapped parallel fetch + inline sequential clean (stops after clean)
         from .ingestion import parallel
         parallel.run_v2_pipeline(args.sources,
                                  workers=args.workers,
@@ -221,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        # v2 four-phase pipeline
+        # overlapped ingest+clean -> dedup -> EDA -> normalize
         if getattr(args, "no_auto_rebalance", False):
             from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False
