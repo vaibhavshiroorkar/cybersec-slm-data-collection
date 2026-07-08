@@ -5,14 +5,16 @@ The flow is a thin wrapper over the existing stage functions — it adds
 scheduling, per-source isolation/retries/timeouts, secret loading, and the DVC
 snapshot, but the actual work still lives in ingestion/cleaning/eda/normalize.
 
+v2 four-phase structure:
     build_corpus:
         load_secrets
-        -> extract_clean_source.map(descriptors)   # per-source, license-gated,
-        |                                             retried, timed out
-        -> cross_source_dedup
-        -> eda_gate            # blocker -> SufficiencyError -> flow fails (loop back)
-        -> normalize_corpus    # writes dataset.jsonl + manifest
-        -> dvc_snapshot        # version + push the release (optional)
+        -> extract_source.map(descriptors)   # per-source, license-gated,
+        |                                      retried, timed out
+        |                                      (fetch + light EDA only — no cleaning)
+        -> aggregated_clean                   # single sequential pass, full dedup
+        -> deep_eda_gate                      # enhanced EDA with topic balance + feedback
+        -> normalize_corpus                   # writes dataset.jsonl + manifest
+        -> dvc_snapshot                       # version + push the release (optional)
 
 Prefect is optional: the module imports without it (the decorators degrade to
 no-ops) so the plain helpers stay unit-testable; ``build_corpus`` itself needs
@@ -79,23 +81,29 @@ def load_secrets() -> list[str]:
 
 
 @task(retries=2, retry_delay_seconds=30, timeout_seconds=3600)
-def extract_clean_source(descriptor: dict) -> dict:
-    """Fetch + clean ONE source into data/clean/ (license-gated in the worker)."""
-    from ..core import CLEAN_DATA
+def extract_source(descriptor: dict) -> dict:
+    """Fetch ONE source + run light EDA gate (no cleaning — that's aggregated later)."""
     from ..ingestion import worker
-    return worker.process_source(descriptor, data_root=DATA_ROOT,
-                                 clean_data_dir=CLEAN_DATA)
+    return worker.process_source(descriptor, data_root=DATA_ROOT)
 
 
 @task
-def cross_source_dedup() -> dict:
+def aggregated_clean() -> dict:
+    """Sequential clean of data/raw/ then deterministic cross-source dedup."""
     from ..cleaning.pipeline import final_global_dedup
-    return final_global_dedup()
+    from ..core import CLEAN_DATA
+    from ..ingestion.parallel import clean_raw_tree
+    result = clean_raw_tree()
+    final_global_dedup(CLEAN_DATA, resume=False)
+    return result
 
 
 @task
-def eda_gate(enforce: bool = True) -> dict:
-    """Run the EDA sufficiency gate. Raises SufficiencyError on a blocker."""
+def deep_eda_gate(enforce: bool = True) -> dict:
+    """Run the enhanced EDA sufficiency gate with topic balance + feedback.
+
+    Raises SufficiencyError on a blocker.
+    """
     from ..eda import run_eda
     return run_eda(enforce=enforce)
 
@@ -130,24 +138,32 @@ def dvc_snapshot(push: bool = False) -> None:
 @flow(name="build-corpus")
 def build_corpus(sources_spec: str | None = None, *, enforce_eda: bool = True,
                  dvc_push: bool = False) -> dict:
-    """End-to-end: ingest+clean per source -> dedup -> EDA gate -> normalize -> DVC."""
+    """End-to-end v2: ingest+lightEDA -> aggregated clean -> deep EDA -> normalize -> DVC."""
     present = load_secrets()
     logger.info(f"orchestration: secrets present for {present}")
 
     descriptors = _load_descriptors(sources_spec)
     logger.info(f"orchestration: {len(descriptors)} sources")
 
+    # Phase 1: Parallel Ingest + Light EDA (fetch only, no cleaning)
     if _HAS_PREFECT:
-        results = [f.result() for f in extract_clean_source.map(descriptors)]
+        results = [f.result() for f in extract_source.map(descriptors)]
     else:
-        results = [extract_clean_source(d) for d in descriptors]
+        results = [extract_source(d) for d in descriptors]
     ok = sum(1 for r in results if r.get("status") == "ok")
     skipped = sum(1 for r in results if r.get("status") == "skipped")
-    logger.info(f"orchestration: ingest+clean ok={ok} skipped={skipped} "
-                f"failed={len(results) - ok - skipped}")
+    rejected = sum(1 for r in results if r.get("status") == "rejected")
+    logger.info(f"orchestration: ingest+lightEDA ok={ok} skipped={skipped} "
+                f"rejected={rejected} failed={len(results) - ok - skipped - rejected}")
 
-    cross_source_dedup()
-    eda_gate(enforce_eda)              # SufficiencyError here fails the flow (loop back)
+    # Phase 2: Aggregated Cleaning (sequential, full dedup)
+    clean_result = aggregated_clean()
+
+    # Phase 3: Deep EDA Gate (topic balance + feedback)
+    # SufficiencyError here fails the flow (loop back)
+    deep_eda_gate(enforce_eda)
+
+    # Phase 4: Schema Normalization
     report = normalize_corpus()
     if dvc_push:
         dvc_snapshot(push=True)

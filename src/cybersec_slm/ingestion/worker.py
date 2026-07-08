@@ -1,25 +1,30 @@
 #!/usr/bin/env python3
-"""Per-source streaming worker: fetch -> JSONL -> clean -> delete raw.
+"""Per-source ingestion worker: fetch -> JSONL -> light EDA gate.
 
 `process_source` is a top-level (picklable) function so it can run inside a
 ``ProcessPoolExecutor``. Each call handles ONE source end to end and is fully
 isolated — it never touches the shared SQLite ingest log (it buffers rows in a
 :class:`~cybersec_slm.ingestion.common._Collector` and returns them for the
-parent to write) and it runs cleaning with global dedup disabled (cross-source
-dedup is a single final pass in the parent). One bad source returns a
-``status="failed"`` dict instead of crashing the pool.
+parent to write).
+
+**v2 change:** the worker no longer runs the cleaning pipeline. It fetches,
+converts to JSONL, and runs the light EDA quality gate + flag annotation.
+Cleaning is deferred to an aggregated pass over the full ``data/raw/`` in the
+parent process (see ``parallel.run_aggregated_clean``). This lets the pipeline
+see the raw aggregate before cleaning and reject broken sources early.
+
+One bad source returns a ``status="failed"`` dict instead of crashing the pool.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 
-from ..core import CLEAN_DATA, RAW_DATA, logger
-from . import fetch, fetch_nvd, scrape, scrape_html
+from ..core import RAW_DATA, logger
+from . import fetch, fetch_nvd, light_eda, scrape, scrape_html
 from .common import _Collector
 from .license_gate import is_license_ok
-from .sources import descriptor_key
+from .sources import descriptor_key, synthetic_identities
 
 
 def _fetch_one(descriptor: dict, log) -> str:
@@ -66,21 +71,31 @@ def _fetch_one(descriptor: dict, log) -> str:
     return folder
 
 
-def process_source(descriptor: dict, *, data_root: str | None = None,
-                   clean_data_dir: str | None = None, keep_raw: bool = False,
-                   limit: int | None = None) -> dict:
-    """Fetch one source, clean it into data/clean/, delete its raw files.
+# Pre-load synthetic identities ONCE per worker process (not per source).
+_synthetic_ids_cache: frozenset[str] | None = None
+
+
+def _get_synthetic_ids() -> frozenset[str]:
+    global _synthetic_ids_cache
+    if _synthetic_ids_cache is None:
+        _synthetic_ids_cache = synthetic_identities()
+    return _synthetic_ids_cache
+
+
+def process_source(descriptor: dict, *, data_root: str | None = None) -> dict:
+    """Fetch one source, run light EDA gate, return metadata.
 
     Returns ``{descriptor, status, error, folder, ingest_rows,
-    clean_report_rows}``. ``ingest_rows`` are replayed into the real ingest log
-    by the parent; ``clean_report_rows`` feed the consolidated clean report.
-    """
-    from ..cleaning import pipeline
+    light_eda_report, flags}``.  ``ingest_rows`` are replayed into the real
+    ingest log by the parent.
 
-    clean_data_dir = clean_data_dir or CLEAN_DATA
+    **v2:** no longer runs cleaning — that is deferred to the aggregated pass.
+    """
     collector = _Collector()
     result = {"descriptor": descriptor, "status": "ok", "error": None,
-              "folder": None, "ingest_rows": [], "clean_report_rows": []}
+              "folder": None, "ingest_rows": [], "light_eda_report": {},
+              "flags": {"synthetic": False, "license_risk": None,
+                        "security_hazards": []}}
     label = descriptor.get("ref") or descriptor.get("slug") or descriptor.get("kind")
 
     # License gate (commercial-only): never fetch a source we can't train on
@@ -89,6 +104,7 @@ def process_source(descriptor: dict, *, data_root: str | None = None,
     if not licensed:
         result["status"] = "skipped"
         result["error"] = f"license: {lreason}"
+        result["flags"]["license_risk"] = lreason
         logger.warning(f"  SKIPPED (license {lreason}) {descriptor_key(descriptor)}")
         collector.record(kind=descriptor.get("kind"), name=label,
                          domain=descriptor.get("domain"),
@@ -103,11 +119,19 @@ def process_source(descriptor: dict, *, data_root: str | None = None,
         result["folder"] = folder
         result["ingest_rows"] = collector.rows
 
+        # Light EDA gate: fast quality check + flag annotation
         if os.path.isdir(folder):
-            result["clean_report_rows"] = pipeline.clean_one_source(
-                folder, raw_root=RAW_DATA, clean_data_dir=clean_data_dir, limit=limit)
-            if not keep_raw:
-                shutil.rmtree(folder, ignore_errors=True)
+            syn_ids = _get_synthetic_ids()
+            passed, leda_report = light_eda.assess_source(
+                folder, descriptor, synthetic_ids=syn_ids)
+            result["light_eda_report"] = leda_report
+            result["flags"] = leda_report.get("flags", result["flags"])
+
+            if not passed:
+                result["status"] = "rejected"
+                result["error"] = leda_report.get("reject_reason", "light EDA rejection")
+                # Move rejected source into data/dropped/ with sidecar report
+                light_eda.reject_source(folder, leda_report)
     except Exception as ex:  # isolate: never crash the pool over one source
         result["status"] = "failed"
         result["error"] = f"{type(ex).__name__}: {ex}"
