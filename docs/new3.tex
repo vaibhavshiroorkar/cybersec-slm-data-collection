@@ -1,0 +1,572 @@
+% =================================================================
+%  IEEE Conference Paper
+%  Title : CyberCorpus: An Automated Pipeline for
+%          Sub-Domain Cybersecurity Data Collection
+% =================================================================
+
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% ---- Packages -----------------------------------------------
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{array}
+\usepackage{balance}
+\usepackage{float}
+
+% =================================================================
+\begin{document}
+% ---- TITLE --------------------------------------------------
+\title{CyberCorpus: A Cybersecurity Sub-Domains\\
+Automated Pipeline for Data Collection}
+% ---- AUTHORS ------------------------------------------------
+\author{
+  \IEEEauthorblockN{\ }
+  \IEEEauthorblockA{\ }
+  \and
+  \IEEEauthorblockN{Yagnik Raval}
+  \IEEEauthorblockA{
+      \textit{Dept.\ of Information Technology}\\
+      \textit{KJ Somaiya School of Engineering}\\
+      Mumbai, India\\
+      yagnik.raval@somaiya.edu}
+  \and
+  \IEEEauthorblockN{Vaibhav Shiroorkar}
+  \IEEEauthorblockA{
+      \textit{Dept.\ of Electronics and Computer Engineering}\\
+      \textit{KJ Somaiya School of Engineering}\\
+      Mumbai, India\\
+      v.shiroorkar@somaiya.edu}
+  \and
+  \IEEEauthorblockN{\ }
+  \IEEEauthorblockA{\ }
+  \and
+  \IEEEauthorblockN{Neil Sharma}
+  \IEEEauthorblockA{
+      \textit{Dept.\ of Electronics and Computer Engineering}\\
+      \textit{KJ Somaiya School of Engineering}\\
+      Mumbai, India\\
+      neil.sharma@somaiya.edu}
+  \and
+  \IEEEauthorblockN{Someone}
+  \IEEEauthorblockA{
+      \textit{Dept.\ of Something}\\
+      \textit{KJ Somaiya School of Engineering}\\
+      Mumbai, India\\
+      someone@somaiya.edu}
+  \and
+  \IEEEauthorblockN{Dr. Ashwini Dalvi}
+  \IEEEauthorblockA{
+      \textit{Dept.\ of Information Technology}\\
+      \textit{KJ Somaiya School of Engineering}\\
+      Mumbai, India\\
+      ashwinidalvi@somaiya.edu}
+}
+\maketitle
+
+% ---- ABSTRACT -----------------------------------------------
+\begin{abstract}
+General-purpose LLMs have proven unable to transfer to data-constrained specialisms such as cybersecurity. Accessible, permissive, representative, high-quality cybersecurity data is scarce even within narrowly specialised security fields, and notoriously hard to locate once aggregated across the cybersecurity space. This work details a fully automated pipeline that converts uncurated, copyrighted raw content into a schema-validated, ready-to-train dataset for small language models, covering a dozen cybersecurity practice areas, with post-quantum cryptography folded into the cryptography area.
+The pipeline uses per-source workers for content ingestion and raw-data scrubbing, then applies a fully deterministic five-stage process that includes PII redaction via Presidio.
+Two governance controls guard the pipeline: a catalogue-flagged synthetic-data policy that keeps model-generated sources out of the released corpus, and a licence classifier that blocks any data covered by copyright. Admitted documents are de-duplicated with an exact-match filter and then a MinHash LSH pass tuned to a Jaccard threshold of 0.65, before passing a drift-aware sufficiency gate and being formatted into a rigid 22-field schema that distinguishes recorded from missing data. Prefect orchestrates the pipeline, DVC versions the output to S3, and Terraform deploys it onto AWS ECS Fargate, while users have real-time read-only access through a Streamlit dashboard and agents. In an ongoing pilot of 192 sources (63 sources ingested and processed for 420 schema-valid records at the time of writing), the sufficiency gate successfully filtered out an over-represented source.
+This work argues that a data-governance approach is core to trusted, verifiable training datasets for security research.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Cybersecurity, Small Language Models, Dataset Curation, Schema
+Normalisation, MinHash LSH, Sufficiency Gating, Domain Adaptation,
+Data Governance
+\end{IEEEkeywords}
+
+% =================================================================
+\section{Introduction}
+
+The frequency, scale and cost of cyberattacks continue to rise; the total cost of cybercrime is predicted to hit US \$12.2 trillion globally by 2031 \cite{braue2025cybercrime}. This is leading to high demand for security tools that automate and streamline the execution of security workflows. Among these security workflow automation tools, those using natural language processing (NLP) often LLM-backed will see increasing adoption for the identification of threat patterns, assessing potential vulnerabilities, and responding to security incidents \cite{zhang2025llms, ferrag2024revolutionising}.
+However, there are currently two issues that stand in the way of the use of language models for operational security. Firstly, the availability of training data suitable for domain use, that can also be released to the general public, is limited. Most cyber text resources have some form of restriction either in licence, or the fact that it is too loosely defined, to be effectively used as ML data \cite{yu2025primus}. Second, due to the infrastructure and computational capabilities required for massive scale LLMs it will not be practical for enterprises utilising air gapped or on-premises security solutions \cite{minaee2024llm}.
+
+Small Language Models (SLMs) are transformer-based language models typically under three billion parameters \cite{minaee2024llm} that run entirely on commodity hardware with zero dependence on cloud APIs. Given careful continuous pretraining on clean, well-curated domain-specific corpora, SLMs can outperform generically trained models orders of magnitude larger on downstream technical tasks. What differentiates an SLM is therefore how clean, clear, broad, and representative its training data is. To date, no public pipeline has satisfied these criteria while treating governance, licensing, and reliability as first-class engineering concerns rather than hand-wavy, after-the-fact corrections applied downstream.
+
+This paper seeks to fill that gap, introducing a system that ingests, sanitises, gates, and normalises text from an enumerated list of cybersecurity-relevant topics spanning 12 practice sub-domains (with post-quantum cryptography folded into the cryptography sub-domain), producing schema-validated training data suitable for SLM pre-training\footnote{\url{https://github.com/vaibhavshiroorkar/cybersec-slm-data-collection}}. Instead of assuming each data source is an equally valid declarative fact, as in prior cybersecurity-dataset work, the pipeline treats every step as its own security boundary through the following measures:
+\begin{itemize}
+\item A catalogue-flagged synthetic-data policy that keeps model-generated sources out of the released corpus.
+\item A default-deny licence classifier that audits whether the pipeline is legally permitted to train for commercial purposes on a given source.
+\item A blocking sufficiency gate that disallows releasing an under-represented sub-domain.
+\item A content-hashed provenance manifest, included with every release, that enables traceability and rollback of bad batches.
+\end{itemize}
+\subsection{Problem Statement}
+
+There are challenges in generating training data for a cybersecurity-specific
+SLM that a general-purpose web-scraping pipeline is not equipped to solve. Cybersecurity data comes from CVE feeds, vendor security advisories, standards documents, and research papers which all have varying formats and legal language. A general web scraper cannot ensure that each imported record is legally useable, nor can it keep an over-represented source from skewing coverage, because traditional pipelines lack the feedback mechanism to validate this. Training data can still negatively impact model learning if individual sub-domain coverage is skewed even if the data is clean at the record level. Heterogeneous, semi-structured input also imposes continuous work on downstream labeling/annotation teams who must constantly clean inconsistent record formats to extract training signal.
+
+\subsection{Research Objectives}
+
+Three objectives follow from the problems above, corresponding to successive stages of the pipeline:
+\begin{itemize}
+\item Governed Multi-Source Ingestion: To design an ingestion system capable of consuming cybersecurity data from a heterogeneous set of sources and storage formats, while enforcing licence compliance and provenance at the point of collection rather than after the fact.
+\item Trustworthy, Low-Redundancy Cleaning: Pinpoint cleaning and redaction methods that result in a data sample ready for training, with minimal human involvement. Additionally, determine how to run this process reliably, efficiently, at scale.
+\item Sufficiency-Gated Schema Validation: Assess if gating schema validation on sub-domain sufficiency creates more trustworthy results compared to a traditional linear pipeline, as quantified by retention rate, sub-domain balance, and duplicate rejection.
+\end{itemize}
+
+% =================================================================
+\section{Related Work}
+
+This review organises literature published between 2022 and 2025 into four themes: the application of SLMs and LLMs in cybersecurity, specialised pre-training data, structured threat-intelligence systems, and auxiliary tools for privacy and verification. The works below motivate and test elements of the proposed system, and the section closes by positioning the present contribution against this body of work.
+
+\subsection{Models and Domain Data}
+
+The review by Zhang et al. \cite{zhang2025llms} lists hallucination and the lack of domain expertise as remaining problems, arguing that the fix is acquiring more extensive domain data, not finer prompting. Their survey aggregates findings across detection, triage, and response tasks and repeatedly traces failure modes back to the training corpus rather than the model architecture, the same premise that motivates this pipeline's emphasis on data governance over model tuning. Levi et al. \cite{levi2025cyberpal} describe a set of cybersecurity-specialist SLMs in CyberPal 2.0, a direct point of comparison; their reported gains, however, are attributed primarily to instruction-tuning recipes and evaluation harnesses, with comparatively little disclosure of how the underlying corpus was sourced, licensed, or deduplicated, a gap this pipeline is explicitly designed to close. On security-oriented benchmarks, moderate domain adaptation with SecureBERT \cite{aghaei2022securebert} and CySecBERT \cite{bayer2024cysecbert} yields significantly better results even for a small adapted model, supporting the central assumption here that a modestly sized model trained on clean, representative domain text can outperform a much larger generalist model when the corpus is trustworthy. Focusing on scale, Yu et al. \cite{yu2025primus} published the Primus corpus, an open-source resource for cybersecurity LLM training that reports an average 15.9\% benchmark gain; Primus is the closest existing analogue to the artifact released here, though its construction is described at the level of source categories rather than as a reproducible, auditable pipeline, which is precisely this contribution.
+
+Penedo et al. \cite{penedo2023refinedweb} introduce RefinedWeb, applying URL filtering, language identification, and MinHash LSH to produce a 600B-token subset from a 5T-token web crawl. RefinedWeb is strictly linear: filters run once, in sequence, and a surviving document is released regardless of how it distorts the resulting topic or source distribution. This pipeline departs from that model with a blocking sufficiency gate, rather than a final post-hoc quality filter, so that corpus-level imbalance is itself a first-class rejection criterion rather than an artifact reported after release. Lee et al. \cite{lee2022deduplication} show that deduplication improves downstream accuracy and reduces memorisation, which directly motivates the two-tier exact-and-near-duplicate design in Section III-F rather than a single fixed-threshold pass. Abbas et al. \cite{abbas2023semdedup} explore semantic deduplication, using embedding-space clustering to catch reworded duplicates that lexical hashing misses; the pipeline treats this as complementary to its lexical MinHash approach and revisits it as future work in Section VI.
+
+\subsection{Structured Intelligence and Infrastructure}
+
+In line with Al-Sada et al. \cite{alsada2025attck}, Rani et al. \cite{rani2024ttpxhunter}, and Abdeen et al. \cite{abdeen2023smet}, models built on the MITRE ATT\&CK framework or similar structured approaches perform significantly better at tactics-techniques-procedures (TTP) extraction and CVE tagging than reference-based learning, supporting the claim that explicitly allocating each collected record to a sub-domain matters. Where these works apply structure at the level of individual model outputs (for example, mapping a report onto an ATT\&CK technique), the pipeline applies the same principle earlier, at the level of the training record itself, tagging every record to one of twelve canonical sub-domains before it can enter the released corpus. Park and You \cite{park2023pretrained} show that source-type multiplicity improves generalisation across cyber threat intelligence models, further justifying a heterogeneous mix of adapters (API feeds, PDFs, structured feeds, and crawled HTML) rather than a single, easily normalised source type.
+
+On tooling, Leskovec et al. \cite{leskovec2014mmd} survey the MinHash/LSH techniques used in the second deduplication tier, and their complexity analysis justifies replacing an all-pairs comparison with a sub-linear approximate search as the pipeline scales past hundreds of thousands of records. Wang et al. \cite{wang2023selfinstruct} motivate separating the fields an annotation owner controls from those the collector controls, a separation of concerns adopted directly in the canonical schema design (Section III-G). Pydantic v2 \cite{pydanticv2} enforces a closed set of attributes, which the pipeline relies on to make schema violations a hard validation failure rather than a silent data-quality issue found downstream. Presidio \cite{presidio2023} redacts PII without custom code, and its rule-and-model hybrid design is why the pipeline can fall back to regular-expression redaction when the primary model is unavailable. Prefect \cite{prefect2023} and DVC \cite{dvc2023} coordinate and version the pipeline steps, giving reproducible, resumable runs and a versioned dataset lineage without either tool being a hard runtime dependency. Schick et al. \cite{schick2023toolformer} introduced the tool-calling approach now implemented by the monitoring agent, whose read-only tool surface is a deliberately narrowed instance of that paradigm. Finally, Tihanyi et al. \cite{tihanyi2024cybermetric} and Alam et al. \cite{alam2024ctibench} provide benchmarks for testing the resulting SLM, and evaluation on them is a natural next step once the pilot corpus in Section V reaches full sub-domain coverage.
+
+\subsection{Positioning of This Work}
+
+Taken together, the corpora reviewed above (CyberPal 2.0 \cite{levi2025cyberpal}, Primus \cite{yu2025primus}, and the domain-adapted encoders \cite{aghaei2022securebert,bayer2024cysecbert}) establish that domain-specific cybersecurity data measurably improves model quality, while the general-purpose curation literature (RefinedWeb \cite{penedo2023refinedweb}, deduplication \cite{lee2022deduplication,abbas2023semdedup}) establishes how to curate at scale. What remains under-specified is the middle layer connecting the two: a governed, auditable procedure for turning heterogeneous, inconsistently licensed cybersecurity sources into a schema-validated corpus, where licensing, synthetic-content exclusion, and sub-domain balance are blocking controls rather than post-hoc reporting metrics. This pipeline occupies exactly that middle layer, combining the structured, sub-domain-aware framing of \cite{alsada2025attck,rani2024ttpxhunter,abdeen2023smet,park2023pretrained} with the data-engineering rigour of \cite{penedo2023refinedweb,leskovec2014mmd}, and adding governance controls, licence gating, synthetic-source exclusion, and a blocking sufficiency gate that prior cybersecurity-dataset work does not make explicit as first-class, auditable pipeline stages. Table~\ref{tab:comparison} summarises this positioning against the closest comparable efforts.
+
+\begin{table*}[t]
+\caption{Governance and curation capabilities as reported by comparable corpora and pipelines. CyberCorpus is this work; the remaining columns are Primus \cite{yu2025primus}, CyberPal 2.0 \cite{levi2025cyberpal}, and RefinedWeb \cite{penedo2023refinedweb}. $\checkmark$ reported; $\times$ absent or not applicable by design; n/r not reported in the cited work.}
+\label{tab:comparison}
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Capability} & \textbf{CyberCorpus} & \textbf{Primus} & \textbf{CyberPal 2.0} & \textbf{RefinedWeb} \\ \hline
+Cybersecurity-specific corpus          & $\checkmark$ & $\checkmark$ & $\checkmark$ & $\times$     \\ \hline
+Default-deny commercial licence gate   & $\checkmark$ & n/r          & n/r          & $\times$     \\ \hline
+Synthetic-source exclusion             & $\checkmark$ & n/r          & n/r          & $\times$     \\ \hline
+Blocking sub-domain sufficiency gate   & $\checkmark$ & $\times$     & $\times$     & $\times$     \\ \hline
+Exact + MinHash near-duplicate removal & $\checkmark$ & n/r          & n/r          & $\checkmark$ \\ \hline
+Provenance datasheet / manifest        & $\checkmark$ & n/r          & n/r          & $\times$     \\ \hline
+Reproducible, auditable pipeline       & $\checkmark$ & partial      & n/r          & $\checkmark$ \\ \hline
+\end{tabular}
+\end{table*}
+
+% =================================================================
+\section{Methodology}
+
+This section details the research design: what led to each pipeline step, what each step looks like, the alternative choices, and the rationale for the selections made. The implementation is described in Section IV in the same order.
+
+\subsection{System Architecture}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\columnwidth]{figures/PipelineArchitecture.png}
+\caption{Conceptual pipeline architecture. Ingestion and cleaning run
+fused, per source, in parallel, behind an independent licence check; a
+blocking sufficiency gate closes a feedback loop to ingestion when a
+sub-domain is under-represented, and synthetic-flagged sources are held
+out of the final dataset at normalisation.}
+\label{fig:methodology_arch}
+\end{figure}
+
+Figure~\ref{fig:methodology_arch} presents the final architecture. The optional sourcing phase lets external contributors suggest a source, but a suggested source is never fetched until it clears the licence gate. Sourcing, ingestion, and cleaning run per source, in parallel; once a source's cleaned data clears the licence gate, a single cross-source de-duplication step runs. The sufficiency gate then either proceeds to normalisation or rejects the data back to ingestion. After normalisation, schema validation, and near-duplicate identification, each record is written out and recorded in the provenance manifest that supplies the dashboard and agent.
+
+\subsection{Research Design}
+
+Two approaches to curating domain-expert training data were considered: keyword-filtering an existing general-web corpus, and building a custom reference-corpus pipeline. The first was dismissed because keyword-filtering across a web-scale document set propagates unresolved licensing and veracity risks, and much visible online cybersecurity material appears aimed at research rather than training and use \cite{yu2025primus}. This work therefore adopts a constructive research design, in which the research output is the pipeline infrastructure itself and the central input is the proposed framework for project governance.
+
+\subsection{Source Governance and Domain Taxonomy}
+
+Source governance is the main control reflected in the structure of the pipeline. Each candidate source is classified into a simple two-level taxonomy. The top-level domain is CYBERSEC for all twelve canonical practice sub-domains. Post-quantum cryptography sources are folded into the CRYPTOGRAPHY sub-domain rather than forked into a separate track, so the taxonomy stays flat. The twelve sub-domains are as follows:
+
+
+\begin{table}[htbp]
+\centering
+\caption{Canonical Cybersecurity Sub-domains}
+\label{tab:cybersec_subdomains}
+\begin{tabular}{|l|l|}
+\hline
+APPLICATION          & INCIDENT\_RESPONSE   \\ \hline
+CLOUD                & NETWORK              \\ \hline
+CRYPTOGRAPHY         & PENETRATION\_TESTING \\ \hline
+DATA\_PRIVACY        & SEC\_OPS             \\ \hline
+GRC                  & THREAT\_INTELLIGENCE \\ \hline
+IAM                  & VULN\_MANAGEMENT     \\ \hline
+\end{tabular}
+\end{table}
+
+
+Two independent governance controls apply to each candidate source. A synthetic-data flag marks sources whose content is model-generated so that it can be held out of the released corpus, and a licence check confirms the source is not licensed problematically: the pipeline admits sources under CC0-1.0 or CC BY 4.0 (or other specifically vetted licences) and rejects any source under CC BY-SA, CC BY-NC, or GPL/AGPL terms, along with any source whose licence it cannot recognise.
+
+The licence gate is entirely separate from the synthetic-data policy, and only determines whether a source's stated licence permits training, reading an open text field in which licences are expressed in natural language.
+
+\subsection{Ingestion and Parallel Execution}
+
+Ingestion fuses collection and cleaning into a single work item per source, rather than a sequential pair of batch stages. In a strictly sequential system, the entire output of a source must be written to disk before cleaning can start, which is impractical for sources larger than ${\sim}2$\,GB. Fusing the two operations caps peak disk usage at the raw size of a single source.
+
+Sources differ in how they can be retrieved: some expose a platform client library, some are published as PDF or JSON documents, some require crawling HTML with a headless browser or HTML parser, and others are best retrieved through a platform-specific API (often for structured feeds). Rather than handling these access patterns inside the orchestrator, the pipeline models one adapter per access pattern behind a generic fetch-and-normalise interface; adding a new access pattern only requires defining a new adapter, leaving the orchestrator untouched. All crawling adapters respect the target site's robots policy and comply with its licence and crawl terms. Because runs can last many hours and encounter transient failures such as rate-limiting or process crashes, each source runs on its own worker, and a source-completion ledger lets a suspended run resume, fetching only sources not yet processed when it stopped.
+
+\subsection{Cleaning and Quality Assurance}
+
+The cleaning stage applies a sequence of deterministic, dependent transformations to each record. First, each record's content is extracted into a single prose field; if no viable prose results, the record is dropped here. Anomalies are then screened for severity: structural anomalies are removed, and behavioural anomalies are held for review by a human operator, since they remain unsolvable by an automated procedure. Likely duplicates are removed next, before redaction and translation, to avoid spending compute translating a record that will soon be dropped. PII redaction follows deduplication, stripping client, adviser, or analyst content that is not required for analysis or training but can co-exist in a security context. Finally, the stage checks that translatable content exists for each record; otherwise the record is removed. Every processing stage is logged in enough detail to trace a record back to its original contents.
+
+\subsection{Two-Tier Deduplication}
+
+The duplication checks run in two stages. The first removes exact duplicates by computing a byte-level hash of each record body, which is virtually free. The second detects near-duplicate content, such as reposted blog articles or mirrored advisories, by comparing token sets through their Jaccard index
+\begin{equation}
+  J(A, B) = \frac{|A \cap B|}{|A \cup B|}
+\end{equation}
+The second stage applies MinHash LSH \cite{leskovec2014mmd} to group records without an all-pairs comparison, reducing complexity from $O(n^2)$ to approximately $O(n)$ \cite{leskovec2014mmd}.
+
+The pipeline uses a Jaccard threshold of 0.65, lower than typical general-web pipelines, to capture templated cybersecurity content: boilerplate text, CVE headers, and advisories that share substantial structure but do not warrant aggressive rejection at a stronger threshold. Because the best-match score for every compared pair is recorded, the threshold can be re-tuned on already-collected data without reprocessing comparisons. A full global duplicate search would need prohibitive memory in the current setup, and more so as the corpus grows. Individual workers do not deduplicate within their own sources; a single subsequent cross-source scan detects duplicates contributed by two or more sources.
+
+\subsection{Sufficiency Gating}
+
+Exploratory data analysis is only useful if it acts on what it finds, so this stage is an operational gate rather than a report. For every sub-domain, the gate records schema coverage and completeness, content volume, source concentration, text-quality metrics, duplicate rate, and drift (the maximum divergence of a sub-domain's distribution from the previous run). Failures carry one of two severities. A Blocker fires when overall content volume falls below its threshold, or when a single source exceeds the concentration ceiling for a sub-domain; it prevents that sub-domain from being released and returns it to ingestion for more content. A Warning, raised for very sparse sub-domains or a high duplicate rate, does not stop release. This interaction between Blockers and Warnings is what separates this pipeline from a linear one such as RefinedWeb \cite{penedo2023refinedweb}: it enforces a minimum quality in every release rather than only reporting quality after the fact. Figure~\ref{fig:dashboard_pipeline} shows this Blocker firing in the pilot run.
+
+\subsection{Canonical Schema and Annotation Handoff}
+
+The canonical schema follows one design principle: a field is owned by exactly one stage and may not depend on an annotation stage that has not run. It is a Pydantic v2 model \cite{pydanticv2} with strictly interpreted type hints, so a field cannot be defined at annotation and then redefined at collection. Any field the pipeline can compute deterministically, such as content hashes, character or token counts, or resolved domain and sub-domain labels, is populated at collection time. Fields that require weak supervision or human annotators receive an explicitly typed placeholder, guaranteeing a consistent record shape and keeping each record machine-readable once persisted. This design helps in two ways. First, it preempts reconciling collection and annotation fields when annotations are appended, since the two are structurally separated from the outset. Second, it acts as a precise, static contract between the collection and annotation teams, supporting tooling-assisted annotation such as Wang et al. \cite{wang2023selfinstruct} and freeing annotation pipelines from any knowledge of the collection internals. The Rust backend of Pydantic v2 \cite{pydanticv2} validates the 22 fields against every record and forbids unexpected fields, preventing schema mismatches from propagating downstream.
+
+\subsection{Monitoring and Conversational Access}
+
+Observability is a first-class design property: pipeline state and outputs are transparent by construction. Dataset state and content are exposed through a read-only dashboard with no option to run, retry, or edit a record, so widening the dashboard's audience does not widen the pipeline's attack surface.
+
+The read-only dashboard is augmented with a handful of tool-calling agents. No single dashboard view answers every question an observer might have; informal free-text requests such as ``which sub-domain is currently the thinnest?'' rarely map to one page. Following the tool-calling paradigm of Schick et al. \cite{schick2023toolformer}, the system exposes a handful of read-only tools over the same data and lets a model decide at query time whether to call any of them. None of the tools can write, retry, or otherwise change pipeline state; they only provide a natural-language interface to existing observability metrics without introducing new ones.
+
+% =================================================================
+\section{Implementation}
+
+This section describes how the methodology of Section III is realised, following the same sequence of subsections.
+
+\subsection{Technology Stack}
+
+The pipeline is a Python 3.13+ package managed with the uv package manager (for deterministic lock-file resolution) and exposed through a single command-line utility that is also importable as a Python module. The code is organised as one package per stage (sourcing, ingestion, cleaning, exploratory analysis, normalisation, orchestration, and dashboard), each with a corresponding test module. The source catalogue is a single version-controlled spreadsheet, and a separate directory holds the Terraform configuration. All working directories, that is, temporary or intermediate artifact locations, resolve from a single environment variable that defaults to the current working directory, allowing a code-only repository whose deployment simply points that variable elsewhere. Secrets are read only from an environment file and never encoded into the source. A streaming entry point drives per-source ingestion: a run command executes only until cross-source deduplication completes, whereas an all command continues through normalisation, with matching Prefect equivalents. A resume option lets both commands continue from any interruption by reading the completion ledger, and all generated outputs are excluded from version control.
+
+\subsection{Source Governance}
+
+The optional sourcing stage does keyword lookups per sub-domain using the Google Programmable Search API, discards any URL found in the catalogue or in previous runs, saves any survivors to an audit CSV, and (unless a dry run is requested) appends these survivors to the local catalogue. A URL added at this stage is never fetched directly; sourcing only proposes candidates for review, and any that are pursued still pass the licence gate at ingestion.
+
+The synthetic-data filter is driven by a synthetic flag in the source catalogue, populated by a human who marks model-generated and simulated sources; the pipeline takes this flag at face value, without content analysis. For each flagged row, the source's dataset link is reduced to a stable dataset identity of the form org/name; at normalisation, each record's URL is reduced the same way, and any match is diverted from the corpus into a separate exclusion file. Matching on the dataset identity rather than the folder slug distinguishes datasets that would otherwise share a slug, such as several sources published by a single account.
+
+The synthetic sources are still downloaded, transformed, and counted by the sufficiency gate; they are simply stripped from the final dataset, and the excluded volume is reported separately in the normalisation report. A companion command keyword-scans the catalogue and suggests candidates for the list of synthetic sources; it only ever proposes, and never decides.
+
+The independent licence gate is the sole admission control at ingestion, verifying that a candidate source permits unencumbered commercial use before anything is downloaded. Because the catalogue's free-text licence column varies widely across codified SPDX licences, plain English, and named entities, the gate applies default-deny keyword matching against a down-cased, whitespace-collapsed form of the value: any licence it does not recognise is blocked until updated manually, and all copyleft, share-alike, and non-commercial-only licences are blocked explicitly. Deny rules precede allow rules, which rejects cases such as ``CC BY-NC-SA 4.0'' that contain an allowed substring but should be refused. The gate is a pair of pure functions: one classifies a raw licence string, and one decides whether a source is admissible from its live catalogue licence; a kill switch disables the gate while working locally. Licence-gate skips are logged under a distinct licence reason at ingestion, separate from the synthetic exclusions emitted at normalisation, so the two controls can be audited independently.
+
+\subsection{Ingestion and Cleaning}
+
+A single worker takes each source from start to finish: it checks the licence gate, requests and ingests the raw file through the appropriate adapter, cleans the data in place, and deletes the raw file just before the next source starts. The pipeline defines four kinds of adapters for the access patterns in Section III: a fetch adapter for dataset providers with a native client library (such as HuggingFace and Kaggle) and simple URLs; a scrape adapter that parses a PDF document into one record per page or handles structured JSON and XML feeds directly; an HTML adapter built on a fast parser but falling back to a headless browser for JavaScript-rendered pages, restricted to pages permitted under their robots policy; and an adapter for the NVD CVE feed that can use an API key to raise the rate limit. If a source cannot be processed, the failure is recorded instead of killing the worker pool. Ingestion tracks each ingested source in a SQLite log and a provenance ledger, and writes per-source summary statistics (size, row count, and licence); the main process writes each fully completed source into the completion ledger.
+
+Cleaning follows the same five phases as described in Section III-D: content is first inserted into a single text column, and rows whose feature-table content carries no prose are skipped from the text corpus; validation flags anomalies for a quarantine of structural failures or a review queue of behavioural anomalies, after an automated sanitisation pass that can save a dirty record; deduplication identifies exact and near duplicates for removal; redaction obscures PII with Presidio, falling back to regular-expression replacement if need be; and translation handles foreign-language text by passing through text deemed foreign but translatable, and dropping only text that cannot be translated. Clean records are deposited to a store that mirrors the raw layout, with a row-level report written for each file. Per-source workers run with deduplication disabled; when the pool is exhausted, a final pass over the clean store identifies duplicates that were split across sources. This pass is deterministic, since files are processed in sorted order, and it is checkpointed via an exact-hash set and a list of finished files, so a resumed run restarts an interrupted deduplication where it stopped.
+
+\subsection{Deduplication, Sufficiency Gate, and Normalisation}
+
+The exploratory-analysis stage measures, per sub-domain, schema completeness, content volume, source concentration, text quality, duplication rate and drift from the previous run. These are compared against thresholds that are all overridable by environment variables. If a sub-domain's content is below its volume threshold, or a disproportionate amount of a sub-domain originates from a single source above the concentration ceiling, a Blocker is fired. If any Blocker is fired, the run is stopped before normalisation with a sufficiency error. Warnings are generated for thin sub-domains, a high duplicate rate, low average tokens, or drift; they do not fail the run and are logged. If the pipeline is run with a no-enforce flag, Blockers become warnings. The output of each evaluation is stored in a versioned, append-only history, with a pointer to the latest result.
+
+
+\begin{table}[t]
+\caption{Canonical Record Schema (22 Fields)}
+\label{tab:schema}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{|p{1.5cm}|p{1.5cm}|p{3.6cm}|}
+\hline
+Group & Fields & Filled by \\ \hline
+Identity & id, content\_hash & normalise \\ \hline
+Content & text & clean $\rightarrow$ normalise \\ \hline
+Provenance & source, source\_url, license, origin\_format & ingest \\ \hline
+Auto-computed & lang, token\_count, char\_count & normalise \\ \hline
+Pipeline meta & pipeline\_version, collected\_at & normalise \\ \hline
+Labels & source\_file, record\_type, domain\_name, subdomain\_name, domain\_label, subdomain\_label & normalise (last two are -1 placeholders) \\ \hline
+Annotation & safe\_unsafe, confidence, instruction, reviewed\_by & null placeholders \\ \hline
+\end{tabular}
+\end{table}
+
+Normalisation maps cleaned records onto the canonical schema (Pydantic v2), which comprises twenty-two fields. A mapper registry selects between a prose mapper for natural-language records and a structured mapper that renders table rows as readable ``key: value'' sentences, dispatching unrecognised sources by record shape and raising a first-sight alert. An enrichment step then fills in the fields a mapper cannot supply directly: a UUID4 record identifier, a SHA-256 content hash, automatically computed language, token-count, and character-count values, a pipeline version and collection timestamp, the resolved domain and sub-domain names, two label fields initialised to an abstain value of -1 pending weak supervision, and four annotation fields initialised to null pending human review. Validation against the closed schema, which forbids unexpected fields and uses closed enums, routes non-conforming records to a metadata-only reject log, with raw text gated behind a debug flag; a failure tracker counts rejects per source, warning at five and hard-pausing a source at twenty, preventing a single malformed source from silently flooding the reject log. A final near-duplicate scan applies MinHash LSH at a Jaccard threshold of 0.65, logging every record's best-match score and diverting matches to a duplicates log. Surviving records are appended, one per line, to the final dataset, with state rebuilt from any existing file so that runs remain resumable. Table~\ref{tab:schema} summarises the resulting field groups. Each release is accompanied by a manifest, a ``datasheet for datasets'' recording counts by domain, source, licence, format, and language, the corresponding sufficiency snapshot, the pipeline version, the git commit identifier, and the SHA-256 hash of the dataset file.
+
+
+\subsection{Monitoring, Orchestration, and Deployment}
+
+The dashboard is a Streamlit app packaged as an opt-in extra and served locally, which uses a strict read/render separation. One module contains all code that touches disk or SQLite, exposing pure, Streamlit-free functions that are fully unit-testable; a second holds formatting and trend-series helpers; and two more wrap the same read layer for the conversational agent, without importing Streamlit itself. Three pages present this data: a pipeline page, consisting of the auto-refreshing live strip, the sufficiency-gate result, trend charts, a per-source table, and stage reports; a dataset page, a filterable, full-text-searchable explorer keyed over a streamed, never memory-loaded dataset, complete with rejected and de-duplicated record previews; and an agent page, a chatbot-style frontend. The agent makes available seven read-only tools: whether a run is active and how many sources have completed; the latest sufficiency-gate result, including blockers and warnings; record and token counts with domain, source, and language facets; per-source size, row-count, and licence summaries; cleaning and normalisation stage totals; a keyword and facet search returning trimmed snippets; and previews of rejected or duplicate records. None of these tools can trigger a run, retry a source, or write to disk. A tool-calling loop, backed by NVIDIA NIM through an OpenAI-compatible client, alternates between sending the conversation and executing requested tool calls for up to six iterations, bounding latency and cost; every tool dispatch and the model round-trip itself are individually wrapped, so a failure surfaces as a returned error rather than an uncaught exception, and the page falls back to setup instructions when the API key is unset.
+
+Two orchestration paths are available. Prefect wraps the same stage functions in a build-corpus flow, loading secrets, then running per-source ingest and clean (mapped, retried, and isolated), cross-source deduplication, the sufficiency gate, normalisation, and an optional DVC snapshot; Prefect is optional, and its decorators degrade to no-ops when it is not installed, so the underlying functions remain independently testable. DVC versions the corpus and its analysis and normalisation reports to an S3 remote. Deployment is Dockerised, with a Terraform skeleton provisioning ECR, ECS, S3, IAM, and Secrets Manager, and CI/CD for scheduled, versioned corpus releases. Least-privilege access is maintained throughout: the ECS task role can reach only a single data bucket and four named secrets, and the deployed image carries no embedded credentials.
+
+\subsection{Testing and Security Controls}
+
+Development testing includes use of pytest at all layers, with two broad conventions that allow the suite to run quickly and hermetically: layers with external logic are written to avoid weighty or networked imports wherever possible, so they can be tested headlessly by seeding a disposable data root; and optional dependencies are allowed to degrade gracefully, skipping dashboard render tests when the extra is not installed, and calling a fake OpenAI-compatible client when the model API is unavailable for testing purposes. Continuous integration also includes secret scanning (gitleaks against entire repo history) and dependency auditing (pip-audit), with linting performed by ruff.
+
+Table~\ref{tab:security} summarises the security controls included at each layer. These are designed according to the project's guiding principle that every layer of the stack should operate on the assumption that its input may be hostile or low fidelity, and should fail or degrade gracefully in a manner which is both traceable and auditable, and where possible reversible.
+
+\begin{table}[t]
+\caption{Security and Governance Controls by Stage}
+\label{tab:security}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{|p{1.3cm}|p{6.1cm}|}
+\hline
+Stage & Controls \\ \hline
+Sourcing & Discovered sources written to the catalogue for review, never fetched directly; dry-run mode plus a CSV audit artifact. \\ \hline
+Ingestion & Default-deny commercial-licence gate; per-source process isolation; provenance ingest ledger. \\ \hline
+Cleaning & PII redaction (Presidio with regex fallback); documented PII blind spots with sampled manual review; anomaly quarantine; auditable drop reasons. \\ \hline
+EDA & Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned, append-only run history. \\ \hline
+Normalisation & Synthetic-source exclusion; strict schema validation with closed enums; metadata-only reject logs; per-source failure escalation; per-record near-duplicate scores; content hashing. \\ \hline
+Release & Provenance manifest (datasheet); DVC-versioned releases enabling scoped rollback. \\ \hline
+CI / supply chain & Secret scanning (gitleaks, full history); dependency auditing (pip-audit); least-privilege CI token. \\ \hline
+Deployment & Immutable ECR tags with scan-on-push; S3 public-access block, encryption, and versioning; least-privilege IAM task role; secrets injected at runtime, never baked into images. \\ \hline
+\end{tabular}
+\end{table}
+
+Internal hostnames, private-IP-address ranges, service-account identifiers, and API keys are absent from the automated PII list. They were considered explicit exceptions and not silently ignored; all of these had manual review. See Section VI-A on how to future-proof these.
+
+% =================================================================
+\section{Results}
+
+\subsection{Pilot Instantiation and Current Run State}
+
+As of this writing, the pipeline is feature-complete: all five stages are implemented, along with the governance controls and the monitoring dashboard with its question-answering agent. The screenshot below reports the state of an in-progress pilot run against 192 catalogued sources, 63 of which had been fully processed at the time of writing. Figure~\ref{fig:dashboard_pipeline} shows the dashboard's view of the in-progress run.
+
+In this run, the deduplicated dataset contained 420 records across four of the twelve sub-domains, broken down in Table~\ref{tab:pilot}. These numbers reflect the pipeline's behaviour partway through the run and are not intended to represent the size or coverage of the production dataset.
+
+\begin{table}[t]
+\caption{Pilot Run: Deduplicated Records by Sub-domain}
+\label{tab:pilot}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{|l|r|r|}
+\hline
+Sub-domain & Records & Share \\ \hline
+Threat Intelligence             & 198 & 47.1\% \\ \hline
+Incident Response and Forensics & 80  & 19.0\% \\ \hline
+Identity and Access Management  & 79  & 18.8\% \\ \hline
+Security Operations             & 63  & 15.0\% \\ \hline
+\textbf{Total}                  & \textbf{420} & \textbf{100\%} \\ \hline
+\end{tabular}
+
+\smallskip
+{\footnotesize Four of twelve sub-domains covered, drawn from four contributing
+sources; 0.0\% duplicate rate; mean 239 tokens per record; one active Blocker
+(IAM 100\% from nist-sp800-63b); zero Warnings; drift unavailable on the
+first run.}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\columnwidth]{figures/dashboard_pipeline.png}
+\caption{Dashboard Pipeline page captured mid-run: sources
+completed, a live per-source ingest log, and the sufficiency gate
+result.}
+\label{fig:dashboard_pipeline}
+\end{figure}
+
+\subsection{The Sufficiency Gate Blocking Release}
+
+The pilot run shows the sufficiency gate working. In the screenshot, the gate returned a fail with one active Blocker and no Warnings: the guideline nist-sp800-63b accounted for 100.0\% of the IAM sub-domain, exceeding the configured concentration threshold of 60\%. Because the pipeline blocks on this gate, execution stopped before normalisation and returned a message that IAM sources need diversifying, rather than letting a single document flood the released records. At that point the gate reported 420 records with a 0.0\% duplicate rate and an average of 239 tokens per record. Drift is 0.0\% because there is no prior snapshot on the first run, which is expected: a genuine lack of source diversity was blocked before it could enter the released dataset.
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][4.5cm][c]{0.8\columnwidth}{\centering\itshape Placeholder: dashboard screenshot to be inserted}}
+\caption{EDA sufficiency gate result.}
+\label{fig:eda_gate_extra}
+\end{figure}
+
+\subsection{Ingestion, Fault Tolerance, and Schema Fidelity}
+
+Two further design claims are validated by the same run log. First, synthetic-data exclusion operates at the source level, not the platform level: a flagged Kaggle intrusion-detection source is diverted from the corpus at normalisation, while unflagged sources from the same platform pass through, because matching is keyed on the dataset's own identity rather than the hosting platform. Second, per-source worker isolation holds under failure: while processing a large phishing-dataset source of 871{,}590 rows across several shards, one shard could not be read and raised an operating-system error; the worker logged it as a skipped unreadable shard and continued with the remaining shards without interrupting the run.
+
+
+
+Fig.~\ref{fig:dashboard_dataset} shows the dataset explorer filtered to the source nist-sp800-63b. It displays the record identifier, source, sub-domain name (correctly resolved to IAM), record type (document), token count, language (English), and, most importantly, the text field itself. This confirms that the 22-field schema from Table~\ref{tab:schema} can be, and is, populated end to end from a real-world, complex, structured source: a NIST Special Publication partitioned by section into records.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\columnwidth]{figures/dashboard_dataset.png}
+\caption{Dashboard Dataset explorer, filtered to nist-sp800-63b:
+populated identifier, source, sub-domain name, record type, token
+count, language, and text fields for each record.}
+\label{fig:dashboard_dataset}
+\end{figure}
+
+% =================================================================
+\section{Conclusion}
+
+This paper presents an automated, governance-first pipeline for building a multi-domain cybersecurity dataset with schema validation from the outset. The key contribution is architectural: instead of treating collection merely as scraping, this design treats every collection stage as its own security boundary.
+
+Under this design, the pipeline assumes that inputs and intermediate artifacts at every stage can be compromised and puts defensive measures in place to detect and contain such occurrences. Among these controls is a governance layer that separates licence-compliance checks at ingestion from a synthetic-data exclusion at normalisation, so that legality and data provenance are decided by independent controls.
+
+Several architectural choices set this pipeline apart from previous efforts such as RefinedWeb \cite{penedo2023refinedweb}. Consolidating ingestion and cleaning behind per-source workers keeps only the smallest possible amount of raw data on disk. Likewise, an intentionally liberal dual-threshold duplicate filter tuned to cybersecurity boilerplate reduces the overhead of all-vs-all comparison while still filtering templated near-duplicates. The operationalisation layer shows that a pipeline built by students can incorporate production-ready tooling: no-ops-safe Prefect decorators, DVC-release versioning, and least-privilege IAM policies without losing unit-tested reliability. These results should be considered proof-of-concept that the overall architecture works as designed, even when inundated with the adversarial input exercised by the sufficiency gate during the pilot timeframe, rather than validation that the underlying corpus is comprehensive.
+
+\subsection{Future Work}
+
+Several directions remain for future work. The near-term steps are to finish the pilot by unblocking the IAM concentration issue and populating the source catalogue with more vetted sources so that the sufficiency gate passes on all twelve sub-domains. The schema was designed to anticipate weak supervision: a Snorkel-style labelling mechanism can overwrite the existing abstain tokens with no schema alterations, and could be coupled with active learning to efficiently guide annotator effort toward the records with highest uncertainty.
+Semantic deduplication based on embeddings \cite{abbas2023semdedup}, in addition to the existing lexical deduplication system, would help the pipeline to identify paraphrased near-duplicates that are missed by Jaccard-matching. Work is also underway to further harden PII redaction to cover internal hostnames, private IP address blocks, service-account IDs, and inline credentials, all of which are pervasive and risky leakage points within security-domain text. This PII redaction hardening would move the pipeline from its current state of validated, development-in-progress to a production-grade, actively maintained dataset.
+
+% =================================================================
+\begin{thebibliography}{00}
+\scriptsize
+\setlength{\itemsep}{0pt}
+\setlength{\parskip}{0pt}
+
+\bibitem{braue2025cybercrime}
+D. Braue,
+``Cybercrime to cost the world \$12.2 trillion annually by 2031,''
+\textit{Cybersecurity Ventures}, 2025.
+[Online]. Available: \url{https://cybersecurityventures.com}
+
+\bibitem{zhang2025llms}
+J. Zhang, H. Bu, H. Wen, Y. Liu, H. Fei, R. Xi, L. Li, Y. Yang,
+H. Zhu, and D. Meng,
+``When LLMs meet cybersecurity: A systematic literature review,''
+\textit{Cybersecurity}, vol. 8, no. 1, pp. 1--41, 2025.
+
+\bibitem{levi2025cyberpal}
+M. Levi et al.,
+``Toward cybersecurity-expert small language models,''
+\textit{arXiv preprint arXiv:2510.14113}, 2025.
+
+\bibitem{yu2025primus}
+Y.-C. Yu, T.-H. Chiang, C.-W. Tsai, C.-M. Huang, and W.-K. Tsao,
+``Primus: A pioneering collection of open-source datasets for
+cybersecurity LLM training,''
+in \textit{Proc. 2025 Conf. on Empirical Methods in Natural Language
+Processing (EMNLP)},
+Suzhou, China, pp. 10391--10413, 2025.
+
+\bibitem{aghaei2022securebert}
+E. Aghaei, X. Niu, W. Shadid, and E. Al-Shaer,
+``SecureBERT: A domain-specific language model for cybersecurity,''
+in \textit{Proc. 18th EAI Int. Conf. on Security and Privacy in
+Communication Networks (SecureComm)},
+Springer, 2022, pp. 39--56.
+
+\bibitem{bayer2024cysecbert}
+M. Bayer, P. Kuehn, R. Shanehsaz, and C. Reuter,
+``CySecBERT: A domain-adapted language model for the cybersecurity
+domain,''
+\textit{ACM Trans. Privacy and Security}, vol. 27, no. 2,
+pp. 1--20, 2024.
+
+\bibitem{alsada2025attck}
+B. Al-Sada, A. Sadighian, and G. Oligeri,
+``MITRE ATT\&CK: State of the art and way forward,''
+\textit{ACM Comput. Surv.}, vol. 57, no. 1, pp. 1--37, 2025.
+
+\bibitem{rani2024ttpxhunter}
+N. Rani, B. Saha, V. Maurya, and S. K. Shukla,
+``TTPXHunter: Actionable threat intelligence extraction as TTPs
+from finished cyber threat reports,''
+\textit{Digital Threats: Research and Practice}, vol. 5, no. 4,
+pp. 1--19, 2024.
+
+\bibitem{ferrag2024revolutionising}
+M. A. Ferrag, M. Ndhlovu, N. Tihanyi, L. C. Cordeiro, M. Debbah,
+T. Lestable, and N. S. Thandi,
+``Revolutionizing cyber threat detection with large language models:
+A privacy-preserving BERT-based lightweight model for IoT/IIoT
+devices,''
+\textit{IEEE Access}, vol. 12, pp. 68280--68297, 2024.
+
+\bibitem{park2023pretrained}
+Y. Park and W. You,
+``A pretrained language model for cyber threat intelligence,''
+in \textit{Proc. 2023 Conf. on Empirical Methods in Natural Language
+Processing: Industry Track},
+Association for Computational Linguistics, 2023, pp. 113--122.
+
+\bibitem{lee2022deduplication}
+K. Lee, D. Ippolito, A. Nystrom, C. Zhang, D. Eck,
+C. Callison-Burch, and N. Carlini,
+``Deduplicating training data makes language models better,''
+in \textit{Proc. 60th Annual Meeting of the ACL},
+Dublin, Ireland, pp. 8424--8445, 2022.
+
+\bibitem{penedo2023refinedweb}
+G. Penedo, Q. Malartic, D. Hesslow, R. Cojocaru, H. Alobeidli,
+A. Cappelli, B. Pannier, E. Almazrouei, and J. Launay,
+``The RefinedWeb dataset for Falcon LLM: Outperforming curated
+corpora with web data, and web data only,''
+in \textit{Proc. 37th Conf. on Neural Information Processing Systems
+(NeurIPS), Datasets and Benchmarks Track},
+New Orleans, USA, 2023.
+
+\bibitem{abbas2023semdedup}
+A. Abbas, K. Tirumala, D. Simig, S. Ganguli, and A. S. Morcos,
+``SemDeDup: Data-efficient learning at web-scale through semantic
+deduplication,''
+\textit{arXiv preprint arXiv:2303.09540}, 2023.
+
+\bibitem{minaee2024llm}
+S. Minaee, T. Mikolov, N. Nikzad, M. Chenaghlu, R. Socher,
+X. Amatriain, and J. Gao,
+``Large language models: A survey,''
+\textit{arXiv preprint arXiv:2402.06196}, 2024.
+
+\bibitem{leskovec2014mmd}
+J. Leskovec, A. Rajaraman, and J. D. Ullman,
+\textit{Mining of Massive Datasets}, 2nd ed.
+Cambridge, UK: Cambridge University Press, 2014.
+
+\bibitem{pydanticv2}
+S. Colvin et al.,
+``Pydantic v2: Data validation using Python type hints,''
+\textit{Pydantic Documentation}, 2023.
+[Online]. Available: \url{https://docs.pydantic.dev/latest/}
+
+\bibitem{wang2023selfinstruct}
+Y. Wang, Y. Kordi, S. Mishra, A. Liu, N. A. Smith, D. Khashabi,
+and H. Hajishirzi,
+``Self-instruct: Aligning language models with self-generated
+instructions,''
+in \textit{Proc. 61st Annual Meeting of the ACL},
+Toronto, Canada, pp. 13484--13508, 2023.
+
+\bibitem{abdeen2023smet}
+B. Abdeen, E. Al-Shaer, A. Singhal, L. Khan, and K. Hamlen,
+``SMET: Semantic mapping of CVE to ATT\&CK and its application
+to cybersecurity,''
+in \textit{IFIP Annual Conf. on Data and Applications Security
+and Privacy},
+Springer, 2023, pp. 243--260.
+
+\bibitem{schick2023toolformer}
+T. Schick, J. Dwivedi-Yu, R. Dess\`i, R. Raileanu, M. Lomeli,
+L. Zettlemoyer, N. Cancedda, and T. Scialom,
+``Toolformer: Language models can teach themselves to use tools,''
+in \textit{Proc. 37th Conf. on Neural Information Processing Systems
+(NeurIPS)},
+New Orleans, USA, 2023.
+
+\bibitem{tihanyi2024cybermetric}
+N. Tihanyi, T. Bisztray, R. Jain, M. A. Ferrag, L. C. Cordeiro,
+and V. Mavroeidis,
+``CyberMetric: A benchmark dataset based on retrieval-augmented
+generation for evaluating LLMs in cybersecurity knowledge,''
+\textit{arXiv preprint arXiv:2402.07688}, 2024.
+
+\bibitem{alam2024ctibench}
+M. T. Alam, D. Bhusal, Y. Park, and N. Rastogi,
+``CTIBench: A benchmark for evaluating LLMs in cyber threat
+intelligence,''
+\textit{arXiv preprint arXiv:2406.07599}, 2024.
+
+\bibitem{presidio2023}
+Microsoft,
+``Presidio: Context aware, pluggable and customizable PII
+de-identification service,''
+\textit{Microsoft Open Source Documentation}, 2023.
+[Online]. Available: \url{https://microsoft.github.io/presidio/}
+
+\bibitem{prefect2023}
+Prefect Technologies,
+``Prefect: The easiest way to orchestrate and observe your data
+pipelines,''
+\textit{Prefect Documentation}, 2023.
+[Online]. Available: \url{https://docs.prefect.io}
+
+\bibitem{dvc2023}
+Iterative.ai,
+``DVC: Data version control for machine learning projects,''
+\textit{DVC Documentation}, 2023.
+[Online]. Available: \url{https://dvc.org}
+
+\end{thebibliography}
+
+\end{document}
