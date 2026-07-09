@@ -119,22 +119,6 @@ def _catalog_total() -> int | None:
     return len(rows) if rows else None
 
 
-def catalog_summary() -> dict:
-    """Source catalog overview: total rows + per-Sub-Domain counts.
-
-    Read straight from ``sources/Sources.csv`` so the landing page has a
-    meaningful distribution to show even before any run has produced a manifest.
-    Returns ``{"total": int, "by_domain": {name: count}}`` (empty when absent).
-    """
-    path = os.path.join(_repo_root(), "sources", "Sources.csv")
-    rows = _read_csv(path)
-    by_domain: dict[str, int] = {}
-    for r in rows:
-        dom = (r.get("Sub-Domain") or "").strip() or "Uncategorized"
-        by_domain[dom] = by_domain.get(dom, 0) + 1
-    return {"total": len(rows), "by_domain": by_domain}
-
-
 def log_tail(n: int = 40) -> list[str]:
     """Last ``n`` lines of the newest per-PID pipeline log (empty if none)."""
     logs = _pipeline_logs()
