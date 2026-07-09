@@ -8,34 +8,22 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, data, theme
-
-st.set_page_config(page_title="Dataset · cybersec-slm", page_icon="🛡️", layout="wide")
-theme.inject()
+from cybersec_slm.dashboard import charts, data
 
 PAGE_SIZE = 50
 _SNIPPET = 160
 _TABLE_FIELDS = ("id", "source", "subdomain_name", "record_type", "token_count", "lang")
 
-man = data.manifest()
-theme.hero("Dataset", "explore · filter · inspect",
-           "search and page through the released corpus, and the records that "
-           "did not make it in")
+st.title("Dataset")
 
+man = data.manifest()
 if man:
-    theme.kpi_grid([
-        {"label": "records", "value": charts.fmt_int(man.get("record_count")),
-         "status": "pass"},
-        {"label": "subdomains", "value": charts.fmt_int(len(man.get("subdomains") or {})),
-         "status": "accent"},
-        {"label": "sources", "value": charts.fmt_int(len(man.get("sources") or {}))},
-        {"label": "tokens", "value": charts.fmt_int(man.get("token_total"))},
-    ])
-else:
-    st.info("No released corpus yet (`data/final/dataset.jsonl`). Run the pipeline first.")
+    a, b, c = st.columns(3)
+    a.metric("Records", charts.fmt_int(man.get("record_count")))
+    b.metric("Subdomains", charts.fmt_int(len(man.get("subdomains") or {})))
+    c.metric("Sources", charts.fmt_int(len(man.get("sources") or {})))
 
 # ------------------------------------------------------------------- filters ---
-theme.section("Browse", eyebrow="filter + search")
 facets = data.dataset_facets()
 filters: dict[str, str] = {}
 fcols = st.columns(len(data.FILTER_FIELDS))
@@ -59,8 +47,7 @@ shown_lo = offset + 1 if rows else 0
 shown_hi = offset + len(rows)
 more = "+" if result["capped"] else ""
 st.caption(f"showing {shown_lo}–{shown_hi} of {result['match_count']}{more} matches"
-           + (f"  ·  scan capped at {data.DATASET_SCAN_CAP:,} records"
-              if result["capped"] else ""))
+           + (f"  ·  scan capped at {data.DATASET_SCAN_CAP:,} records" if result["capped"] else ""))
 
 if not rows:
     st.info("No matching records (or no `data/final/dataset.jsonl` yet).")
@@ -77,16 +64,17 @@ else:
         st.session_state["_ds_offset"] = offset + PAGE_SIZE
         st.rerun()
 
-    theme.section("Record detail", eyebrow="inspect")
+    st.subheader("Record detail")
     ids = [r.get("id") for r in rows]
     picked = st.selectbox("record id", ids)
     detail = next((r for r in rows if r.get("id") == picked), None)
     if detail:
         st.json(detail)
 
+st.divider()
+
 # --------------------------------------------------------- what didn't make it -
-theme.section("What didn't make it", eyebrow="rejected + de-duplicated",
-              desc="a preview of records dropped on the way into the corpus")
+st.subheader("What didn't make it")
 tabs = st.tabs(["Rejected", "Duplicates", "Near-dup scores"])
 for tab, kind in zip(tabs, ("rejected", "duplicates", "dedup_scores"), strict=True):
     with tab:
