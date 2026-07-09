@@ -10,13 +10,19 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import agent_client
+from cybersec_slm.dashboard import agent_client, theme
 
-st.title("Agent")
-st.caption("Ask about pipeline status or the corpus. Read-only -- it can look "
-           "things up, not trigger a run or change anything.")
+st.set_page_config(page_title="Agent · cybersec-slm", page_icon="🛡️", layout="wide")
+theme.inject()
 
-if not agent_client.is_available():
+_available = agent_client.is_available()
+theme.hero("Agent", "ask · read-only",
+           "questions about run status and corpus content, answered by calling "
+           "read-only tools",
+           theme.pill("online" if _available else "not configured",
+                      "pass" if _available else "muted"))
+
+if not _available:
     st.info(
         "Not configured yet. Install the optional extra and set an API key:\n\n"
         "```bash\n"

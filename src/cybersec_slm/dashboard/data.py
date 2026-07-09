@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dashboard read layer — the ONLY code that touches the pipeline's artifacts.
+"""Dashboard read layer - the ONLY code that touches the pipeline's artifacts.
 
 Pure functions that read what the pipeline writes under the data root and return
 plain Python (dict / list). No Streamlit import, so every function is unit-tested
@@ -119,6 +119,22 @@ def _catalog_total() -> int | None:
     return len(rows) if rows else None
 
 
+def catalog_summary() -> dict:
+    """Source catalog overview: total rows + per-Sub-Domain counts.
+
+    Read straight from ``sources/Sources.csv`` so the landing page has a
+    meaningful distribution to show even before any run has produced a manifest.
+    Returns ``{"total": int, "by_domain": {name: count}}`` (empty when absent).
+    """
+    path = os.path.join(_repo_root(), "sources", "Sources.csv")
+    rows = _read_csv(path)
+    by_domain: dict[str, int] = {}
+    for r in rows:
+        dom = (r.get("Sub-Domain") or "").strip() or "Uncategorized"
+        by_domain[dom] = by_domain.get(dom, 0) + 1
+    return {"total": len(rows), "by_domain": by_domain}
+
+
 def log_tail(n: int = 40) -> list[str]:
     """Last ``n`` lines of the newest per-PID pipeline log (empty if none)."""
     logs = _pipeline_logs()
@@ -187,6 +203,83 @@ def normalize_report() -> dict | None:
 def manifest() -> dict | None:
     """Parsed ``data/final/manifest.json`` (the release datasheet)."""
     return _read_json(os.path.join(_final(), "manifest.json"))
+
+
+def _dir_size_mb(path: str) -> float:
+    if not os.path.exists(path): return 0.0
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total / (1024 * 1024)
+
+
+def _count_source_dirs(path: str) -> int:
+    """Count distinct source folders (domain/<source>/) that exist under path."""
+    if not os.path.exists(path):
+        return 0
+    count = 0
+    try:
+        for domain_entry in os.scandir(path):
+            if not domain_entry.is_dir() or domain_entry.name.startswith("."):
+                continue
+            for src_entry in os.scandir(domain_entry.path):
+                if src_entry.is_dir() and not src_entry.name.startswith("."):
+                    count += 1
+    except OSError:
+        pass
+    return count
+
+
+def data_funnel() -> dict:
+    """Calculates aggregate metrics across the Raw -> Cleaned -> Final funnel."""
+    man = manifest()
+    rc = clean_report()
+    nr = normalize_report()
+
+    # Raw: scan actual directories rather than the ingest ledger (which is only
+    # written by the parallel pipeline, not by clean_raw_tree / Prefect flows).
+    raw_root = os.path.join(_root(), "data", "raw")
+    raw_size_mb = _dir_size_mb(raw_root)
+    raw_sources = _count_source_dirs(raw_root)
+    raw_lines = int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0
+
+    # Cleaned: same directory-scan approach so the two counts are independent.
+    clean_root = os.path.join(_root(), "data", "clean")
+    cleaned_size_mb = _dir_size_mb(clean_root)
+    cleaned_sources = _count_source_dirs(clean_root)
+    cleaned_lines = int(rc.get("total", {}).get("out", 0)) if rc.get("total") else 0
+
+    # Final: manifest is the canonical source of truth.
+    final_file = os.path.join(_final(), "dataset.jsonl")
+    appended_size_mb = (os.path.getsize(final_file) / (1024 * 1024)
+                        if os.path.exists(final_file) else 0.0)
+    appended_lines = man.get("record_count", 0) if man else 0
+    appended_sources = len(man.get("sources", {})) if man else 0
+
+    # Normalization losses - shown in the funnel so the cleaned→final drop is explained.
+    norm_counts = (nr or {}).get("counts", {})
+    synthetic_excluded = int(norm_counts.get("synthetic_excluded", 0))
+    near_dups = int(norm_counts.get("near_dups", 0))
+    exact_dups = int(norm_counts.get("exact_dups", 0))
+    rejected = int(norm_counts.get("rejected", 0))
+
+    return {
+        "raw": {"sources": raw_sources, "lines": raw_lines, "size_mb": raw_size_mb},
+        "cleaned": {"sources": cleaned_sources, "lines": cleaned_lines, "size_mb": cleaned_size_mb},
+        "appended": {
+            "sources": appended_sources,
+            "lines": appended_lines,
+            "size_mb": appended_size_mb,
+            "synthetic_excluded": synthetic_excluded,
+            "near_dups": near_dups,
+            "exact_dups": exact_dups,
+            "rejected": rejected,
+        },
+    }
 
 
 # ---------------------------------------------------------------- dataset view -
