@@ -38,12 +38,12 @@ def test_refine_domain_keeps_default_on_tie():
 
 
 def test_refine_domain_reassigns_on_stronger_signal():
-    # Searched under Threat Intelligence but the text screams malware.
+    # Searched under Network Security but the text screams cryptography.
     domain = refine_domain(
-        "Threat Intelligence",
-        "Ransomware sandbox samples",
-        "Labeled malware ransomware PE binary samples for reverse engineering")
-    assert domain == "Malware Analysis"
+        "Network Security",
+        "Post-quantum key exchange",
+        "lattice-based post-quantum cryptography ml-kem certificate over tls")
+    assert domain == "Cryptography"
 
 
 # ---------------------------------------------------------------- row build ---

@@ -57,8 +57,8 @@ CATALOG_COLUMNS: tuple[str, ...] = (
 # Coarse spreadsheet categories -> the sub-domain folder names used elsewhere.
 CATEGORY_TO_DOMAIN = {
     "articles_news_blogs": "Threat Intelligence",
-    "vulnerabilities": "Threat Intelligence",
-    "malware": "Malware Analysis",
+    "vulnerabilities": "Vulnerability Management",
+    "malware": "Threat Intelligence",
     "network": "Network Security",
     "application": "Application Security",
     "cloud": "Cloud Security",
@@ -66,7 +66,8 @@ CATEGORY_TO_DOMAIN = {
     "incident_response": "Incident Response and Forensics",
     "forensics": "Incident Response and Forensics",
     "privacy": "Data Security and Privacy",
-    "pentest": "Penetration Testing and Vulnerability Management",
+    "pentest": "Penetration Testing",
+    "vuln_management": "Vulnerability Management",
     "grc": "Governance, Risk and Compliance",
     "crypto": "Cryptography",
     "secops": "Security Operations",

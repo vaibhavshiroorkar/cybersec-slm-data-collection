@@ -20,9 +20,9 @@ _ROWS = [
      "https://example.gov/doc.pdf", "Document", "PDF"),
     ("a-feed", "Threat Intelligence",
      "https://example.com/data.json", "Feed", "JSON"),
-    ("nvd", "Penetration Testing and Vulnerability Management",
+    ("nvd", "Vulnerability Management",
      "https://services.nvd.nist.gov/rest/json/cves/2.0", "API", "JSON"),
-    ("cwe", "Penetration Testing and Vulnerability Management",
+    ("cwe", "Vulnerability Management",
      "https://cwe.mitre.org/data/xml/cwec_latest.xml.zip", "Feed", "XML"),
 ]
 
