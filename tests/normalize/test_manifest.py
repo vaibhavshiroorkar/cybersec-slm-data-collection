@@ -16,7 +16,7 @@ def _rows(tmp_path):
         {"domain_name": "CYBERSEC", "subdomain_name": "NETWORK", "source": "b",
          "license": "mit", "origin_format": "csv", "record_type": "log",
          "lang": "en", "content_hash": "b" * 64, "token_count": 5, "char_count": 25},
-        {"domain_name": "QUANTUM_SEC", "subdomain_name": "CRYPTOGRAPHY", "source": "a",
+        {"domain_name": "CYBERSEC", "subdomain_name": "CRYPTOGRAPHY", "source": "a",
          "license": "gov", "origin_format": "pdf", "record_type": "doc",
          "lang": "en", "content_hash": "c" * 64, "token_count": 20, "char_count": 100},
     ]
@@ -30,7 +30,7 @@ def test_build_manifest_aggregates(tmp_path):
     m = manifest.build_manifest(_rows(tmp_path))
     assert m["record_count"] == 3
     assert m["unique_content_hashes"] == 3
-    assert m["domains"] == {"CYBERSEC": 2, "QUANTUM_SEC": 1}
+    assert m["domains"] == {"CYBERSEC": 3}
     assert m["sources"]["a"] == 2
     assert set(m["licenses"]) == {"mit", "gov"}
     assert m["token_total"] == 35 and m["char_total"] == 175

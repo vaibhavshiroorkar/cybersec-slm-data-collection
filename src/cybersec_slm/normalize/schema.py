@@ -33,19 +33,17 @@ CANONICAL_DOMAINS: tuple[str, ...] = (
     "Governance, Risk and Compliance",
     "Identity Access and Management",
     "Incident Response and Forensics",
-    "Malware Analysis",
     "Network Security",
-    "Penetration Testing and Vulnerability Management",
+    "Penetration Testing",
     "Security Operations",
     "Threat Intelligence",
+    "Vulnerability Management",
 )
-# A later 13th track. Post-quantum sources map onto the CRYPTOGRAPHY subdomain
-# but carry the QUANTUM_SEC top-level domain (per the schema's domain note).
-QUANTUM_DOMAIN = "Quantum"
-ALLOWED_DOMAINS: frozenset[str] = frozenset(CANONICAL_DOMAINS + (QUANTUM_DOMAIN,))
+ALLOWED_DOMAINS: frozenset[str] = frozenset(CANONICAL_DOMAINS)
 
 # Folder/spelling variants seen in the wild -> canonical domain. Keeps real data
-# from being rejected over a directory typo (e.g. "Forsenics").
+# from being rejected over a directory typo (e.g. "Forsenics"), and folds the
+# retired Quantum and Malware Analysis tracks onto their merge targets.
 DOMAIN_ALIASES: dict[str, str] = {
     "incident response and forsenics": "Incident Response and Forensics",
     "incident response and forensics": "Incident Response and Forensics",
@@ -53,6 +51,12 @@ DOMAIN_ALIASES: dict[str, str] = {
     "iam": "Identity Access and Management",
     "grc": "Governance, Risk and Compliance",
     "appsec": "Application Security",
+    # Retired domains folded into their merge targets.
+    "quantum": "Cryptography",
+    "post-quantum cryptography": "Cryptography",
+    "malware analysis": "Threat Intelligence",
+    # Old combined domain, now split; legacy label falls back to Penetration Testing.
+    "penetration testing and vulnerability management": "Penetration Testing",
 }
 
 # ----------------------------------------------- subdomain enum (schema names) -
@@ -68,18 +72,18 @@ SUBDOMAIN_NAMES: tuple[str, ...] = (
     "GRC",                    # 4  Governance, Risk and Compliance
     "IAM",                    # 5  Identity Access and Management
     "INCIDENT_RESPONSE",      # 6  Incident Response and Forensics
-    "MALWARE_ANALYSIS",       # 7  Malware Analysis
-    "NETWORK",                # 8  Network Security
-    "PENTEST",                # 9  Penetration Testing and Vulnerability Management
-    "SECOPS",                 # 10 Security Operations
-    "THREAT_INTELLIGENCE",    # 11 Threat Intelligence
+    "NETWORK",                # 7  Network Security
+    "PENTEST",                # 8  Penetration Testing
+    "SECOPS",                 # 9  Security Operations
+    "THREAT_INTELLIGENCE",    # 10 Threat Intelligence
+    "VULN_MANAGEMENT",        # 11 Vulnerability Management
 )
 CANONICAL_TO_SUBDOMAIN: dict[str, str] = dict(
     zip(CANONICAL_DOMAINS, SUBDOMAIN_NAMES, strict=True))
 ALLOWED_SUBDOMAINS: frozenset[str] = frozenset(SUBDOMAIN_NAMES)
 
 # domain_name (top-level) enum + integer codes (the schema's domain_label space).
-DOMAIN_NAMES: frozenset[str] = frozenset({"CYBERSEC", "QUANTUM_SEC"})
+DOMAIN_NAMES: frozenset[str] = frozenset({"CYBERSEC"})
 
 # Record-type enum (schema examples: cve / article / log). Open-ish but closed to
 # a known set so a mapper bug surfaces as a reject rather than silent drift.
@@ -111,12 +115,11 @@ def normalize_domain(value: str) -> str:
 def resolve_domain(value: str) -> tuple[str, str]:
     """Raw domain -> ``(domain_name, subdomain_name)`` schema enum values.
 
-    Quantum -> (QUANTUM_SEC, CRYPTOGRAPHY); the 12 cybersecurity domains ->
-    (CYBERSEC, <their subdomain>). Raises ``ValueError`` for an unknown domain.
+    The 12 cybersecurity domains -> (CYBERSEC, <their subdomain>). Retired tracks
+    (Quantum, Malware Analysis) fold onto their merge targets via DOMAIN_ALIASES.
+    Raises ``ValueError`` for an unknown domain.
     """
     canonical = normalize_domain(value)
-    if canonical == QUANTUM_DOMAIN:
-        return "QUANTUM_SEC", "CRYPTOGRAPHY"
     return "CYBERSEC", CANONICAL_TO_SUBDOMAIN[canonical]
 
 
@@ -152,7 +155,7 @@ class CanonicalRecord(BaseModel):
     source_file: str = Field(..., description="routing key for the source")
     record_type: str = Field(default="article")
     domain_label: int = Field(default=ABSTAIN, description="downstream snorkel; -1 ABSTAIN")
-    domain_name: str = Field(..., description="CYBERSEC or QUANTUM_SEC")
+    domain_name: str = Field(..., description="CYBERSEC")
     subdomain_label: int = Field(default=ABSTAIN, description="downstream snorkel; -1 ABSTAIN")
     subdomain_name: str = Field(..., description="one of the 12 subdomain names")
 

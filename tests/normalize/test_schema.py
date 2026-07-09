@@ -65,9 +65,14 @@ def test_unknown_record_type_coerced_to_other():
     assert m.record_type == "other"
 
 
-def test_resolve_domain_cybersec_and_quantum():
+def test_resolve_domain_cybersec_and_merged_tracks():
     assert resolve_domain("Application Security") == ("CYBERSEC", "APPLICATION")
-    assert resolve_domain("Quantum") == ("QUANTUM_SEC", "CRYPTOGRAPHY")
+    # Retired tracks fold onto their merge targets.
+    assert resolve_domain("Quantum") == ("CYBERSEC", "CRYPTOGRAPHY")
+    assert resolve_domain("Malware Analysis") == ("CYBERSEC", "THREAT_INTELLIGENCE")
+    # The old combined domain split into two.
+    assert resolve_domain("Penetration Testing") == ("CYBERSEC", "PENTEST")
+    assert resolve_domain("Vulnerability Management") == ("CYBERSEC", "VULN_MANAGEMENT")
     # alias / case-insensitive folder name
     assert resolve_domain("appsec")[1] == "APPLICATION"
 

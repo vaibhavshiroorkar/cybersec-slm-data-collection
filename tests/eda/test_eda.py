@@ -75,3 +75,82 @@ def test_run_eda_passes_and_persists(tmp_path, monkeypatch):
     report = run_eda(cdata, enforce=True)
     assert report["passed"] is True
     assert report["metrics"]["total"] == 12
+
+
+# ── v2: topic balance tests ─────────────────────────────────────────────────
+
+def test_metrics_includes_topic_cv(tmp_path):
+    """The compute_metrics output should include topic_cv."""
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 10,
+                               ("Cloud Security", "b"): 10})
+    m = compute_metrics(cdata)
+    assert "topic_cv" in m
+    # Two equal subdomains -> CV should be 0 or very small
+    assert m["topic_cv"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_topic_cv_high_for_skewed_corpus(tmp_path):
+    """Skewed corpus should have a high topic CV."""
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 100,
+                               ("Cloud Security", "b"): 1})
+    m = compute_metrics(cdata)
+    assert m["topic_cv"] > 1.0  # heavily skewed
+
+
+def test_metrics_includes_per_subdomain_quality(tmp_path):
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 5,
+                               ("Cloud Security", "b"): 5})
+    m = compute_metrics(cdata)
+    assert "per_subdomain_quality" in m
+    assert "Network Security" in m["per_subdomain_quality"]
+    q = m["per_subdomain_quality"]["Network Security"]
+    assert "avg_tokens" in q
+    assert "records" in q
+    assert q["records"] == 5
+
+
+def test_gate_warns_on_high_topic_cv(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline.config, "MAX_TOPIC_CV", 0.5)
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 100,
+                               ("Cloud Security", "b"): 1})
+    m = compute_metrics(cdata)
+    checks = {v["check"]: v for v in evaluate_gate(m)}
+    assert "topic_balance" in checks
+    assert checks["topic_balance"]["severity"] == "warning"
+
+
+def test_feedback_section_in_report(tmp_path, monkeypatch):
+    """run_eda should include a 'feedback' section in the report."""
+    monkeypatch.setattr(pipeline, "EDA_DIR", str(tmp_path / "eda"))
+    monkeypatch.setattr(pipeline.config, "MIN_TOTAL_RECORDS", 1)
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.95)
+    monkeypatch.setattr(pipeline.config, "AUTO_REBALANCE", False)
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 5,
+                               ("Cloud Security", "b"): 5})
+    report = run_eda(cdata, enforce=False)
+    assert "feedback" in report
+    fb = report["feedback"]
+    assert "under_represented" in fb
+    assert "over_represented" in fb
+    assert "quality_concerns" in fb
+    assert "recommendations" in fb
+
+
+def test_feedback_identifies_over_represented(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "EDA_DIR", str(tmp_path / "eda"))
+    monkeypatch.setattr(pipeline.config, "MIN_TOTAL_RECORDS", 1)
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.99)
+    monkeypatch.setattr(pipeline.config, "AUTO_REBALANCE", False)
+    # Network Security has 10000 records, 4 other subdomains have 10 each
+    # avg = (10000+10+10+10+10)/5 = 2008, 4*2008 = 8032, 10000 > 8032 -> over
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 10000,
+                               ("Cloud Security", "b"): 10,
+                               ("Vulnerability Management", "c"): 10,
+                               ("Cryptography", "d"): 10,
+                               ("Data Security and Privacy", "e"): 10})
+    report = run_eda(cdata, enforce=False)
+    over = report["feedback"]["over_represented"]
+    assert len(over) > 0
+    over_subs = {e["subdomain"] for e in over}
+    assert "Network Security" in over_subs
+

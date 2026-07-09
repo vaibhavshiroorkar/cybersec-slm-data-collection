@@ -30,7 +30,7 @@ def test_dispatch_prefers_prose_when_text_present():
 
 def test_origin_format_inferred_from_file_hint():
     rec = {"text": "something readable here", "_file": "rules.yar"}
-    out = mappers.ProseMapper().map(rec, domain="Malware Analysis", source="yara")
+    out = mappers.ProseMapper().map(rec, domain="Threat Intelligence", source="yara")
     assert out["origin_format"] == "yara"
 
 
