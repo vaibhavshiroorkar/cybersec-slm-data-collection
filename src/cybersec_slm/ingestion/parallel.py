@@ -85,15 +85,15 @@ def _reset_completed(path: str) -> None:
 
 def _force_shutdown(pool) -> None:
     """Shut a pool down without waiting, terminating any leaked/hung workers."""
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except Exception:
-        pass
     for p in list(getattr(pool, "_processes", {}).values() or []):
         try:
             p.terminate()
         except Exception:
             pass
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
 
 
 # ── Overlapped Ingest + Sequential Clean ──────────────────────────────────────
@@ -111,9 +111,7 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
     resubmitted once; a source exceeding `source_timeout` is abandoned (see the
     timeout sweep). Cross-source dedup runs later in `final_global_dedup`.
     """
-    from ..cleaning.langfilter import LangFilter
-    from ..cleaning.pii import Redactor
-    from ..cleaning.translate import Translator
+
 
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
     descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
@@ -137,15 +135,17 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
         cleaning_pipeline.reset_dedup_state()
         _wipe_dir(core.CLEAN_DATA)
         _wipe_dir(core.RAW_DATA)
+        for f in ["clean_report.csv", "final_table.csv", "normalize_report.json"]:
+            try:
+                os.remove(os.path.join(core.LOGS, f))
+            except OSError:
+                pass
 
     workers = workers or _default_workers()
     logger.info(f"ingest+clean: {len(descriptors)} sources, {workers} workers, "
                 f"source_timeout={source_timeout:.0f}s -> {core.CLEAN_DATA}")
 
-    # Heavy transformers built ONCE in the parent (reused across every source).
-    redactor = cleaning_pipeline._cleaner(Redactor)
-    langf = cleaning_pipeline._cleaner(LangFilter)
-    translator = cleaning_pipeline._cleaner(Translator)
+
 
     ctx = mp.get_context("spawn")
     os.makedirs(core.LOGS, exist_ok=True)
@@ -161,16 +161,14 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
         return d.get("ref") or d.get("slug") or d.get("kind")
 
     def _clean_ok(d, meta):
+        summary["clean_rows"].extend(meta.get("clean_rows", []))
         folder = meta.get("folder")
-        if folder:
-            rows = cleaning_pipeline.clean_source_folder(
-                folder, redactor=redactor, langf=langf, translator=translator,
-                limit=limit)
-            summary["clean_rows"].extend(rows)
-            if not keep_raw:
-                shutil.rmtree(folder, ignore_errors=True)
+        if folder and not keep_raw:
+            shutil.rmtree(folder, ignore_errors=True)
         summary["ok"] += 1
         ledger.write(descriptor_key(d) + "\n"); ledger.flush()
+        if summary["clean_rows"]:
+            cleaning_pipeline._write_report(summary["clean_rows"])
 
     def _record(d, meta):
         summary["ingest_rows"].extend(meta.get("ingest_rows", []))
@@ -202,13 +200,17 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
             remaining: set = set()
 
             def _submit(d):
-                fut = pool.submit(worker.process_source, d, data_root=core.DATA_ROOT)
+                fut = pool.submit(worker.process_source, d, data_root=core.DATA_ROOT, limit=limit)
                 started[fut] = _now()
                 fut_desc[fut] = d
                 remaining.add(fut)
 
-            for d in round_descriptors:
-                _submit(d)
+            pending_iter = iter(round_descriptors)
+            for _ in range(workers):
+                try:
+                    _submit(next(pending_iter))
+                except StopIteration:
+                    break
 
             def _fail_or_retry(d):
                 k = descriptor_key(d)
@@ -243,6 +245,11 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
                             logger.warning(f"  FAILED {_label(d)}: "
                                            f"{meta.get('error')}")
                             _fail_or_retry(d)
+                            continue
+                        try:
+                            _submit(next(pending_iter))
+                        except StopIteration:
+                            pass
                     now = _now()
                     overdue = [f for f in remaining
                                if now - started[f] > source_timeout]
@@ -383,7 +390,7 @@ def run_v2_pipeline(spec: str | None = None, *,
         eda_result = run_deep_eda(enforce=enforce_eda)
     except SufficiencyError as exc:
         logger.error(str(exc))
-        print("Pipeline halted at the EDA sufficiency gate — "
+        print("Pipeline halted at the EDA sufficiency gate - "
               "address the blockers above and re-run.")
         return {"phase": "eda", "error": str(exc), "ingest": ingest_result,
                 "dedup": dedup_result}

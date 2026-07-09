@@ -12,9 +12,21 @@ Public API:
 
 from __future__ import annotations
 
+import os
 import re
 
 from .common import logger, try_import
+
+# Presidio runs spaCy NER over the *entire* text, so cost grows with length.
+# Oversized records (e.g. smart-contract source+bytecode blobs, tens of KB each)
+# are pure structured payloads with no prose PII, yet dominate the clean-pass
+# runtime. Above this many characters we skip Presidio and use the regex
+# fallback, which still catches emails/IPs/SSNs/cards in O(n). Env-overridable.
+def _pii_max_presidio_chars() -> int:
+    try:
+        return int(os.environ.get("CYBERSEC_SLM_PII_MAX_CHARS", 10_000))
+    except (TypeError, ValueError):
+        return 10_000
 
 # --- regex fallback patterns (order matters: specific -> generic) ---
 _EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
@@ -65,10 +77,12 @@ def _regex_redact(text: str) -> tuple[str, int]:
 
 
 class Redactor:
-    def __init__(self, engine="auto"):
+    def __init__(self, engine="auto", max_presidio_chars: int | None = None):
         self.engine = "regex"
         self._analyzer = None
         self._anonymizer = None
+        self.max_presidio_chars = (max_presidio_chars if max_presidio_chars is not None
+                                   else _pii_max_presidio_chars())
         if engine in ("auto", "presidio"):
             pa = try_import("presidio_analyzer")
             pan = try_import("presidio_anonymizer")
@@ -87,7 +101,9 @@ class Redactor:
     def redact(self, text: str) -> tuple[str, int]:
         if not text:
             return text, 0
-        if self.engine == "presidio":
+        # Oversized payloads bypass Presidio (see _pii_max_presidio_chars) and use
+        # the linear regex path so a few huge blobs can't stall the whole pass.
+        if self.engine == "presidio" and len(text) <= self.max_presidio_chars:
             results = self._analyzer.analyze(text=text, language="en")
             if not results:
                 return text, 0

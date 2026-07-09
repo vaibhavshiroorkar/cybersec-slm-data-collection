@@ -74,14 +74,26 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
     dedup runs later in one pass (`final_global_dedup`). Returns report rows.
     """
     rows: list[dict] = []
-    for ap, sub, source, rel in files:
+    for entry in files:
+        # A file entry is (abs_path, sub_domain, source, out_rel) plus an OPTIONAL
+        # (line_start, line_end) window. The window lets a caller shard one big
+        # file across worker processes: each shard reads only [start, end) and
+        # writes to its own `out_rel` (e.g. "…/file.p03.jsonl"), so shards never
+        # collide. `ap` is always the real input; `rel` only names the output.
+        ap, sub, source, rel = entry[0], entry[1], entry[2], entry[3]
+        win_start = entry[4] if len(entry) > 4 else 0
+        win_end = entry[5] if len(entry) > 5 else None
         c = _new_counts()
         cw = JsonlWriter(os.path.join(out_cleaned, rel))
         fw = JsonlWriter(os.path.join(out_flagged, rel))
         dw = JsonlWriter(os.path.join(out_dropped, rel))
         try:
             for i, rec in enumerate(iter_jsonl(ap)):
-                if limit is not None and i >= limit:
+                if i < win_start:
+                    continue
+                if win_end is not None and i >= win_end:
+                    break
+                if limit is not None and (i - win_start) >= limit:
                     break
                 c["in"] += 1
 

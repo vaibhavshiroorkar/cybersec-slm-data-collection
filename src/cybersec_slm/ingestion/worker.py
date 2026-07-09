@@ -81,18 +81,17 @@ def _get_synthetic_ids() -> frozenset[str]:
     return _synthetic_ids_cache
 
 
-def process_source(descriptor: dict, *, data_root: str | None = None) -> dict:
-    """Fetch one source, run light EDA gate, return metadata.
+def process_source(descriptor: dict, *, data_root: str | None = None, limit: int | None = None) -> dict:
+    """Fetch one source, run light EDA gate, and clean it.
 
     Returns ``{descriptor, status, error, folder, ingest_rows,
-    light_eda_report, flags}``.  ``ingest_rows`` are replayed into the real
+    light_eda_report, flags, clean_rows}``.  ``ingest_rows`` are replayed into the real
     ingest log by the parent.
-
-    **v2:** no longer runs cleaning — that is deferred to the aggregated pass.
     """
     collector = _Collector()
     result = {"descriptor": descriptor, "status": "ok", "error": None,
               "folder": None, "ingest_rows": [], "light_eda_report": {},
+              "clean_rows": [],
               "flags": {"synthetic": False, "license_risk": None,
                         "security_hazards": []}}
     label = descriptor.get("ref") or descriptor.get("slug") or descriptor.get("kind")
@@ -131,6 +130,9 @@ def process_source(descriptor: dict, *, data_root: str | None = None) -> dict:
                 result["error"] = leda_report.get("reject_reason", "light EDA rejection")
                 # Move rejected source into data/dropped/ with sidecar report
                 light_eda.reject_source(folder, leda_report)
+            else:
+                from ..cleaning.pipeline import clean_one_source
+                result["clean_rows"] = clean_one_source(folder, limit=limit)
     except Exception as ex:  # isolate: never crash the pool over one source
         result["status"] = "failed"
         result["error"] = f"{type(ex).__name__}: {ex}"

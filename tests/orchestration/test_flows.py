@@ -7,7 +7,7 @@ from cybersec_slm.orchestration import flows
 
 def test_module_imports_without_prefect():
     # the decorators degrade to no-ops, so tasks are plain callables
-    assert callable(flows.extract_clean_source)
+    assert callable(flows.extract_source)
     assert callable(flows.build_corpus)
 
 

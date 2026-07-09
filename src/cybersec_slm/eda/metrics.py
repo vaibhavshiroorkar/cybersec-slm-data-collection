@@ -28,6 +28,10 @@ def compute_metrics(input_dir: str) -> dict:
     seen: set[str] = set()
     dups = 0
 
+    # v2: per-subdomain quality tracking
+    sub_token_counts: dict[str, list[int]] = defaultdict(list)
+    sub_char_counts: dict[str, list[int]] = defaultdict(list)
+
     for ap, sub, source, _rel in find_input_files(input_dir):
         for rec in iter_jsonl(ap):
             if rec.get("_parse_error"):
@@ -39,8 +43,12 @@ def compute_metrics(input_dir: str) -> dict:
             if not t:
                 empty += 1
                 continue
-            char_counts.append(len(t))
-            token_counts.append(len(t.split()))
+            nc = len(t)
+            nt = len(t.split())
+            char_counts.append(nc)
+            token_counts.append(nt)
+            sub_char_counts[sub].append(nc)
+            sub_token_counts[sub].append(nt)
             h = hashlib.sha256(t.encode("utf-8")).hexdigest()
             if h in seen:
                 dups += 1
@@ -58,6 +66,22 @@ def compute_metrics(input_dir: str) -> dict:
 
     text_total = len(char_counts)
     dist = {sub: per_sub[sub] / total for sub in per_sub} if total else {}
+
+    # v2: topic balance — coefficient of variation across subdomain counts
+    topic_cv = _coefficient_of_variation(list(per_sub.values())) if per_sub else 0.0
+
+    # v2: per-subdomain text quality breakdown
+    per_subdomain_quality = {}
+    for sub in per_sub:
+        tc = sub_token_counts.get(sub, [])
+        cc = sub_char_counts.get(sub, [])
+        per_subdomain_quality[sub] = {
+            "records": per_sub[sub],
+            "avg_tokens": round(mean(tc), 1) if tc else 0.0,
+            "median_tokens": median(tc) if tc else 0,
+            "avg_chars": round(mean(cc), 1) if cc else 0.0,
+        }
+
     return {
         "total": total,
         "empty_text": empty,
@@ -74,4 +98,18 @@ def compute_metrics(input_dir: str) -> dict:
             "median_tokens": median(token_counts) if token_counts else 0,
             "min_tokens": min(token_counts) if token_counts else 0,
         },
+        # v2 additions
+        "topic_cv": round(topic_cv, 3),
+        "per_subdomain_quality": per_subdomain_quality,
     }
+
+
+def _coefficient_of_variation(values: list[int | float]) -> float:
+    """Coefficient of variation (std / mean). 0 = perfectly balanced."""
+    if not values or len(values) < 2:
+        return 0.0
+    m = mean(values)
+    if m == 0:
+        return 0.0
+    from statistics import stdev
+    return stdev(values) / m

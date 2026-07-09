@@ -29,7 +29,7 @@ def _wire(monkeypatch, tmp_path, statuses):
     monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
     monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
     monkeypatch.setattr(parallel.cleaning_pipeline, "reset_dedup_state", lambda: None)
-    monkeypatch.setattr(parallel.cleaning_pipeline, "_cleaner", lambda f: object())
+
     monkeypatch.setattr(parallel.cleaning_pipeline, "_write_report", lambda rows: "")
     monkeypatch.setattr(parallel, "_wipe_dir", lambda p: None)
     descriptors = [{"kind": "url", "url": u, "domain": "D", "license": "",
@@ -44,16 +44,16 @@ def _wire(monkeypatch, tmp_path, statuses):
 
     cleaned: list[str] = []
 
-    def _clean(folder, **kw):
-        cleaned.append(folder)
-        return [{"file": folder, "in": 1, "out": 1}]
-    monkeypatch.setattr(parallel.cleaning_pipeline, "clean_source_folder", _clean)
-    monkeypatch.setattr(parallel.shutil, "rmtree", lambda p, **k: None)
-
     def _proc(descriptor, **kwargs):
         u = descriptor["url"]
-        return {"status": statuses[u], "folder": f"/raw/{u}", "ingest_rows": [],
-                "light_eda_report": {}, "flags": {}}
+        status = statuses[u]
+        folder = f"/raw/{u}"
+        res = {"status": status, "folder": folder, "ingest_rows": [],
+               "light_eda_report": {}, "flags": {}}
+        if status == "ok":
+            cleaned.append(folder)
+            res["clean_rows"] = [{"file": folder, "in": 1, "out": 1}]
+        return res
     monkeypatch.setattr(parallel.worker, "process_source", _proc)
     return cleaned
 

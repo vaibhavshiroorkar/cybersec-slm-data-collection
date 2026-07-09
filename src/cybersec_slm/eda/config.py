@@ -34,3 +34,23 @@ MAX_DRIFT = _f("EDA_MAX_DRIFT", 0.25)                    # max subdomain-share d
 MAX_DUP_RATE = _f("EDA_MAX_DUP_RATE", 0.40)             # warning above this
 MIN_AVG_TOKENS = _f("EDA_MIN_AVG_TOKENS", 5.0)          # warning below this
 OWNER = os.environ.get("EDA_OWNER", "data-collection-team")
+
+# ── v2: topic-balance thresholds ─────────────────────────────────────────────
+# Coefficient of variation across subdomain record counts.  A CV above this
+# signals that the corpus is heavily skewed toward a few subdomains (warning).
+MAX_TOPIC_CV = _f("EDA_MAX_TOPIC_CV", 1.5)
+
+# Any subdomain below this share of total records triggers a blocker — below 1%
+# means the subdomain is effectively absent from the training signal.
+MIN_SUBDOMAIN_SHARE = _f("EDA_MIN_SUBDOMAIN_SHARE", 0.01)
+
+# When True, the deep EDA pass automatically caps over-represented subdomains
+# using ``cleaning.balance.apply_cap`` and re-validates.
+def _bool_env(name: str, default: bool) -> bool:
+    env = os.environ.get(name)
+    if env is None:
+        return default
+    return env.strip().lower() in ("1", "true", "yes", "on")
+
+
+AUTO_REBALANCE = _bool_env("EDA_AUTO_REBALANCE", True)
