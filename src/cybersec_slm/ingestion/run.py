@@ -31,7 +31,10 @@ def show_table() -> None:
     out_path = os.path.join(LOGS, "final_table.csv")
     out.to_csv(out_path, index=False)
     with pd.option_context("display.max_rows", None, "display.width", 200):
-        print(out.to_string(index=False))
+        try:
+            print(out.to_string(index=False))
+        except UnicodeEncodeError:
+            print(out.to_string(index=False).encode("ascii", errors="replace").decode("ascii"))
     ok = (df["status"] == "ok").sum()
     skip = df["status"].str.startswith("skipped").sum()
     fail = df["status"].str.startswith("failed").sum()

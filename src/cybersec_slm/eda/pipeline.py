@@ -4,7 +4,9 @@
     Cleaned corpus
       -> compute_metrics (volume / balance / concentration / quality / dup audit)
       -> drift vs the previous run (subdomain distribution delta)
+      -> topic balance evaluation (v2: CV + min-share + feedback)
       -> sufficiency gate (blockers stop the run; warnings are logged + tracked)
+      -> auto-rebalance (v2: cap over-represented subdomains if enabled)
       -> persist logs/eda/run-<ts>.json (versioned for run-to-run diffing)
       -> [pass -> advance to normalize] or [blocker -> SufficiencyError -> loop back]
 
@@ -94,7 +96,109 @@ def evaluate_gate(metrics: dict) -> list[dict]:
             f"subdomain '{drift['subdomain']}' share moved {drift['max_delta']:.0%} "
             f"vs the previous run (> {config.MAX_DRIFT:.0%})")
 
+    # ── v2: topic balance checks ─────────────────────────────────────────────
+    topic_cv = metrics.get("topic_cv", 0.0)
+    if topic_cv > config.MAX_TOPIC_CV:
+        add("warning", "topic_balance",
+            f"topic balance CV={topic_cv:.2f} (> {config.MAX_TOPIC_CV:.2f}); "
+            f"corpus is heavily skewed across subdomains")
+
+    # Any subdomain below the minimum share is a blocker
+    total = metrics.get("total", 0)
+    if total > 0:
+        dist = metrics.get("subdomain_distribution", {})
+        for sub, share in dist.items():
+            if share < config.MIN_SUBDOMAIN_SHARE:
+                add("warning", "subdomain_underrepresented",
+                    f"subdomain '{sub}' has {share:.1%} of records "
+                    f"(< {config.MIN_SUBDOMAIN_SHARE:.0%} minimum share)")
+
     return v
+
+
+# ── v2: feedback generation ──────────────────────────────────────────────────
+
+def _generate_feedback(metrics: dict) -> dict:
+    """Generate actionable feedback from EDA metrics.
+
+    The feedback section tells the operator *what to do* about imbalances,
+    not just that they exist.
+    """
+    total = metrics.get("total", 0)
+    subdomains = metrics.get("subdomains", {})
+    dist = metrics.get("subdomain_distribution", {})
+    per_sub_quality = metrics.get("per_subdomain_quality", {})
+
+    feedback: dict = {
+        "under_represented": [],
+        "over_represented": [],
+        "quality_concerns": [],
+        "recommendations": [],
+    }
+
+    if not total or not subdomains:
+        return feedback
+
+    avg_count = total / len(subdomains) if subdomains else 0
+
+    for sub, count in subdomains.items():
+        share = dist.get(sub, 0.0)
+
+        # Under-represented: <25% of average count or <MIN_SUBDOMAIN_SHARE
+        if count < avg_count * 0.25 or share < config.MIN_SUBDOMAIN_SHARE:
+            feedback["under_represented"].append({
+                "subdomain": sub,
+                "records": count,
+                "share": round(share, 4),
+                "target_records": int(avg_count),
+                "suggestion": f"Add more sources for '{sub}' — "
+                              f"currently {count} records ({share:.1%}), "
+                              f"target ~{int(avg_count)} for balance",
+            })
+
+        # Over-represented: >4x average count
+        if count > avg_count * 4:
+            suggested_cap = int(avg_count * 2)
+            feedback["over_represented"].append({
+                "subdomain": sub,
+                "records": count,
+                "share": round(share, 4),
+                "suggested_cap": suggested_cap,
+                "suggestion": f"Consider capping '{sub}' from {count} to "
+                              f"~{suggested_cap} records",
+            })
+
+    # Quality concerns per subdomain
+    for sub, quality in per_sub_quality.items():
+        avg_tokens = quality.get("avg_tokens", 0)
+        if avg_tokens < config.MIN_AVG_TOKENS * 2:
+            feedback["quality_concerns"].append({
+                "subdomain": sub,
+                "avg_tokens": avg_tokens,
+                "suggestion": f"'{sub}' has low text quality "
+                              f"(avg {avg_tokens:.0f} tokens); "
+                              f"consider reviewing source selection",
+            })
+
+    # High-level recommendations
+    if feedback["under_represented"]:
+        feedback["recommendations"].append(
+            f"{len(feedback['under_represented'])} subdomain(s) are under-represented "
+            f"— add more sources or run `cybersec-slm source` to discover new ones"
+        )
+    if feedback["over_represented"]:
+        feedback["recommendations"].append(
+            f"{len(feedback['over_represented'])} subdomain(s) are over-represented "
+            f"— consider `cybersec-slm clean balance --cap N` to rebalance"
+        )
+    topic_cv = metrics.get("topic_cv", 0.0)
+    if topic_cv > config.MAX_TOPIC_CV:
+        feedback["recommendations"].append(
+            f"Topic balance CV={topic_cv:.2f} is high — the corpus is skewed. "
+            f"Rebalancing will improve model coverage across cyber topics"
+        )
+
+    return feedback
 
 
 def _persist(report: dict) -> str:
@@ -133,6 +237,35 @@ def _profile(input_dir: str) -> None:
         logger.debug(f"eda: profiling skipped ({type(ex).__name__}: {ex})")
 
 
+# ── v2: auto-rebalance ───────────────────────────────────────────────────────
+
+def _auto_rebalance(feedback: dict, input_dir: str) -> bool:
+    """Cap over-represented subdomains and return True if any capping was done.
+
+    ``apply_cap`` takes a global ``max_per_domain`` limit.  We compute the cap
+    as 2× the average subdomain count so the most bloated subdomains shrink
+    while the long tail is untouched.
+    """
+    over = feedback.get("over_represented", [])
+    if not over:
+        return False
+
+    try:
+        from ..cleaning.balance import apply_cap
+    except ImportError:
+        logger.warning("eda: auto-rebalance requested but cleaning.balance unavailable")
+        return False
+
+    # Use the minimum suggested cap across over-represented subdomains
+    caps = [e["suggested_cap"] for e in over if e.get("suggested_cap")]
+    if not caps:
+        return False
+    cap = min(caps)
+    logger.info(f"eda: auto-rebalancing with cap={cap}")
+    apply_cap(cap)
+    return True
+
+
 def run_eda(input_dir: str | None = None, *, enforce: bool = True,
             profile: bool = False) -> dict:
     """Run the validations + gate. Raises :class:`SufficiencyError` on a blocker
@@ -143,6 +276,7 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
     metrics["drift"] = compute_drift(metrics["subdomain_distribution"],
                                      _previous_report())
     violations = evaluate_gate(metrics)
+    feedback = _generate_feedback(metrics)
     blockers = [x for x in violations if x["severity"] == "blocker"]
     report = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -151,6 +285,7 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
         "owner": config.OWNER,
         "metrics": metrics,
         "violations": violations,
+        "feedback": feedback,
     }
     path = _persist(report)
     if profile:
@@ -158,11 +293,30 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
 
     logger.info(f"eda: total={metrics['total']} subdomains={metrics['num_subdomains']} "
                 f"dup_rate={metrics['dup_rate']:.1%} "
+                f"topic_cv={metrics.get('topic_cv', 0.0):.2f} "
                 f"worst_concentration={metrics['concentration']['worst_share']:.0%} "
                 f"-> {path}")
     for x in violations:
         (logger.error if x["severity"] == "blocker" else logger.warning)(
             f"eda {x['severity'].upper()} [{x['check']}]: {x['message']}")
+
+    # v2: log feedback recommendations
+    for rec in feedback.get("recommendations", []):
+        logger.info(f"eda FEEDBACK: {rec}")
+
+    # v2: auto-rebalance if enabled and we have over-represented subdomains
+    if config.AUTO_REBALANCE and feedback.get("over_represented"):
+        if _auto_rebalance(feedback, input_dir):
+            logger.info("eda: auto-rebalance applied — re-computing metrics")
+            recomputed = compute_metrics(input_dir)
+            report["metrics_after_rebalance"] = recomputed
+            report["rebalanced"] = True
+            
+            # Re-evaluate the gate to see if rebalancing cleared the blockers
+            violations = evaluate_gate(recomputed)
+            blockers = [x for x in violations if x["severity"] == "blocker"]
+            report["violations"] = violations
+            report["passed"] = not blockers
 
     if blockers and enforce:
         raise SufficiencyError(
