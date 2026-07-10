@@ -21,7 +21,7 @@ def _render_live() -> None:
     cols = st.columns(3)
     cols[0].metric("State", "● running" if running else "○ idle")
     total = prog.get("total")
-    cols[1].metric("Sources completed",
+    cols[1].metric("Sources checked",
                    f"{prog['completed']}" + (f" / {total}" if total else ""))
     cols[2].metric("Last activity", charts.fmt_age(status.get("age")))
     if total:

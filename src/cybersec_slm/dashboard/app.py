@@ -29,7 +29,7 @@ def _render_overview():
         c1.metric("Pipeline", "○ idle")
     c2.metric("Last activity", charts.fmt_age(status.get("age")))
     total = prog.get("total")
-    c3.metric("Sources completed",
+    c3.metric("Sources checked",
               f"{charts.fmt_int(prog['completed'])}"
               + (f" / {charts.fmt_int(total)}" if total else ""))
 
