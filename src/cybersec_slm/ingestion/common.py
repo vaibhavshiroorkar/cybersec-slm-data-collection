@@ -239,8 +239,9 @@ def write_jsonl(df: pd.DataFrame, path: str) -> int:
     return os.path.getsize(path)
 
 
-# CSVs above this size stream row-by-row (constant RAM) instead of via pandas.
-BIG_CSV_BYTES = 200 * 1024 * 1024
+# Files above this size take the polars lazy fast path (or the CSV row-streamer
+# fallback) instead of loading whole into pandas.
+BIG_FILE_BYTES = 200 * 1024 * 1024
 
 # Field names tried in order when a dataset record lacks a `text` column.
 _TEXT_CANDIDATES = (
@@ -309,16 +310,82 @@ def _stream_csv_to_jsonl(original: str, jsonl: str, cap: int,
     return size
 
 
+def _polars_enrich(lf, meta: dict | None):
+    """Add source/url/license + a derived text column to a lazy frame.
+
+    Mirrors ``enrich_df`` so a polars-converted file carries the same provenance
+    fields the cleaning stage expects, regardless of the original schema.
+    """
+    import polars as pl
+
+    cols = set(lf.collect_schema().names())
+    if not meta:
+        return lf
+    additions = []
+    for field in ("source", "url", "license"):
+        if field not in cols:
+            additions.append(pl.lit(meta.get(field, "")).alias(field))
+    if additions:
+        lf = lf.with_columns(additions)
+    if "text" not in cols:
+        text_col = next((c for c in _TEXT_CANDIDATES if c in cols), None)
+        if text_col is not None:
+            lf = lf.with_columns(pl.col(text_col).cast(pl.Utf8).alias("text"))
+        else:
+            for q_col, a_col in _QA_PAIRS:
+                if q_col in cols and a_col in cols:
+                    lf = lf.with_columns(
+                        (pl.col(q_col).cast(pl.Utf8) + pl.lit("\n\n")
+                         + pl.col(a_col).cast(pl.Utf8)).alias("text"))
+                    break
+    return lf
+
+
+def _polars_to_jsonl(original: str, jsonl: str, cap: int,
+                     meta: dict | None) -> int:
+    """Lazy-scan a large csv/parquet/jsonl and stream it to JSONL via polars.
+
+    Returns the output byte size, or ``cap + 1`` (after removing the output) when
+    it exceeds ``cap``. Raises for any unsupported extension or scan error so the
+    caller can fall back to the pandas path.
+    """
+    import polars as pl
+
+    low = original.lower()
+    if low.endswith(".csv"):
+        lf = pl.scan_csv(original, ignore_errors=True, infer_schema_length=1000)
+    elif low.endswith(".parquet"):
+        lf = pl.scan_parquet(original)
+    elif low.endswith(".jsonl"):
+        lf = pl.scan_ndjson(original)
+    else:
+        raise ValueError(f"polars fast path unsupported for {original}")
+    lf = _polars_enrich(lf, meta)
+    lf.sink_ndjson(jsonl)
+    size = os.path.getsize(jsonl)
+    if size > cap:
+        os.remove(jsonl)
+        return cap + 1
+    return size
+
+
 def to_jsonl(original: str, jsonl: str, cap: int = CAP_BYTES,
              *, meta: dict | None = None) -> int:
-    """Convert any supported file to JSONL. Big/wide CSVs stream (constant RAM).
+    """Convert any supported file to JSONL.
 
-    `meta` (source, url, license) is injected into every record so the cleaning
-    stage finds the required provenance fields regardless of original schema.
+    Large csv/parquet/jsonl take the polars lazy fast path (constant RAM, fast);
+    a polars failure or an exotic format falls back to the pandas reader. `meta`
+    (source, url, license) is injected into every record so the cleaning stage
+    finds provenance regardless of the original schema.
     """
-    if original.lower().endswith(".csv") and os.path.getsize(original) > BIG_CSV_BYTES:
-        logger.debug(f"streaming big CSV {os.path.basename(original)}")
-        return _stream_csv_to_jsonl(original, jsonl, cap, extra_fields=meta)
+    low = original.lower()
+    if (low.endswith((".csv", ".parquet", ".jsonl"))
+            and os.path.getsize(original) > BIG_FILE_BYTES):
+        try:
+            return _polars_to_jsonl(original, jsonl, cap, meta)
+        except Exception as ex:
+            logger.warning(f"polars fast path failed for {os.path.basename(original)}: "
+                           f"{type(ex).__name__}: {ex}; falling back to pandas")
     df = read_any(original)
     if meta:
         df = enrich_df(df, source=meta.get("source", ""),
