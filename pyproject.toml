@@ -33,6 +33,9 @@ dependencies = [
     "python-dotenv>=1.0.0",      # load .env so API keys reach os.environ
     "pyyaml>=6.0",               # version-controlled source allowlist (ingestion/allowlist.py)
     "selectolax>=0.3.0",
+    "scrapy>=2.11",             # website crawler engine (ingestion/crawl_runner.py)
+    "scrapy-playwright>=0.0.40",# JS rendering for crawls flagged use_js (lazy)
+    "polars>=1.0",              # lazy fast path for large csv/parquet/jsonl -> jsonl
     "tenacity>=9.0.0",
     # --- cleaning (sanitize / dedup / pii / langfilter / translate) ---
     "ftfy>=6.2.0",               # encoding/mojibake repair (sanitize)
