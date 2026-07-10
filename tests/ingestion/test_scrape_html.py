@@ -2,8 +2,6 @@ import json
 import os
 import subprocess
 
-import pytest
-
 from cybersec_slm.ingestion import scrape_html
 
 
