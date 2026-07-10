@@ -284,32 +284,6 @@ def enrich_df(df: pd.DataFrame, source: str, url: str, lic: str) -> pd.DataFrame
     return df
 
 
-def _stream_csv_to_jsonl(original: str, jsonl: str, cap: int,
-                          extra_fields: dict | None = None) -> int:
-    """Row-by-row CSV -> JSONL with orjson; constant memory, aborts past cap."""
-    import csv
-
-    import orjson
-    csv.field_size_limit(1 << 30)
-    size = 0
-    with open(original, newline="", encoding="utf-8", errors="replace") as f, \
-            open(jsonl, "wb") as out:
-        reader = csv.DictReader(f, restkey="_extra", restval="")
-        for row in reader:
-            row.pop(None, None)
-            if extra_fields:
-                for k, v in extra_fields.items():
-                    if k not in row:
-                        row[k] = v
-            line = orjson.dumps(row) + b"\n"
-            size += len(line)
-            if size > cap:
-                out.close(); os.remove(jsonl)
-                return cap + 1
-            out.write(line)
-    return size
-
-
 def _polars_enrich(lf, meta: dict | None):
     """Add source/url/license + a derived text column to a lazy frame.
 
@@ -363,6 +337,7 @@ def _polars_to_jsonl(original: str, jsonl: str, cap: int,
     lf = _polars_enrich(lf, meta)
     lf.sink_ndjson(jsonl)
     size = os.path.getsize(jsonl)
+    # sink writes the full output first, then we drop it if it exceeds the cap
     if size > cap:
         os.remove(jsonl)
         return cap + 1

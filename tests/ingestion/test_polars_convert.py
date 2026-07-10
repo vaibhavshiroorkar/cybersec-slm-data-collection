@@ -1,9 +1,6 @@
 import json
 import os
 
-import polars as pl
-import pytest
-
 from cybersec_slm.ingestion import common
 
 
