@@ -126,6 +126,27 @@ def _int(v, default: int) -> int:
         return default
 
 
+def _size_hint(row: dict) -> float:
+    """Best-effort byte-size proxy (in MB) for ordering sources smallest-first.
+
+    Reads the catalog's ``Original Size (MB)`` (falling back to ``JSONL Size
+    (MB)``). Rows with no usable size (newly discovered sources that haven't
+    been measured yet) sort last (``inf``) so known-small, fast sources run
+    first and the pipeline shows early progress instead of stalling on a
+    multi-GB download.
+    """
+    for col in ("original_size_(mb)", "original_size_mb", "jsonl_size_(mb)",
+                "jsonl_size_mb"):
+        raw = _val(row, col)
+        if raw is None:
+            continue
+        try:
+            return float(str(raw).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+    return float("inf")
+
+
 def _domain_for(row: dict) -> str:
     explicit = _val(row, "domain", "sub_domain", "subdomain")
     if explicit:
@@ -218,8 +239,15 @@ def _row_to_descriptor(row: dict) -> dict | None:
     return None
 
 
-def load_descriptors(spec: str) -> list[dict]:
-    """Read the catalog CSV at ``spec`` into a list of source descriptors."""
+def load_descriptors(spec: str, *, order_by_size: bool = True) -> list[dict]:
+    """Read the catalog CSV at ``spec`` into a list of source descriptors.
+
+    When ``order_by_size`` (the default), sources are returned smallest-first by
+    their catalog size hint so the parallel run drains fast, small sources early
+    and defers the multi-GB downloads, for quicker feedback and steadier progress.
+    Rows with no recorded size sort last. Pass ``order_by_size=False`` to keep
+    the catalog's original row order.
+    """
     import pandas as pd
 
     path = _resolve(spec)
@@ -227,12 +255,17 @@ def load_descriptors(spec: str) -> list[dict]:
     # stay "" (never NaN), so descriptor mapping sees clean text values.
     df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
-    out: list[dict] = []
+    pairs: list[tuple[float, dict]] = []
     for row in df.to_dict("records"):
         d = _row_to_descriptor(row)
         if d is not None:
-            out.append(d)
-    logger.info(f"loaded {len(out)} sources from {os.path.basename(path)}")
+            pairs.append((_size_hint(row), d))
+    if order_by_size:
+        # stable sort keeps catalog order among equal-size sources
+        pairs.sort(key=lambda p: p[0])
+    out = [d for _sz, d in pairs]
+    logger.info(f"loaded {len(out)} sources from {os.path.basename(path)}"
+                + (" (smallest-first)" if order_by_size else ""))
     return out
 
 
