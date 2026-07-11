@@ -13,8 +13,6 @@ import os
 import subprocess
 import sys
 
-from ..core import logger
-
 
 def _skip_first_run_prompt() -> None:
     """Pre-create Streamlit's credentials file so its first-launch email prompt
@@ -44,5 +42,7 @@ def launch(port: int = 8501, headless: bool = False) -> int:
     if headless:
         cmd += ["--server.headless", "true"]
     env = {**os.environ, "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false"}
-    logger.info(f"dashboard: launching Streamlit on :{port} -> {app}")
+    # Print (not the pipeline logger) so the dashboard launcher never writes a
+    # logs/pipeline.<pid>.log that run_status would misread as a live pipeline run.
+    print(f"dashboard: launching Streamlit on :{port} -> {app}")
     return subprocess.run(cmd, env=env).returncode
