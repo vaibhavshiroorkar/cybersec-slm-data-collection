@@ -172,6 +172,36 @@ def test_live_and_run_status(tmp_path, monkeypatch):
     assert data.run_status()["state"] == "idle"
 
 
+def test_run_status_control_file_is_authoritative(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    # a recent, non-empty pipeline log would otherwise read as "running"...
+    (logs / "pipeline.123.log").write_text("work\n", encoding="utf-8")
+    # ...but a control file whose process is dead makes state authoritatively idle
+    (logs / "pipeline_run.json").write_text(
+        '{"pid": 999999, "started_at": "x", "resume": false}', encoding="utf-8")
+    assert data.run_status()["state"] == "idle"
+
+
+def test_run_status_running_when_control_pid_alive(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pipeline_run.json").write_text(
+        json.dumps({"pid": os.getpid(), "started_at": "x", "resume": False}),
+        encoding="utf-8")   # this test process is alive
+    assert data.run_status()["state"] == "running"
+
+
+def test_run_status_ignores_empty_stub_log(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pipeline.777.log").write_text("", encoding="utf-8")   # empty import stub
+    assert data.run_status()["state"] == "idle"                    # not "running"
+
+
 def test_raw_funnel_metrics_use_ingest_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))

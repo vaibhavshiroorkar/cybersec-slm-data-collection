@@ -93,24 +93,37 @@ def _read_csv(path: str) -> list[dict]:
 
 # --------------------------------------------------------------- live monitor --
 def _pipeline_logs() -> list[str]:
-    return sorted(glob.glob(os.path.join(_logs(), "pipeline.*.log")),
-                  key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+    # Skip empty stub logs: any cybersec_slm process (a test, or the dashboard
+    # itself) creates a pipeline.<pid>.log on import; only a real run writes to it.
+    # Filtering empties keeps those stubs from reading as "recent activity".
+    paths = [p for p in glob.glob(os.path.join(_logs(), "pipeline.*.log"))
+             if os.path.exists(p) and os.path.getsize(p) > 0]
+    return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
 
 
 def run_status() -> dict:
-    """Best-effort run state from the newest per-PID pipeline log's mtime."""
+    """Run state: authoritative from the dashboard control file when present.
+
+    A run launched from the dashboard writes a control file, so its state is exact
+    (PID liveness) and does not linger on stale log mtimes after it ends. A run
+    started from the CLI has no control file, so fall back to the newest non-empty
+    pipeline log's mtime (a long, quiet download can briefly read as idle).
+    """
+    from . import control
+    cstat = control.status()
     logs = _pipeline_logs()
-    if not logs:
-        return {"state": "idle", "newest_log": None, "mtime": None, "age": None}
-    newest = logs[-1]
-    mtime = os.path.getmtime(newest)
-    age = time.time() - mtime
-    return {
-        "state": "running" if age <= RUN_ACTIVE_WINDOW_S else "idle",
-        "newest_log": newest,
-        "mtime": mtime,
-        "age": age,
-    }
+    newest = logs[-1] if logs else None
+    mtime = os.path.getmtime(newest) if newest and os.path.exists(newest) else None
+    age = (time.time() - mtime) if mtime is not None else None
+
+    if cstat.get("pid") is not None:               # dashboard-tracked run: exact
+        state = "running" if cstat["running"] else "idle"
+    elif age is not None and age <= RUN_ACTIVE_WINDOW_S:
+        state = "running"                          # CLI run: log-mtime heuristic
+    else:
+        state = "idle"
+    return {"state": state, "newest_log": newest, "mtime": mtime, "age": age,
+            "pid": cstat.get("pid")}
 
 
 def _catalog_total() -> int | None:
@@ -207,7 +220,8 @@ def manifest() -> dict | None:
 
 
 def _dir_size_mb(path: str) -> float:
-    if not os.path.exists(path): return 0.0
+    if not os.path.exists(path):
+        return 0.0
     total = 0
     for root, _, files in os.walk(path):
         for f in files:
@@ -292,7 +306,8 @@ def data_funnel() -> dict:
     raw_root = os.path.join(_root(), "data", "raw")
     raw_size_mb = raw_stats["size_mb"] if raw_stats["sources"] else _dir_size_mb(raw_root)
     raw_sources = raw_stats["sources"] if raw_stats["sources"] else _count_source_dirs(raw_root)
-    raw_lines = raw_stats["lines"] if raw_stats["lines"] else int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0
+    raw_lines = raw_stats["lines"] or (
+        int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0)
 
     # Cleaned: prefer the clean report totals when available, otherwise count the
     # actual JSONL records present under data/clean/ so the UI remains informative.
