@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import time
 
 from cybersec_slm.dashboard import charts, data
@@ -59,6 +60,23 @@ def _seed(root: str) -> None:
 
     with open(os.path.join(logs, "pipeline.999.log"), "w", encoding="utf-8") as f:
         f.write("14:00:00 === source: hf a ===\n14:00:01 done\n")
+
+    con = sqlite3.connect(os.path.join(logs, "ingest_log.sqlite"))
+    con.execute(
+        "CREATE TABLE ingest (ts TEXT, kind TEXT, name TEXT, category TEXT, domain TEXT, "
+        "description TEXT, source_url TEXT, origin_format TEXT, orig_mb REAL, jsonl_mb REAL, "
+        "rows INTEGER, sha256 TEXT, license TEXT, status TEXT)"
+    )
+    con.execute(
+        "INSERT INTO ingest (name, domain, orig_mb, rows, status) VALUES (?, ?, ?, ?, ?)",
+        ("hf:a", "Application Security", 2.5, 10, "ok"),
+    )
+    con.execute(
+        "INSERT INTO ingest (name, domain, orig_mb, rows, status) VALUES (?, ?, ?, ?, ?)",
+        ("url:b", "Threat Intelligence", 1.5, 4, "ok"),
+    )
+    con.commit()
+    con.close()
 
     manifest = {
         "record_count": 4, "unique_content_hashes": 4, "token_total": 480,
@@ -152,6 +170,16 @@ def test_live_and_run_status(tmp_path, monkeypatch):
     old = time.time() - 3600
     os.utime(os.path.join(tmp_path, "logs", "pipeline.999.log"), (old, old))
     assert data.run_status()["state"] == "idle"
+
+
+def test_raw_funnel_metrics_use_ingest_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+
+    funnel = data.data_funnel()
+    assert funnel["raw"]["sources"] == 2
+    assert funnel["raw"]["lines"] == 14
+    assert funnel["raw"]["size_mb"] == 4.0
 
 
 def test_bare_root_degrades_gracefully(tmp_path, monkeypatch):

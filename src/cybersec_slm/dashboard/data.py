@@ -18,6 +18,7 @@ import csv
 import glob
 import json
 import os
+import sqlite3
 import time
 
 from .. import core
@@ -119,6 +120,22 @@ def _catalog_total() -> int | None:
     return len(rows) if rows else None
 
 
+def catalog_summary() -> dict:
+    """Source catalog overview: total rows + per-Sub-Domain counts.
+
+    Read straight from ``sources/Sources.csv`` so the landing page has a
+    meaningful distribution to show even before any run has produced a manifest.
+    Returns ``{"total": int, "by_domain": {name: count}}`` (empty when absent).
+    """
+    path = os.path.join(_repo_root(), "sources", "Sources.csv")
+    rows = _read_csv(path)
+    by_domain: dict[str, int] = {}
+    for r in rows:
+        dom = (r.get("Sub-Domain") or "").strip() or "Uncategorized"
+        by_domain[dom] = by_domain.get(dom, 0) + 1
+    return {"total": len(rows), "by_domain": by_domain}
+
+
 def log_tail(n: int = 40) -> list[str]:
     """Last ``n`` lines of the newest per-PID pipeline log (empty if none)."""
     logs = _pipeline_logs()
@@ -201,6 +218,26 @@ def _dir_size_mb(path: str) -> float:
     return total / (1024 * 1024)
 
 
+def _count_jsonl_records(path: str) -> int:
+    """Count non-empty JSONL records under a directory tree."""
+    if not os.path.exists(path):
+        return 0
+    count = 0
+    try:
+        for root, _, files in os.walk(path):
+            for name in files:
+                if name.endswith(".jsonl"):
+                    file_path = os.path.join(root, name)
+                    try:
+                        with open(file_path, encoding="utf-8", errors="replace") as f:
+                            count += sum(1 for ln in f if ln.strip())
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return count
+
+
 def _count_source_dirs(path: str) -> int:
     """Count distinct source folders (domain/<source>/) that exist under path."""
     if not os.path.exists(path):
@@ -218,24 +255,53 @@ def _count_source_dirs(path: str) -> int:
     return count
 
 
+def _ingest_ledger_stats() -> dict:
+    """Best-effort stats from the SQLite ingest ledger for raw-stage history.
+
+    ``sources`` counts distinct sources that actually produced raw output
+    (``status`` ok), keyed by source_url (falling back to name), so it matches
+    the funnel's per-source meaning instead of counting every produced file or
+    counting license-skipped / failed rows.
+    """
+    db_path = os.path.join(_logs(), "ingest_log.sqlite")
+    if not os.path.exists(db_path):
+        return {"sources": 0, "lines": 0, "size_mb": 0.0}
+    try:
+        with sqlite3.connect(db_path) as con:
+            rows = con.execute(
+                "SELECT COUNT(DISTINCT COALESCE(NULLIF(source_url, ''), name)), "
+                "COALESCE(SUM(rows), 0), COALESCE(SUM(orig_mb), 0.0) "
+                "FROM ingest WHERE status LIKE 'ok%'"
+            ).fetchone()
+    except sqlite3.Error:
+        return {"sources": 0, "lines": 0, "size_mb": 0.0}
+    return {
+        "sources": int(rows[0] or 0),
+        "lines": int(rows[1] or 0),
+        "size_mb": float(rows[2] or 0.0),
+    }
+
+
 def data_funnel() -> dict:
     """Calculates aggregate metrics across the Raw -> Cleaned -> Final funnel."""
     man = manifest()
     rc = clean_report()
     nr = normalize_report()
 
-    # Raw: scan actual directories rather than the ingest ledger (which is only
-    # written by the parallel pipeline, not by clean_raw_tree / Prefect flows).
+    raw_stats = _ingest_ledger_stats()
     raw_root = os.path.join(_root(), "data", "raw")
-    raw_size_mb = _dir_size_mb(raw_root)
-    raw_sources = _count_source_dirs(raw_root)
-    raw_lines = int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0
+    raw_size_mb = raw_stats["size_mb"] if raw_stats["sources"] else _dir_size_mb(raw_root)
+    raw_sources = raw_stats["sources"] if raw_stats["sources"] else _count_source_dirs(raw_root)
+    raw_lines = raw_stats["lines"] if raw_stats["lines"] else int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0
 
-    # Cleaned: same directory-scan approach so the two counts are independent.
+    # Cleaned: prefer the clean report totals when available, otherwise count the
+    # actual JSONL records present under data/clean/ so the UI remains informative.
     clean_root = os.path.join(_root(), "data", "clean")
     cleaned_size_mb = _dir_size_mb(clean_root)
     cleaned_sources = _count_source_dirs(clean_root)
     cleaned_lines = int(rc.get("total", {}).get("out", 0)) if rc.get("total") else 0
+    if cleaned_lines == 0:
+        cleaned_lines = _count_jsonl_records(clean_root)
 
     # Final: manifest is the canonical source of truth.
     final_file = os.path.join(_final(), "dataset.jsonl")
