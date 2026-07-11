@@ -8,9 +8,60 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, data
+from cybersec_slm.dashboard import charts, control, data
 
 st.title("Pipeline")
+
+# ----------------------------------------------------------------- controls ----
+def _render_controls() -> None:
+    cstat = control.status()
+    running = cstat["running"]
+    b1, b2, b3, b4 = st.columns(4)
+    if b1.button("▶ Start", disabled=running, use_container_width=True,
+                 help="Run the full pipeline: ingest → clean → dedup → EDA → normalize"):
+        res = control.start(resume=False)
+        if res.get("ok"):
+            st.rerun()
+        else:
+            st.error(res["error"])
+    if b2.button("⏵ Resume", disabled=running, use_container_width=True,
+                 help="Continue a prior run, skipping sources already completed"):
+        res = control.start(resume=True)
+        if res.get("ok"):
+            st.rerun()
+        else:
+            st.error(res["error"])
+    if b3.button("⏹ Stop", disabled=not running, use_container_width=True,
+                 help="Kill the run now (sources already finished are kept)"):
+        control.stop()
+        st.rerun()
+    if b4.button("🗑 Reset", disabled=running, use_container_width=True,
+                 help="Delete ALL pipeline data and logs (clean slate)"):
+        st.session_state["confirm_reset"] = True
+
+    if running:
+        st.caption(f"● running · pid {cstat['pid']} · started {cstat.get('started_at')}")
+    elif cstat.get("stale"):
+        st.caption("Previous run ended without a clean stop.")
+
+    if st.session_state.get("confirm_reset") and not running:
+        st.warning("Delete ALL pipeline data (`data/` and `logs/`)? This cannot be undone.")
+        r1, r2 = st.columns(2)
+        if r1.button("Yes, delete everything", type="primary", use_container_width=True):
+            res = control.reset()
+            st.session_state["confirm_reset"] = False
+            if not res.get("ok"):
+                st.error(res["error"])
+            st.rerun()
+        if r2.button("Cancel", use_container_width=True):
+            st.session_state["confirm_reset"] = False
+            st.rerun()
+
+    st.caption("Controls act on the pipeline on this machine (local-first dashboard).")
+
+st.subheader("Controls")
+_render_controls()
+st.divider()
 
 # --------------------------------------------------------------- live monitor --
 def _render_live() -> None:

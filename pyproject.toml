@@ -81,6 +81,7 @@ orchestration = [
 # core pipeline never needs a web server:  uv sync --extra dashboard
 dashboard = [
     "streamlit>=1.40",
+    "psutil>=5.9",               # pipeline process control (start/stop/reset) on the Pipeline page
 ]
 
 # Q&A agent on the dashboard's Agent page (`pages/3_Agent.py`), backed by
