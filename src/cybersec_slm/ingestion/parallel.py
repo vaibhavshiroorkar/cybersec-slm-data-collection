@@ -40,14 +40,14 @@ from .sources import descriptor_key
 # sources and re-cleaning what is already in data/clean/).
 COMPLETED_LEDGER = os.path.join(core.LOGS, "completed_sources.txt")
 
-POLL_INTERVAL_S = 10.0             # wait() granularity for the consume loop
+POLL_INTERVAL_S = 5.0              # wait() granularity for the consume loop
 DEFAULT_SOURCE_TIMEOUT_S = 1800.0  # per-source wall-clock budget (30 min)
-MAX_POOL_REBUILDS = 2              # bound pool restarts on timeout / broken pool
-MAX_SOURCE_RETRIES = 1             # resubmit a transiently-failing source once
+MAX_POOL_REBUILDS = 5              # allow several pool restarts on timeout / broken pool
+MAX_SOURCE_RETRIES = 2             # resubmit transiently-failing sources twice
 
 
 def _default_workers() -> int:
-    return os.cpu_count() or 4
+    return max(2, min(8, os.cpu_count() or 4))
 
 
 def _now() -> float:

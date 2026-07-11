@@ -2,6 +2,11 @@
 import itertools
 from concurrent.futures import Future
 
+
+def test_recovery_settings_are_more_resilient():
+    assert parallel.MAX_POOL_REBUILDS >= 5
+    assert parallel.MAX_SOURCE_RETRIES >= 2
+
 from cybersec_slm.ingestion import parallel
 
 
