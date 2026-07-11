@@ -6,8 +6,9 @@
         -> build_record (id, content_hash, lang/counts, labels, placeholders)
         -> Pydantic Validation ──invalid──> rejected.jsonl (metadata-only) ;
         |                                    FailureTracker (warn@5, hard-pause@20)
-        -> Near-Duplicate Check (MinHash/LSH @ 0.65) ──seen──> duplicates.jsonl
-        |   (every record's similarity score -> dedup_scores.jsonl)
+        -> Duplicate Check (exact normalized-fingerprint) ──seen──> duplicates.jsonl
+        |   (fuzzy near-dup matching is disabled by policy; the fingerprint set
+        |    still removes byte-identical records. dedup_scores.jsonl logs 1.0/0.0)
         -> dataset.jsonl (append the full 22-field record)
         -> Update Hash List (seen + LSH)
         -> Handoff to annotation team
@@ -93,7 +94,9 @@ class Normalizer:
     """Runs the normalization flowchart over cleaned records."""
 
     def __init__(self, *, resume: bool = True):
-        self.index = NearDuplicateIndex()
+        # Exact-only dedup (near=False): removes byte-identical records, keeps
+        # similar-but-distinct ones. Mirrors the clean-stage cross-source policy.
+        self.index = NearDuplicateIndex(near=False)
         self.failures = FailureTracker()
         self.synthetic = SyntheticFilter()
         self.counts = {k: 0 for k in _COUNT_KEYS}

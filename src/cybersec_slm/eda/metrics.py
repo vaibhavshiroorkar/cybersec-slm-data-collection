@@ -55,14 +55,21 @@ def compute_metrics(input_dir: str) -> dict:
             else:
                 seen.add(h)
 
-    # worst single-source share within any subdomain (concentration risk)
-    worst = {"worst_share": 0.0, "subdomain": None, "source": None}
+    # worst single-source share within any subdomain (concentration risk).
+    # ``num_sources`` records how many sources the worst subdomain has: a
+    # single-source subdomain cannot be un-concentrated by capping, so the gate
+    # treats it as a warning rather than a hard blocker.
+    worst = {"worst_share": 0.0, "subdomain": None, "source": None, "num_sources": 0}
+    per_subdomain_concentration: dict[str, dict] = {}
     for sub, srcs in per_source.items():
         sub_total = per_sub[sub] or 1
-        for src, n in srcs.items():
-            share = n / sub_total
-            if share > worst["worst_share"]:
-                worst = {"worst_share": share, "subdomain": sub, "source": src}
+        top_src, top_n = max(srcs.items(), key=lambda kv: kv[1])
+        top_share = top_n / sub_total
+        per_subdomain_concentration[sub] = {
+            "worst_share": top_share, "source": top_src, "num_sources": len(srcs)}
+        if top_share > worst["worst_share"]:
+            worst = {"worst_share": top_share, "subdomain": sub, "source": top_src,
+                     "num_sources": len(srcs)}
 
     text_total = len(char_counts)
     dist = {sub: per_sub[sub] / total for sub in per_sub} if total else {}
@@ -91,6 +98,7 @@ def compute_metrics(input_dir: str) -> dict:
         "subdomain_distribution": dist,
         "num_sources": sum(len(s) for s in per_source.values()),
         "concentration": worst,
+        "per_subdomain_concentration": per_subdomain_concentration,
         "dup_rate": (dups / text_total) if text_total else 0.0,
         "text_quality": {
             "avg_chars": round(mean(char_counts), 1) if char_counts else 0.0,

@@ -18,6 +18,7 @@ import csv
 import glob
 import json
 import os
+import re
 import sqlite3
 import time
 
@@ -101,6 +102,92 @@ def _pipeline_logs() -> list[str]:
     return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
 
 
+# Ordered pipeline phases (the run's spine). ``run_phase`` reports which one the
+# newest log has reached, so the UI can say "Cross-source dedup" instead of a bare
+# "running". Each entry: (key, human label, marker substrings that, when present
+# in the log, mean the run has reached that phase). Order = progression order.
+_PHASE_DEFS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("ingest_clean", "Ingesting & cleaning sources",
+     ("ingest+clean:", "run_ingest_clean", "cleaned ", "reloading", "TIMEOUT")),
+    ("dedup", "Cross-source dedup",
+     ("final global dedup", "dedup: saved", "final dedup:")),
+    ("eda", "EDA sufficiency gate",
+     ("deep global EDA", "eda: scanning", "eda: total=", "auto-rebalanc",
+      "apply_cap", "source-cap", "eda FEEDBACK", "apply_source_cap")),
+    ("normalize", "Normalizing → final dataset",
+     ("schema normalization", "phase 4", "normalize:", "provenance manifest")),
+    ("done", "Completed",
+     ("provenance manifest ->", "handoff-ready corpus")),
+]
+_PHASE_LABELS = {k: lbl for k, lbl, _ in _PHASE_DEFS}
+_PHASE_LABELS["gate_failed"] = "EDA gate failed — needs more / rebalanced data"
+_PHASE_LABELS["starting"] = "Starting…"
+_PHASE_LABELS["unknown"] = "No pipeline activity yet"
+
+
+def _strip_log_prefix(line: str) -> str:
+    """Drop the loguru ``<ts> | LEVEL | module:func:line - `` prefix, keep the msg."""
+    return re.sub(r"^.*?:\d+ - ", "", line).strip() or line.strip()
+
+
+def run_phase(lookback: int = 500) -> dict:
+    """Best-effort current (or last-reached) pipeline phase from the newest log.
+
+    Returns ``{"phase", "label", "detail", "index", "total", "terminal"}``.
+    ``phase`` is one of the ``_PHASE_DEFS`` keys plus ``gate_failed`` (the EDA gate
+    stopped the run and looped back), ``starting`` and ``unknown``. When idle this
+    reflects the *last* run's furthest-reached phase / outcome, so the UI shows
+    "EDA gate failed" or "Completed" rather than a bare "idle".
+    """
+    total = len(_PHASE_DEFS)
+    logs = _pipeline_logs()
+    newest = logs[-1] if logs else None
+    lines: list[str] = []
+    if newest and os.path.exists(newest):
+        try:
+            with open(newest, encoding="utf-8", errors="replace") as f:
+                lines = [ln.rstrip("\n") for ln in f.readlines()[-lookback:]]
+        except OSError:
+            lines = []
+    if not lines:
+        return {"phase": "unknown", "label": _PHASE_LABELS["unknown"], "detail": "",
+                "index": 0, "total": total, "terminal": False}
+
+    # Terminal off-ramp: the gate can fail and loop back to ingestion. It only
+    # counts if it is the LAST gate verdict (a later phase marker supersedes it,
+    # e.g. a subsequent resume that got further).
+    gate_failed_at = next((i for i, ln in enumerate(lines)
+                           if "EDA sufficiency gate FAILED" in ln), None)
+
+    # Furthest-along phase whose marker appears anywhere in the window.
+    best_idx = -1
+    for idx, (_key, _lbl, markers) in enumerate(_PHASE_DEFS):
+        if any(any(m in ln for m in markers) for ln in lines):
+            best_idx = idx
+
+    if best_idx < 0:
+        return {"phase": "starting", "label": _PHASE_LABELS["starting"], "detail": "",
+                "index": 0, "total": total, "terminal": False}
+
+    key, label, markers = _PHASE_DEFS[best_idx]
+    # A gate failure that came after the furthest phase marker is the real state.
+    if gate_failed_at is not None and best_idx <= 2:
+        last_marker_at = max((i for i, ln in enumerate(lines)
+                              if any(m in ln for m in markers)), default=-1)
+        if gate_failed_at >= last_marker_at:
+            return {"phase": "gate_failed", "label": _PHASE_LABELS["gate_failed"],
+                    "detail": _strip_log_prefix(lines[gate_failed_at]),
+                    "index": 3, "total": total, "terminal": True}
+
+    detail = ""
+    for ln in reversed(lines):
+        if any(m in ln for m in markers):
+            detail = _strip_log_prefix(ln)
+            break
+    return {"phase": key, "label": label, "detail": detail,
+            "index": best_idx + 1, "total": total, "terminal": key == "done"}
+
+
 def run_status() -> dict:
     """Run state: authoritative from the dashboard control file when present.
 
@@ -108,6 +195,9 @@ def run_status() -> dict:
     (PID liveness) and does not linger on stale log mtimes after it ends. A run
     started from the CLI has no control file, so fall back to the newest non-empty
     pipeline log's mtime (a long, quiet download can briefly read as idle).
+
+    ``phase`` (parsed from the log) rides along so the UI can show which stage the
+    run is in — or, when idle, the last run's outcome — instead of only on/off.
     """
     from . import control
     cstat = control.status()
@@ -123,7 +213,7 @@ def run_status() -> dict:
     else:
         state = "idle"
     return {"state": state, "newest_log": newest, "mtime": mtime, "age": age,
-            "pid": cstat.get("pid")}
+            "pid": cstat.get("pid"), "phase": run_phase()}
 
 
 def _catalog_total() -> int | None:
@@ -161,6 +251,18 @@ def log_tail(n: int = 40) -> list[str]:
         return []
 
 
+def _completed_count() -> int:
+    """Number of sources finished this run (lines in the resume ledger)."""
+    ledger = os.path.join(_logs(), "completed_sources.txt")
+    if not os.path.exists(ledger):
+        return 0
+    try:
+        with open(ledger, encoding="utf-8") as f:
+            return sum(1 for ln in f if ln.strip())
+    except OSError:
+        return 0
+
+
 def live_progress(tail: int = 40) -> dict:
     """Sources completed so far (from the resume ledger) + a log tail.
 
@@ -168,15 +270,72 @@ def live_progress(tail: int = 40) -> dict:
     it finishes, cleaned or license-skipped); ``total`` is the catalog size when
     it can be located, else None (the UI shows a bare count).
     """
-    ledger = os.path.join(_logs(), "completed_sources.txt")
-    completed = 0
-    if os.path.exists(ledger):
-        try:
-            with open(ledger, encoding="utf-8") as f:
-                completed = sum(1 for ln in f if ln.strip())
-        except OSError:
-            completed = 0
-    return {"completed": completed, "total": _catalog_total(), "log_tail": log_tail(tail)}
+    return {"completed": _completed_count(), "total": _catalog_total(),
+            "log_tail": log_tail(tail)}
+
+
+def _parse_log_ts(s: str) -> float | None:
+    """Parse a ``YYYY-MM-DD HH:MM:SS`` prefix (control file / loguru line) to epoch."""
+    if not s:
+        return None
+    try:
+        return time.mktime(time.strptime(s.strip()[:19], "%Y-%m-%d %H:%M:%S"))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _run_started_at() -> float | None:
+    """Epoch start time of the current/last run.
+
+    Prefers the dashboard control file's ``started_at`` (exact for runs launched
+    from the dashboard); falls back to the first timestamp of the newest pipeline
+    log (a CLI run has no control file). Returns None when neither is available.
+    """
+    from . import control
+    ts = _parse_log_ts((control.status() or {}).get("started_at") or "")
+    if ts is not None:
+        return ts
+    logs = _pipeline_logs()
+    if not logs:
+        return None
+    try:
+        with open(logs[-1], encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+    except OSError:
+        return None
+    return _parse_log_ts(first.split("|", 1)[0] if "|" in first else first)
+
+
+def run_timing() -> dict:
+    """Elapsed time since the run started, plus a rough linear ETA.
+
+    Returns ``{"elapsed_s", "eta_s", "basis"}``. ``elapsed_s`` is seconds since the
+    run's start (None if no start time is known). ``eta_s`` is a *rough* linear
+    projection — ``elapsed / completed * (total - completed)`` — computed only
+    during the ingest phase, which is ~80% of wall-clock and the only stage driven
+    by source count. Once ingestion is done the tail (dedup -> EDA -> normalize) is
+    not source-count driven, so ``eta_s`` is None and ``basis`` says ``finalizing``
+    rather than faking a number. Sources vary hugely in size, so treat the ETA as
+    an estimate only.
+    """
+    start = _run_started_at()
+    elapsed_s = (time.time() - start) if start is not None else None
+    pkey = (run_phase() or {}).get("phase")
+    completed, total = _completed_count(), _catalog_total()
+
+    eta_s: float | None = None
+    if elapsed_s is None:
+        basis = "no-start"
+    elif pkey in ("done", "gate_failed"):
+        basis = "finished"
+    elif pkey == "ingest_clean" and total and completed:
+        eta_s = max(elapsed_s / completed * (total - completed), 0.0)
+        basis = "ingest-linear"
+    elif pkey in ("dedup", "eda", "normalize"):
+        basis = "finalizing"
+    else:
+        basis = "starting"
+    return {"elapsed_s": elapsed_s, "eta_s": eta_s, "basis": basis}
 
 
 # ------------------------------------------------------------------- EDA gate --
@@ -345,6 +504,104 @@ def data_funnel() -> dict:
             "rejected": rejected,
         },
     }
+
+
+# ------------------------------------------------------------- loss breakdown -
+def _to_int(d: dict, key: str) -> int:
+    try:
+        return int(d.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+# Per-file clean-report drop columns -> a short human label, in report order.
+_CLEAN_DROP_COLS = [
+    ("excluded_no_text", "no prose column"),
+    ("struct_dropped", "structural (<50 chars / empty / parse error)"),
+    ("behavioral_flagged", "behavioral flag (garbage / repeat / length)"),
+    ("non_en_dropped", "non-English (untranslatable)"),
+    ("exact_dups", "exact duplicate"),
+    ("near_dups", "near duplicate"),
+]
+
+
+def loss_breakdown() -> dict:
+    """Where records are dropped across the pipeline — the 'where did my data go' view.
+
+    Reads only what the pipeline already writes (clean report, normalize report,
+    latest EDA report); no new pipeline outputs. Returns::
+
+        {
+          "raw_in": int, "clean_out": int, "final_written": int,
+          "stages": [{"stage", "mechanism", "dropped", "kind"} ...],  # ranked-ish
+          "per_source": [{"source","sub_domain","in","out","lost","kept_pct",
+                          "top_drop_reason"} ...],                    # most lost first
+        }
+
+    Empty/zero when the artifacts are absent (fresh checkout).
+    """
+    rc = clean_report()
+    total = rc.get("total") or {}
+    files = rc.get("files") or []
+    nc = (normalize_report() or {}).get("counts", {}) or {}
+    eda = latest_eda() or {}
+
+    raw_in = _to_int(total, "in")
+    clean_out = _to_int(total, "out")
+    final_written = _to_int(nc, "written")
+
+    stages: list[dict] = [
+        {"stage": "clean", "mechanism": "no prose column (excluded_no_text)",
+         "dropped": _to_int(total, "excluded_no_text"), "kind": "format"},
+        {"stage": "clean", "mechanism": "structural (<50 chars / empty / parse error)",
+         "dropped": _to_int(total, "struct_dropped"), "kind": "quality"},
+        {"stage": "clean", "mechanism": "behavioral flag (garbage / repeat / length)",
+         "dropped": _to_int(total, "behavioral_flagged"), "kind": "quality"},
+    ]
+
+    # EDA auto-rebalance (random downsample) — only when it actually ran.
+    if eda.get("rebalanced"):
+        before = _to_int(eda.get("metrics", {}) or {}, "total")
+        after = _to_int(eda.get("metrics_after_rebalance", {}) or {}, "total")
+        stages.append({"stage": "eda", "mechanism": "auto-rebalance (random downsample)",
+                       "dropped": max(before - after, 0), "kind": "balance"})
+
+    stages += [
+        {"stage": "normalize", "mechanism": "synthetic source excluded",
+         "dropped": _to_int(nc, "synthetic_excluded"), "kind": "policy"},
+        {"stage": "normalize", "mechanism": "exact duplicate",
+         "dropped": _to_int(nc, "exact_dups"), "kind": "redundancy"},
+        {"stage": "normalize", "mechanism": "near duplicate",
+         "dropped": _to_int(nc, "near_dups"), "kind": "fuzzy"},
+        {"stage": "normalize", "mechanism": "schema rejected",
+         "dropped": _to_int(nc, "rejected"), "kind": "quality"},
+    ]
+
+    # Per-source aggregation from the per-file clean report rows.
+    agg: dict[tuple, dict] = {}
+    for r in files:
+        key = (r.get("sub_domain", ""), r.get("source", ""))
+        a = agg.setdefault(key, {"sub_domain": key[0], "source": key[1],
+                                 "in": 0, "out": 0,
+                                 **{c: 0 for c, _ in _CLEAN_DROP_COLS}})
+        a["in"] += _to_int(r, "in")
+        a["out"] += _to_int(r, "out")
+        for col, _lbl in _CLEAN_DROP_COLS:
+            a[col] += _to_int(r, col)
+
+    per_source: list[dict] = []
+    for a in agg.values():
+        top_col, top_lbl = max(_CLEAN_DROP_COLS, key=lambda cl: a.get(cl[0], 0))
+        per_source.append({
+            "source": a["source"], "sub_domain": a["sub_domain"],
+            "in": a["in"], "out": a["out"], "lost": a["in"] - a["out"],
+            "kept_pct": round(100 * a["out"] / a["in"], 1) if a["in"] else 0.0,
+            "top_drop_reason": top_lbl if a.get(top_col, 0) > 0 else "-",
+        })
+    per_source.sort(key=lambda d: d["lost"], reverse=True)
+
+    return {"raw_in": raw_in, "clean_out": clean_out, "final_written": final_written,
+            "stages": stages, "per_source": per_source}
 
 
 # ---------------------------------------------------------------- dataset view -

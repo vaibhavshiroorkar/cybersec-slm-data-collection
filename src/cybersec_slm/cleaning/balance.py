@@ -149,3 +149,98 @@ def apply_cap(max_per_domain: int, input_dir: str = CLEAN_DATA,
 
     logger.info(f"apply_cap done: max_per_domain={max_per_domain:,}")
     return new_counts
+
+
+def _count_jsonl(path: str) -> int:
+    with open(path, "rb") as f:
+        return sum(1 for ln in f if ln.strip())
+
+
+def _rewrite_sampled(files: list[str], keep: list[dict]) -> None:
+    """Rewrite `files` in place holding `keep`, split proportional to old sizes.
+
+    Sizes are read BEFORE truncating (truncate-first would zero every size and
+    dump all records into the first file). The last file absorbs the remainder so
+    rounding never drops a record.
+    """
+    sizes = {src: (os.path.getsize(src) or 1) for src in files}
+    total_size = max(sum(sizes.values()), 1)
+    for src in files:
+        open(src, "w").close()
+    idx = 0
+    for i, src in enumerate(files):
+        if idx >= len(keep):
+            break
+        share = (len(keep) - idx if i == len(files) - 1
+                 else round(len(keep) * sizes[src] / total_size))
+        w = JsonlWriter(src)
+        for rec in keep[idx: idx + share]:
+            w.write(rec)
+        w.close()
+        idx += share
+
+
+def apply_source_cap(max_source_share: float = 0.6, input_dir: str = CLEAN_DATA,
+                     *, margin: float = 0.9, seed: int = 42) -> dict[str, dict[str, int]]:
+    """Downsample any source that exceeds `max_source_share` of its subdomain.
+
+    Only acts on subdomains with >= 2 sources — a single-source subdomain cannot
+    be un-concentrated by capping. For each over-represented subdomain the largest
+    source is downsampled (repeatedly, so a second over-large source is caught) to
+    ``target_share/(1-target_share) * others`` records, where ``target_share`` is
+    ``max_source_share * margin`` so the result lands *below* the ceiling with a
+    little headroom. Only the capped source's own files are rewritten, preserving
+    every other source's records and the source->directory attribution the
+    concentration metric relies on.
+
+    Returns ``{subdomain: {source: new_count}}`` for the sources that were capped.
+    """
+    if not os.path.isdir(input_dir):
+        logger.warning(f"balance: {input_dir} not found — run cleaning first")
+        return {}
+    rng = random.Random(seed)
+    target_share = max(min(max_source_share * margin, 0.95), 0.05)
+    changed: dict[str, dict[str, int]] = {}
+
+    for sub_entry in os.scandir(input_dir):
+        if not sub_entry.is_dir():
+            continue
+        src_files: dict[str, list[str]] = {}
+        src_counts: dict[str, int] = {}
+        for src_entry in os.scandir(sub_entry.path):
+            if not src_entry.is_dir():
+                continue
+            files, n = [], 0
+            for root, _dirs, fns in os.walk(src_entry.path):
+                for fn in sorted(fns):
+                    if fn.endswith(".jsonl"):
+                        p = os.path.join(root, fn)
+                        files.append(p)
+                        n += _count_jsonl(p)
+            if files and n:
+                src_files[src_entry.name] = files
+                src_counts[src_entry.name] = n
+        if len(src_counts) < 2:
+            continue  # single source: capping cannot reduce its 100% share
+
+        for _ in range(len(src_counts)):
+            total = sum(src_counts.values())
+            top = max(src_counts, key=src_counts.get)
+            if src_counts[top] <= max_source_share * total:
+                break
+            others = total - src_counts[top]
+            target = max(int(target_share / (1 - target_share) * others), 1)
+            if target >= src_counts[top]:
+                break
+            all_recs: list[dict] = []
+            for p in src_files[top]:
+                all_recs.extend(iter_jsonl(p))
+            rng.shuffle(all_recs)
+            _rewrite_sampled(src_files[top], all_recs[:target])
+            logger.info(f"  source-cap {sub_entry.name}/{top}: "
+                        f"{src_counts[top]:,} -> {target:,}")
+            changed.setdefault(sub_entry.name, {})[top] = target
+            src_counts[top] = target
+
+    logger.info(f"apply_source_cap done: max_source_share={max_source_share:.0%}")
+    return changed

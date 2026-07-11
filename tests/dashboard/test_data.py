@@ -172,6 +172,58 @@ def test_live_and_run_status(tmp_path, monkeypatch):
     assert data.run_status()["state"] == "idle"
 
 
+def _write_log(tmp_path, name, body):
+    logs = tmp_path / "logs"
+    logs.mkdir(exist_ok=True)
+    (logs / name).write_text(body, encoding="utf-8")
+
+
+def test_run_phase_detects_dedup(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.1.log",
+               "x - ingest+clean: 130 sources\n"
+               "x - ingest+clean done: ok=125\n"
+               "x - final global dedup over /data/clean\n"
+               "x - dedup: saved 200000 hashes\n")
+    ph = data.run_phase()
+    assert ph["phase"] == "dedup"
+    assert ph["index"] == 2 and ph["total"] == 5
+
+
+def test_run_phase_detects_gate_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.2.log",
+               "x - eda: scanning /data/clean\n"
+               "x - eda: total=186875 subdomains=12\n"
+               "x:392 - EDA sufficiency gate FAILED: 1 blocker(s); loop back\n")
+    ph = data.run_phase()
+    assert ph["phase"] == "gate_failed"
+    assert ph["terminal"] is True
+    assert "blocker" in ph["detail"]
+
+
+def test_run_phase_detects_normalize(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.3.log",
+               "x - eda: total=1000\n"
+               "x - phase 4: schema normalization -> data/final/dataset.jsonl\n"
+               "x - normalize: input=/data/clean -> /data/final/dataset.jsonl\n")
+    ph = data.run_phase()
+    assert ph["phase"] == "normalize"
+    assert ph["index"] == 4
+
+
+def test_run_phase_unknown_without_logs(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    assert data.run_phase()["phase"] == "unknown"
+
+
+def test_run_status_includes_phase(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.4.log", "x - final global dedup over /clean\n")
+    assert data.run_status()["phase"]["phase"] == "dedup"
+
+
 def test_run_status_control_file_is_authoritative(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     logs = tmp_path / "logs"
@@ -210,6 +262,80 @@ def test_raw_funnel_metrics_use_ingest_ledger(tmp_path, monkeypatch):
     assert funnel["raw"]["sources"] == 2
     assert funnel["raw"]["lines"] == 14
     assert funnel["raw"]["size_mb"] == 4.0
+
+
+def test_fmt_duration():
+    assert charts.fmt_duration(0) == "0:00"
+    assert charts.fmt_duration(65) == "1:05"
+    assert charts.fmt_duration(3661) == "1:01:01"
+    assert charts.fmt_duration(None) == "-"
+
+
+def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.setattr(data, "_catalog_total", lambda: 4)     # 4 sources total
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "completed_sources.txt").write_text("a\nb\n", encoding="utf-8")  # 2 done
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 100))
+    (logs / "pipeline_run.json").write_text(
+        json.dumps({"pid": 999999, "started_at": start, "resume": False}),
+        encoding="utf-8")
+    (logs / "pipeline.5.log").write_text(
+        f"{start}.000 | INFO | x:1 - ingest+clean: 4 sources\n", encoding="utf-8")
+
+    t = data.run_timing()
+    assert t["basis"] == "ingest-linear"
+    assert t["elapsed_s"] >= 99
+    # 2 of 4 done -> remaining ≈ elapsed (linear): eta ≈ elapsed
+    assert abs(t["eta_s"] - t["elapsed_s"]) < 2
+
+
+def test_run_timing_finalizing_during_tail(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 50))
+    (logs / "pipeline.6.log").write_text(                       # no control file
+        f"{start}.0 | INFO | x:1 - final global dedup over /clean\n", encoding="utf-8")
+    t = data.run_timing()
+    assert t["basis"] == "finalizing" and t["eta_s"] is None    # tail: no source ETA
+    assert t["elapsed_s"] >= 49                                 # start from log line
+
+
+def test_loss_breakdown(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    (logs / "eda").mkdir(parents=True)
+    (logs / "clean_report.csv").write_text(
+        "sub_domain,source,file,in,excluded_no_text,struct_dropped,"
+        "behavioral_flagged,near_dups,exact_dups,non_en_dropped,out\n"
+        "Threat Intelligence,big,a.jsonl,1000,900,10,0,0,0,0,90\n"
+        "Cryptography,small,b.jsonl,50,0,2,0,0,0,0,48\n"
+        "TOTAL,,2 files,1050,900,12,0,0,0,0,138\n", encoding="utf-8")
+    (logs / "normalize_report.json").write_text(json.dumps(
+        {"counts": {"in": 138, "synthetic_excluded": 40, "near_dups": 5,
+                    "exact_dups": 2, "rejected": 1, "written": 90}}), encoding="utf-8")
+    (logs / "eda" / "latest.json").write_text(json.dumps(
+        {"rebalanced": True, "metrics": {"total": 138},
+         "metrics_after_rebalance": {"total": 120}}), encoding="utf-8")
+
+    lb = data.loss_breakdown()
+    assert lb["raw_in"] == 1050 and lb["clean_out"] == 138 and lb["final_written"] == 90
+    mech = {s["mechanism"]: s["dropped"] for s in lb["stages"]}
+    assert mech["no prose column (excluded_no_text)"] == 900
+    assert mech["synthetic source excluded"] == 40
+    assert mech["auto-rebalance (random downsample)"] == 18     # 138 - 120
+    top = lb["per_source"][0]                                   # biggest loser first
+    assert top["source"] == "big" and top["lost"] == 910
+    assert top["kept_pct"] == 9.0
+    assert top["top_drop_reason"] == "no prose column"
+
+
+def test_loss_breakdown_empty_without_reports(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    lb = data.loss_breakdown()
+    assert lb["raw_in"] == 0 and lb["per_source"] == []
 
 
 def test_bare_root_degrades_gracefully(tmp_path, monkeypatch):

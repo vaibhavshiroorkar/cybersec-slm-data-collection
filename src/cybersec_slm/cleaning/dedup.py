@@ -124,12 +124,20 @@ class _DatasketchLSH:
 class Deduper:
     """Exact + near-duplicate detector with auto backend selection."""
 
-    def __init__(self, use_datasketch="auto", enabled: bool = True):
+    def __init__(self, use_datasketch="auto", enabled: bool = True, near: bool = True):
         self.enabled = enabled
+        self.near_enabled = near
         self._seen_exact: set[str] = set()
         if not enabled:
             self._near = None
             self.backend = "disabled"
+            return
+        if not near:
+            # Exact-only: byte-identical (normalized) duplicates are removed, but
+            # fuzzy near-dup matching is off, so similar-but-distinct records are
+            # kept. Skips building the MinHash/LSH index entirely (faster, lighter).
+            self._near = None
+            self.backend = "exact-only"
             return
         ds = try_import("datasketch") if use_datasketch in ("auto", True) else None
         if ds is not None and use_datasketch is not False:
@@ -148,6 +156,8 @@ class Deduper:
         if h in self._seen_exact:
             return True, "exact duplicate"
         self._seen_exact.add(h)
+        if self._near is None:                 # exact-only: no fuzzy matching
+            return False, ""
         return self._near.add(text)
 
     def save_state(self, path: str) -> None:

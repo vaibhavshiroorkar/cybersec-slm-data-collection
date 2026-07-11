@@ -310,8 +310,14 @@ def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
     from zero; a fresh run (default) clears the sidecars first. Only the exact-hash
     set is persisted (cheap to keep), so on a resumed pass near-duplicate matching
     against already-finished files is not restored — exact dedup is.
+
+    Corpus policy: cross-source dedup is **exact-only** (``Deduper(near=False)``).
+    Byte-identical (normalized) duplicates across sources are removed; fuzzy
+    near-duplicates are intentionally kept, because near-dup matching collapsed too
+    many similar-but-distinct cyber records (templated CVE text, MITRE techniques,
+    log lines). Run ``cybersec-slm clean dedup`` for a near-dup diagnostic on demand.
     """
-    deduper = Deduper()
+    deduper = Deduper(near=False)
     if resume:
         deduper.load_state(DEDUP_CKPT)
         done = _load_dedup_done(DEDUP_DONE)

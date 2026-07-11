@@ -40,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cap records per file (smoke test)")
     c.add_argument("--cap", type=int, default=None,
                    help="max records per domain (balance action)")
+    c.add_argument("--source-share", type=float, default=None, metavar="SHARE",
+                   help="balance action: downsample any single source above SHARE "
+                        "(e.g. 0.6) of its subdomain. Opt-in — destroys data when "
+                        "secondary sources are small; prefer adding sources.")
 
     # ── normalize ─────────────────────────────────────────────────────────────
     n = sub.add_parser("normalize",
@@ -160,10 +164,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.stage == "clean":
         from .cleaning import run as cleaning
         if args.action == "balance":
-            from .cleaning.balance import apply_cap, check_balance
+            from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
             if args.cap:
                 apply_cap(args.cap)
+            if args.source_share is not None:
+                apply_source_cap(args.source_share)
         else:
             cleaning.run(args.action, limit=args.limit)
 
