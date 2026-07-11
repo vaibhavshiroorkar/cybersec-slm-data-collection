@@ -32,6 +32,17 @@ def test_near_duplicate_scored():
     assert 0.5 < score < 1.0
 
 
+def test_exact_only_keeps_near_dup():
+    # near=False mirrors the production policy: exact removed, near kept.
+    idx = NearDuplicateIndex(near=False)
+    idx.add(_A, "k1")
+    near = _A.replace("unsuspecting users online", "unsuspecting site visitors today")
+    is_dup, reason, score = idx.is_duplicate(near)
+    assert not is_dup and reason == "" and score == 0.0        # near-dup kept
+    is_dup2, reason2, sc2 = idx.is_duplicate(_A)
+    assert is_dup2 and reason2 == "exact" and sc2 == 1.0       # exact still caught
+
+
 def test_rebuild_from_jsonl(tmp_path):
     p = tmp_path / "dataset.jsonl"
     p.write_text(json.dumps({"id": "x", "text": _A, "content_hash": "n/a"}) + "\n",

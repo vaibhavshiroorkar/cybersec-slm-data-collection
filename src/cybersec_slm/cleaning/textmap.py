@@ -24,6 +24,14 @@ from __future__ import annotations
 
 # Multi-column shapes (checked first; more specific than single columns).
 # Each tuple lists the columns to combine, labeled, when 2+ are present.
+#
+# Chat / preference (DPO) turn shapes are included here: the training signal is
+# the user turn plus the *preferred* answer. The ``system`` field is deliberately
+# omitted from the combos — chat datasets repeat an identical multi-hundred-token
+# system prompt across every row, and folding that boilerplate into the text of
+# 100k records both bloats the corpus and makes near-dedup falsely collapse
+# distinct exchanges that merely share the prefix. Likewise ``rejected`` (the
+# worse DPO response) is never used.
 _COMBOS = (
     ("instruction", "input", "output"),
     ("instruction", "output"),
@@ -31,10 +39,22 @@ _COMBOS = (
     ("prompt", "completion"),
     ("prompt", "response"),
     ("query", "response"),
+    ("user", "assistant"),          # chat: {system?, user, assistant}
+    ("prompt", "chosen"),           # DPO: prefer the chosen response
+    ("question", "chosen"),
+    ("instruction", "chosen"),
     ("input", "output"),
     ("title", "abstract"),
     ("title", "body"),
 )
+
+# List-of-turns shapes (ShareGPT ``conversations`` / OpenAI ``messages``). Each
+# element is a dict carrying a role and content under varying key names.
+_MSG_LIST_FIELDS = ("messages", "conversations", "conversation", "dialog",
+                    "dialogue", "turns")
+_ROLE_LABELS = {"user": "User", "human": "User", "prompter": "User",
+                "assistant": "Assistant", "gpt": "Assistant", "bot": "Assistant",
+                "model": "Assistant", "system": "System"}
 
 # Single prose columns, highest-confidence first. Deliberately excludes short /
 # non-prose fields (title, name, label, payload, hash) so feature tables fall
@@ -45,9 +65,9 @@ _SINGLE = (
     "email_text", "email_body", "mail", "comment", "post", "abstract",
     "summary", "description", "shortdescription", "short_description",
     "details", "definition", "explanation", "rationale", "analysis",
-    "response", "completion", "answer", "output", "transcript", "dialogue",
-    "conversation", "story", "essay", "instruction", "question", "sentence",
-    "review", "caption", "notes", "playbook",
+    "response", "completion", "answer", "output", "chosen", "assistant",
+    "transcript", "dialogue", "conversation", "story", "essay", "instruction",
+    "question", "sentence", "review", "caption", "notes", "playbook",
     # source/code columns (e.g. slither-audited-smart-contracts.source_code) —
     # kept last so a prose column is always preferred over raw code.
     "source_code", "code_snippet", "func", "code",
@@ -66,6 +86,41 @@ def _get(rec: dict, km: dict, name: str):
         return None
     v = rec.get(actual)
     return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+def _from_messages(rec: dict, km: dict):
+    """Build text from a list-of-turns field (ShareGPT / OpenAI messages).
+
+    Concatenates the turns as ``Role: content``, skipping ``system`` turns
+    (boilerplate) and any turn without string content. Returns ``(text, field)``
+    or ``(None, None)`` when no usable turn is present.
+    """
+    for name in _MSG_LIST_FIELDS:
+        actual = km.get(name)
+        if actual is None:
+            continue
+        turns = rec.get(actual)
+        if not isinstance(turns, list) or not turns:
+            continue
+        parts: list[str] = []
+        for turn in turns:
+            if isinstance(turn, str):
+                if turn.strip():
+                    parts.append(turn.strip())
+                continue
+            if not isinstance(turn, dict):
+                continue
+            role = str(turn.get("role") or turn.get("from") or "").strip().lower()
+            content = turn.get("content") or turn.get("value") or turn.get("text")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            if role == "system":       # skip repeated system-prompt boilerplate
+                continue
+            label = _ROLE_LABELS.get(role, role.capitalize() if role else "")
+            parts.append(f"{label}: {content.strip()}" if label else content.strip())
+        if parts:
+            return "\n\n".join(parts), name
+    return None, None
 
 
 def _from_hint(rec: dict, km: dict, hint):
@@ -98,6 +153,13 @@ def to_text(rec: dict, hint=None) -> tuple[str | None, str | None]:
         text, field = _from_hint(rec, km, hint)
         if text:
             return text, field
+
+    # List-of-turns shapes before flat combos: a record may carry both a
+    # ``messages`` list and stray scalar columns, and the conversation is the
+    # higher-fidelity signal.
+    text, field = _from_messages(rec, km)
+    if text:
+        return text, field
 
     for combo in _COMBOS:
         present = [(n, _get(rec, km, n)) for n in combo]

@@ -89,9 +89,13 @@ class NearDuplicateIndex:
     ``add`` commits a record to both indexes (the flowchart's "Update Hash List").
     """
 
-    def __init__(self, threshold: float = LSH_THRESHOLD):
+    def __init__(self, threshold: float = LSH_THRESHOLD, *, near: bool = True):
         self.threshold = threshold
-        self.lsh = MinHashLSH(threshold=threshold, num_perm=MINHASH_PERM)
+        self.near_enabled = near
+        # Exact-only (near=False) skips the MinHash/LSH index: byte-identical
+        # (normalized-fingerprint) duplicates are still removed, but fuzzy
+        # near-duplicates are kept. Matches the clean-stage exact-only policy.
+        self.lsh = MinHashLSH(threshold=threshold, num_perm=MINHASH_PERM) if near else None
         self.seen: set[str] = set()
         # key -> raw MinHash signature (np.ndarray), for the best-match score
         # audit. Raw hashvalues instead of MinHash objects: same math, a fraction
@@ -119,6 +123,8 @@ class NearDuplicateIndex:
         sig = self._sig(text)
         if sig.fp in self.seen:
             return True, "exact", 1.0
+        if not self.near_enabled:              # exact-only: no fuzzy matching
+            return False, "", 0.0
         m = sig.minhash
         candidates = self.lsh.query(m)
         if candidates:
@@ -134,13 +140,15 @@ class NearDuplicateIndex:
         """Commit a kept record: register its fingerprint + LSH signature."""
         sig = self._sig(text)
         self.seen.add(sig.fp)
+        self._n += 1
+        if not self.near_enabled:              # exact-only: fingerprint set is enough
+            return
         m = sig.minhash
         try:
             self.lsh.insert(key, m)
             self._hashvalues[key] = m.hashvalues
         except ValueError:
             pass                # duplicate LSH key (already inserted) — ignore
-        self._n += 1
 
     def rebuild_from_jsonl(self, path: str | Path) -> int:
         """Repopulate state from an existing dataset.jsonl so runs are resumable."""

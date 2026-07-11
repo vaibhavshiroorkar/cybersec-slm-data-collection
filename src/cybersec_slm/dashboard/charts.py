@@ -37,6 +37,21 @@ def fmt_age(seconds) -> str:
     return f"{s // 86400}d ago"
 
 
+def fmt_duration(seconds) -> str:
+    """Compact ``H:MM:SS`` / ``M:SS`` for an elapsed or remaining duration."""
+    try:
+        s = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if s < 0:
+        s = 0
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{sec:02d}"
+    return f"{m}:{sec:02d}"
+
+
 def eda_trend_rows(history: list[dict]) -> list[dict]:
     """Flatten EDA run history into tidy rows for the trend line charts.
 

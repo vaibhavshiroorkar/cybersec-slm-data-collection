@@ -59,6 +59,19 @@ def compute_drift(dist: dict, prev: dict | None) -> dict:
             "per_subdomain": {k: round(v, 4) for k, v in deltas.items()}}
 
 
+def _per_subdomain_concentration(metrics: dict) -> dict:
+    """Worst single-source share per subdomain.
+
+    Prefers the full ``per_subdomain_concentration`` map from metrics; falls back
+    to the single overall ``concentration`` entry for older metric payloads.
+    """
+    per = metrics.get("per_subdomain_concentration")
+    if per:
+        return per
+    c = metrics.get("concentration") or {}
+    return {c["subdomain"]: c} if c.get("subdomain") else {}
+
+
 def evaluate_gate(metrics: dict) -> list[dict]:
     """Return gate violations; each is {severity: blocker|warning, check, message}."""
     v: list[dict] = []
@@ -75,11 +88,23 @@ def evaluate_gate(metrics: dict) -> list[dict]:
             add("warning", "subdomain_volume",
                 f"subdomain '{sub}' has {n} records (< {config.MIN_RECORDS_PER_SUBDOMAIN})")
 
-    c = metrics["concentration"]
-    if c["worst_share"] > config.MAX_SOURCE_SHARE:
-        add("blocker", "concentration",
+    # Source concentration is a *warning*, never a blocker. Hitting the ceiling
+    # by downsampling would delete large amounts of genuine data whenever the
+    # secondary sources are small (e.g. capping a 31k-record CVE source down to
+    # ~50 to match a 34-record PDF) and a single-source subdomain cannot be
+    # un-concentrated by capping at all — so blocking would either deadlock the
+    # run or force data destruction. The real remedy is adding sources at
+    # ingestion time, which the feedback section calls out. Operators who want to
+    # rebalance can opt in with `cybersec-slm clean balance --source-share`.
+    for sub, c in _per_subdomain_concentration(metrics).items():
+        if c["worst_share"] <= config.MAX_SOURCE_SHARE:
+            continue
+        single = c.get("num_sources", 0) <= 1
+        add("warning", "concentration",
             f"source '{c['source']}' is {c['worst_share']:.0%} of subdomain "
-            f"'{c['subdomain']}' (> {config.MAX_SOURCE_SHARE:.0%} ceiling)")
+            f"'{sub}' (> {config.MAX_SOURCE_SHARE:.0%} ceiling) — "
+            + ("only source for this subdomain; add more sources to diversify"
+               if single else "add more sources or `clean balance --source-share`"))
 
     if metrics["dup_rate"] > config.MAX_DUP_RATE:
         add("warning", "duplicates",
@@ -304,14 +329,18 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
     for rec in feedback.get("recommendations", []):
         logger.info(f"eda FEEDBACK: {rec}")
 
-    # v2: auto-rebalance if enabled and we have over-represented subdomains
+    # v2: auto-rebalance over-represented subdomains (cross-subdomain balance).
+    # This caps a subdomain that dwarfs the others down to ~2x the average — a
+    # bounded, sensible trim. Source *concentration within* a subdomain is left
+    # to the opt-in `clean balance --source-share` tool, because auto-capping to
+    # the ceiling destroys data whenever the secondary sources are small.
     if config.AUTO_REBALANCE and feedback.get("over_represented"):
         if _auto_rebalance(feedback, input_dir):
             logger.info("eda: auto-rebalance applied — re-computing metrics")
             recomputed = compute_metrics(input_dir)
             report["metrics_after_rebalance"] = recomputed
             report["rebalanced"] = True
-            
+
             # Re-evaluate the gate to see if rebalancing cleared the blockers
             violations = evaluate_gate(recomputed)
             blockers = [x for x in violations if x["severity"] == "blocker"]

@@ -53,4 +53,11 @@ def _bool_env(name: str, default: bool) -> bool:
     return env.strip().lower() in ("1", "true", "yes", "on")
 
 
-AUTO_REBALANCE = _bool_env("EDA_AUTO_REBALANCE", True)
+# Off by default: auto-rebalance uses ``apply_cap``, which RANDOMLY downsamples
+# over-represented subdomains and rewrites data/clean/ in place — on a real build
+# that silently deleted ~70k already-cleaned records to hit the topic-CV target.
+# Over-representation is only ever a *warning* (never a blocker), so leaving the
+# data in place cannot halt the run; the gate still reports the imbalance and the
+# feedback section recommends `clean balance --cap N`. Opt back in with
+# ``EDA_AUTO_REBALANCE=1`` when you deliberately want the corpus trimmed.
+AUTO_REBALANCE = _bool_env("EDA_AUTO_REBALANCE", False)

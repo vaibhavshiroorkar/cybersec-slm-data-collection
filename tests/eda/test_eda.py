@@ -45,7 +45,9 @@ def test_gate_flags_concentration_and_volume(tmp_path, monkeypatch):
     m = compute_metrics(cdata)
     checks = {v["check"]: v["severity"] for v in evaluate_gate(m)}
     assert checks["volume"] == "blocker"          # 10 < 100
-    assert checks["concentration"] == "blocker"   # 0.8 > 0.6
+    # Concentration never hard-blocks: capping to the ceiling would delete real
+    # data; the remedy is adding sources. It is surfaced as a warning instead.
+    assert checks["concentration"] == "warning"   # 0.8 > 0.6
 
 
 def test_drift_vs_previous():
@@ -153,4 +155,84 @@ def test_feedback_identifies_over_represented(tmp_path, monkeypatch):
     assert len(over) > 0
     over_subs = {e["subdomain"] for e in over}
     assert "Network Security" in over_subs
+
+
+def test_single_source_concentration_is_warning_not_blocker(tmp_path):
+    # A subdomain with only ONE source is 100% concentrated by definition and
+    # cannot be rebalanced — it must warn, not block (else the pipeline deadlocks).
+    cdata = _corpus(tmp_path, {("Network Security", "solo"): 50,
+                               ("Cloud Security", "a"): 30,
+                               ("Cloud Security", "b"): 20})
+    m = compute_metrics(cdata)
+    assert m["concentration"]["num_sources"] == 1  # worst is solo @ 100%
+    checks = {v["check"]: v["severity"] for v in evaluate_gate(m)}
+    assert checks.get("concentration") == "warning"
+
+
+def test_multi_source_concentration_is_warning_not_blocker(tmp_path, monkeypatch):
+    # Even multi-source concentration is a warning now (auto-capping to the
+    # ceiling is destructive), so a run over such a corpus is never deadlocked.
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.6)
+    cdata = _corpus(tmp_path, {("Network Security", "big"): 80,
+                               ("Network Security", "small"): 20})
+    m = compute_metrics(cdata)
+    assert m["concentration"]["num_sources"] == 2
+    checks = {v["check"]: v["severity"] for v in evaluate_gate(m)}
+    assert checks.get("concentration") == "warning"
+
+
+def test_per_subdomain_concentration_flags_each_over_ceiling(tmp_path, monkeypatch):
+    # The gate scans every subdomain, not just the single worst one.
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.6)
+    cdata = _corpus(tmp_path, {("Network Security", "n1"): 90, ("Network Security", "n2"): 10,
+                               ("Cloud Security", "c1"): 75, ("Cloud Security", "c2"): 25})
+    m = compute_metrics(cdata)
+    conc_msgs = [v["message"] for v in evaluate_gate(m) if v["check"] == "concentration"]
+    subs_flagged = {s for s in ("Network Security", "Cloud Security")
+                    if any(s in msg for msg in conc_msgs)}
+    assert subs_flagged == {"Network Security", "Cloud Security"}
+
+
+def test_apply_source_cap_breaks_multi_source_concentration(tmp_path):
+    # apply_source_cap is now an opt-in manual tool (CLI: clean balance
+    # --source-share); it still enforces the ceiling when invoked directly.
+    from cybersec_slm.cleaning.balance import apply_source_cap
+    cdata = _corpus(tmp_path, {("Network Security", "big"): 800,
+                               ("Network Security", "small"): 100})
+    changed = apply_source_cap(0.6, cdata)
+    assert "Network Security" in changed and "big" in changed["Network Security"]
+    m = compute_metrics(cdata)
+    # after capping, the dominant source must be at or below the 60% ceiling
+    assert m["concentration"]["worst_share"] <= 0.6
+    # the smaller source is untouched
+    assert m["subdomains"]["Network Security"] > 100
+
+
+def test_apply_source_cap_skips_single_source(tmp_path):
+    from cybersec_slm.cleaning.balance import apply_source_cap
+    cdata = _corpus(tmp_path, {("Network Security", "solo"): 500})
+    changed = apply_source_cap(0.6, cdata)
+    assert changed == {}  # nothing to do — a single source can't be rebalanced
+    m = compute_metrics(cdata)
+    assert m["subdomains"]["Network Security"] == 500
+
+
+def test_auto_rebalance_off_by_default(tmp_path, monkeypatch):
+    # Default config leaves AUTO_REBALANCE off: an over-represented corpus is
+    # reported but NOT trimmed, so no already-cleaned records are deleted at random.
+    monkeypatch.setattr(pipeline, "EDA_DIR", str(tmp_path / "eda"))
+    monkeypatch.setattr(pipeline.config, "MIN_TOTAL_RECORDS", 1)
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.99)
+    assert pipeline.config.AUTO_REBALANCE is False          # the flipped default
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 1000,
+                               ("Cloud Security", "b"): 10,
+                               ("Vulnerability Management", "c"): 10,
+                               ("Cryptography", "d"): 10,
+                               ("Data Security and Privacy", "e"): 10})
+    before = compute_metrics(cdata)["total"]
+    report = run_eda(cdata, enforce=False)
+    after = compute_metrics(cdata)["total"]
+    assert before == after == 1040                          # nothing downsampled
+    assert report.get("rebalanced") is not True
+    assert report["feedback"]["over_represented"]           # imbalance still reported
 
