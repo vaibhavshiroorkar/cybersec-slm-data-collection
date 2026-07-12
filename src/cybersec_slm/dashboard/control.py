@@ -26,6 +26,58 @@ from .. import core
 
 CONTROL_NAME = "pipeline_run.json"
 
+# Which advanced-settings keys each stage accepts. The dashboard offers only a
+# stage's own flags; build_command drops anything else. Mirrors the CLI.
+_STAGE_FLAGS: dict[str, set[str]] = {
+    "all": {"workers", "sources", "source_timeout", "limit", "keep_raw",
+            "resume", "no_auto_rebalance"},
+    "source": set(),
+    "ingest": {"workers", "sources", "source_timeout", "limit", "resume"},
+    "clean": {"keep_raw", "limit", "resume"},
+    "eda": {"no_auto_rebalance", "no_enforce"},
+    "schema": {"fresh", "limit"},
+}
+
+# setting key -> (cli flag, kind). "value" flags take an argument; "bool" flags
+# are bare switches emitted only when truthy. Ordered so build_command output is
+# deterministic (tests match exact substrings).
+_FLAG_SPEC: list[tuple[str, str, str]] = [
+    ("workers", "--workers", "value"),
+    ("sources", "--sources", "value"),
+    ("source_timeout", "--source-timeout", "value"),
+    ("limit", "--limit", "value"),
+    ("keep_raw", "--keep-raw", "bool"),
+    ("no_auto_rebalance", "--no-auto-rebalance", "bool"),
+    ("no_enforce", "--no-enforce", "bool"),
+    ("fresh", "--fresh", "bool"),
+    ("resume", "--resume", "bool"),
+]
+
+
+def build_command(stage: str = "all", *, resume: bool = False,
+                  settings: dict | None = None) -> list[str]:
+    """Build the ``cybersec-slm <stage> ...`` command for a launch.
+
+    Only the flags that ``stage`` accepts (per ``_STAGE_FLAGS``) are emitted; any
+    other setting is dropped. ``resume=True`` adds ``--resume`` when the stage
+    supports it. Pure and side-effect-free, so it is unit-tested directly.
+    """
+    merged = dict(settings or {})
+    if resume:
+        merged["resume"] = True
+    allowed = _STAGE_FLAGS.get(stage, set())
+    cmd = [sys.executable, "-m", "cybersec_slm", stage]
+    for key, flag, kind in _FLAG_SPEC:
+        if key not in allowed or key not in merged:
+            continue
+        val = merged[key]
+        if kind == "bool":
+            if val:
+                cmd.append(flag)
+        elif val is not None and val != "":
+            cmd += [flag, str(val)]
+    return cmd
+
 
 def _logs_dir() -> str:
     return os.path.join(core.data_root(), "logs")
@@ -76,6 +128,7 @@ def status() -> dict:
     return {
         "running": running,
         "pid": pid or None,
+        "stage": ctl.get("stage"),
         "started_at": ctl.get("started_at"),
         "resume": bool(ctl.get("resume", False)),
         "cmd": ctl.get("cmd"),
@@ -83,15 +136,19 @@ def status() -> dict:
     }
 
 
-def start(resume: bool = False, *, _command: list[str] | None = None) -> dict:
-    """Spawn the full pipeline (``cybersec-slm all``) as a detached subprocess.
+def start(stage: str = "all", *, resume: bool = False,
+          settings: dict | None = None, _command: list[str] | None = None) -> dict:
+    """Spawn one pipeline ``stage`` (default the full ``all`` run) as a detached
+    subprocess.
 
-    Refuses when a run is already live. ``resume`` adds ``--resume`` so the run
-    skips sources already completed (``logs/completed_sources.txt``). ``_command``
-    overrides the launched command (a test seam). The child runs with the
-    dashboard's data root so its output lands where the dashboard reads; its
-    stdout/stderr go to ``logs/pipeline_control.out`` and the pipeline writes its
-    own ``logs/pipeline.<pid>.log`` that the live monitor tails.
+    Refuses when a run is already live. ``stage`` is one of ``all``, ``source``,
+    ``ingest``, ``clean``, ``eda``, ``schema``; ``settings`` carries the advanced
+    flags (worker count, source-timeout, keep-raw, ...) that ``build_command``
+    filters to the ones that stage accepts. ``resume`` adds ``--resume`` where
+    supported. ``_command`` overrides the launched command (a test seam). The child
+    runs with the dashboard's data root so its output lands where the dashboard
+    reads; its stdout/stderr go to ``logs/pipeline_control.out`` and the pipeline
+    writes its own ``logs/pipeline.<pid>.log`` that the live monitor tails.
     """
     st = status()
     if st["running"]:
@@ -100,8 +157,7 @@ def start(resume: bool = False, *, _command: list[str] | None = None) -> dict:
     root = core.data_root()
     logs = _logs_dir()
     os.makedirs(logs, exist_ok=True)
-    cmd = _command or ([sys.executable, "-m", "cybersec_slm", "all"]
-                       + (["--resume"] if resume else []))
+    cmd = _command or build_command(stage, resume=resume, settings=settings)
     env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root}
 
     out = open(os.path.join(logs, "pipeline_control.out"), "ab")
@@ -118,11 +174,12 @@ def start(resume: bool = False, *, _command: list[str] | None = None) -> dict:
     finally:
         out.close()
 
-    ctl = {"pid": proc.pid, "cmd": cmd, "resume": bool(resume),
+    ctl = {"pid": proc.pid, "cmd": cmd, "stage": stage,
+           "resume": bool(resume or (settings or {}).get("resume")),
            "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with open(_control_file(), "w", encoding="utf-8") as f:
         json.dump(ctl, f)
-    return {"ok": True, "pid": proc.pid, "resume": bool(resume)}
+    return {"ok": True, "pid": proc.pid, "stage": stage, "resume": ctl["resume"]}
 
 
 def _kill_tree(pid: int) -> bool:

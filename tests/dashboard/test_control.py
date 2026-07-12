@@ -74,3 +74,38 @@ def test_reset_refused_while_running(tmp_path, monkeypatch):
         assert (tmp_path / "logs" / control.CONTROL_NAME).exists()
     finally:
         control.stop()
+
+
+def _joined(cmd):
+    return " ".join(str(c) for c in cmd)
+
+
+def test_build_command_all_with_advanced_settings():
+    cmd = control.build_command("all", settings={"workers": 4, "source_timeout": 600})
+    assert "all --workers 4 --source-timeout 600" in _joined(cmd)
+
+
+def test_build_command_ingest_sources():
+    cmd = control.build_command("ingest", settings={"sources": "x.csv"})
+    assert "ingest --sources x.csv" in _joined(cmd)
+
+
+def test_build_command_eda_boolean_flag():
+    cmd = control.build_command("eda", settings={"no_auto_rebalance": True})
+    assert "eda --no-auto-rebalance" in _joined(cmd)
+
+
+def test_build_command_drops_flags_a_stage_does_not_accept():
+    cmd = control.build_command("clean", settings={"workers": 8, "keep_raw": True})
+    s = _joined(cmd)
+    assert "--workers" not in s        # workers is not a clean-stage flag
+    assert "--keep-raw" in s
+
+
+def test_build_command_resume_from_param():
+    cmd = control.build_command("ingest", resume=True)
+    assert "--resume" in _joined(cmd)
+
+
+def test_build_command_defaults_to_all():
+    assert control.build_command()[3] == "all"
