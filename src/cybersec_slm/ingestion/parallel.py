@@ -269,6 +269,11 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
                 broke = True
             finally:
                 _force_shutdown(pool)
+                # A round that ends early (timeout/broke) leaves descriptors still
+                # sitting unconsumed in this round's local iterator — only in-flight
+                # futures got re-queued above. Drain the rest back into
+                # pending_descriptors so they aren't silently dropped from the run.
+                pending_descriptors.extend(pending_iter)
 
             if timed_out or broke:
                 rebuilds += 1

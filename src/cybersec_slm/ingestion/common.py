@@ -18,7 +18,6 @@ import pandas as pd
 from ..core import LOGS, RAW_DATA, count_lines, logger, sha256_file, try_import  # noqa: F401
 
 # ---------------------------------------------------------------- config -----
-CAP_BYTES = 5 * 1024 ** 3            # 5 GB hard cap (download + jsonl)
 ONE_MB = 1024 * 1024
 HEADERS = {"User-Agent": "Mozilla/5.0 (corpus-pipeline)"}
 DB_PATH = os.path.join(LOGS, "ingest_log.sqlite")
@@ -61,23 +60,9 @@ def http_get(url: str, timeout: int = 180) -> httpx.Response:
     return r
 
 
-def remote_size(url: str) -> int | None:
-    """Best-effort content-length via HEAD (None if unknown)."""
-    try:
-        r = httpx.head(url, headers=HEADERS, follow_redirects=True, timeout=30)
-        cl = r.headers.get("content-length")
-        return int(cl) if cl else None
-    except Exception:
-        return None
-
-
-class OversizeError(Exception):
-    """Raised when a file is over the 5 GB cap."""
-
-
 @retry(**_RETRY)
 def download(url: str, dest: str) -> tuple[int, str]:
-    """Stream a URL to disk; return (bytes, sha256). Aborts past CAP_BYTES."""
+    """Stream a URL to disk; return (bytes, sha256)."""
     import hashlib
     h = hashlib.sha256()
     size = 0
@@ -87,9 +72,6 @@ def download(url: str, dest: str) -> tuple[int, str]:
         with open(dest, "wb") as f:
             for chunk in r.iter_bytes(1 << 16):
                 size += len(chunk)
-                if size > CAP_BYTES:
-                    f.close(); os.remove(dest)
-                    raise OversizeError(f"exceeds 5 GB cap ({size/1024**3:.1f} GB+)")
                 f.write(chunk); h.update(chunk)
     return size, h.hexdigest()
 
@@ -315,13 +297,11 @@ def _polars_enrich(lf, meta: dict | None):
     return lf
 
 
-def _polars_to_jsonl(original: str, jsonl: str, cap: int,
-                     meta: dict | None) -> int:
+def _polars_to_jsonl(original: str, jsonl: str, meta: dict | None) -> int:
     """Lazy-scan a large csv/parquet/jsonl and stream it to JSONL via polars.
 
-    Returns the output byte size, or ``cap + 1`` (after removing the output) when
-    it exceeds ``cap``. Raises for any unsupported extension or scan error so the
-    caller can fall back to the pandas path.
+    Returns the output byte size. Raises for any unsupported extension or scan
+    error so the caller can fall back to the pandas path.
     """
     import polars as pl
 
@@ -336,16 +316,10 @@ def _polars_to_jsonl(original: str, jsonl: str, cap: int,
         raise ValueError(f"polars fast path unsupported for {original}")
     lf = _polars_enrich(lf, meta)
     lf.sink_ndjson(jsonl)
-    size = os.path.getsize(jsonl)
-    # sink writes the full output first, then we drop it if it exceeds the cap
-    if size > cap:
-        os.remove(jsonl)
-        return cap + 1
-    return size
+    return os.path.getsize(jsonl)
 
 
-def to_jsonl(original: str, jsonl: str, cap: int = CAP_BYTES,
-             *, meta: dict | None = None) -> int:
+def to_jsonl(original: str, jsonl: str, *, meta: dict | None = None) -> int:
     """Convert any supported file to JSONL.
 
     Large csv/parquet/jsonl take the polars lazy fast path (constant RAM, fast);
@@ -357,7 +331,7 @@ def to_jsonl(original: str, jsonl: str, cap: int = CAP_BYTES,
     if (low.endswith((".csv", ".parquet", ".jsonl"))
             and os.path.getsize(original) > BIG_FILE_BYTES):
         try:
-            return _polars_to_jsonl(original, jsonl, cap, meta)
+            return _polars_to_jsonl(original, jsonl, meta)
         except Exception as ex:
             logger.warning(f"polars fast path failed for {os.path.basename(original)}: "
                            f"{type(ex).__name__}: {ex}; falling back to pandas")

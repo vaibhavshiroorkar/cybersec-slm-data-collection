@@ -110,6 +110,100 @@ def test_resume_skips_completed_sources(tmp_path, monkeypatch):
         "http://example.com/a", "http://example.com/b"}
 
 
+def test_timeout_break_preserves_unsubmitted_descriptors(tmp_path, monkeypatch):
+    """A round that ends early (timeout) must not drop descriptors still queued
+    behind the hung one -- regression test for the pending_iter-drain bug where
+    only in-flight futures were re-queued and anything not yet pulled from the
+    round's local iterator vanished silently (never fetched, never logged).
+    """
+    descriptors = [
+        {"kind": "url", "url": "http://example.com/hang", "domain": "D",
+         "license": "", "description": ""},
+        {"kind": "url", "url": "http://example.com/a", "domain": "D",
+         "license": "", "description": ""},
+        {"kind": "url", "url": "http://example.com/b", "domain": "D",
+         "license": "", "description": ""},
+    ]
+
+    class _HangOnceExecutor:
+        """Like _InlineExecutor, but the 'hang' descriptor's future never resolves
+        (simulates a worker that never returns, forcing the timeout path)."""
+        _processes: dict = {}
+        hung: set = {"http://example.com/hang"}
+
+        def __init__(self, *a, **k):
+            pass
+
+        def submit(self, fn, descriptor, **kwargs):
+            fut = Future()
+            key = parallel.descriptor_key(descriptor)
+            if key in _HangOnceExecutor.hung:
+                _HangOnceExecutor.hung.discard(key)   # only hang once
+                return fut                            # left pending forever
+            try:
+                fut.set_result(fn(descriptor, **kwargs))
+            except Exception as e:  # noqa: BLE001
+                fut.set_exception(e)
+            return fut
+
+        def shutdown(self, *a, **k):
+            pass
+
+    class _FakeClock:
+        """Deterministic stand-in for time.monotonic(): advances by a fixed step
+        on every call so the overdue check fires predictably without real sleeps."""
+
+        def __init__(self, step=0.1):
+            self.t = 0.0
+            self.step = step
+
+        def __call__(self):
+            self.t += self.step
+            return self.t
+
+    ledger = tmp_path / "completed.txt"
+    calls: list[str] = []
+    monkeypatch.setattr(parallel, "COMPLETED_LEDGER", str(ledger))
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _HangOnceExecutor)
+    monkeypatch.setattr(parallel, "POLL_INTERVAL_S", 0.01)
+    monkeypatch.setattr(parallel, "_now", _FakeClock(step=0.1))
+    monkeypatch.setattr(parallel.cleaning_pipeline, "reset_dedup_state", lambda: None)
+    monkeypatch.setattr(parallel.cleaning_pipeline, "_write_report", lambda rows: "")
+    monkeypatch.setattr(parallel, "_wipe_dir", lambda p: None)
+    monkeypatch.setattr(parallel.shutil, "rmtree", lambda p, **k: None)
+    monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
+    monkeypatch.setattr(parallel.sources, "load_descriptors",
+                        lambda spec=None: descriptors)
+
+    class _DummyLog:
+        def record(self, **kw):
+            pass
+
+        def record_many(self, rows):
+            pass
+
+    monkeypatch.setattr(parallel, "IngestLog", _DummyLog)
+
+    def _stub_process(descriptor, **kwargs):
+        calls.append(parallel.descriptor_key(descriptor))
+        return {"status": "ok", "folder": None, "ingest_rows": [],
+                "light_eda_report": {}, "flags": {}}
+
+    monkeypatch.setattr(parallel.worker, "process_source", _stub_process)
+
+    summary = parallel.run_ingest_clean(workers=1, resume=False, source_timeout=1.0)
+
+    # The hung descriptor never actually invokes the worker; the two behind it
+    # in the queue must still be picked up on the rebuilt round instead of
+    # disappearing with no record anywhere.
+    assert set(calls) == {"http://example.com/a", "http://example.com/b"}
+    assert summary["ok"] == 2
+    assert summary["failed"] == 1
+    assert summary["timed_out"] == 1
+    assert parallel._load_completed(str(ledger)) == {
+        "http://example.com/a", "http://example.com/b"}
+
+
 def test_resume_all_complete_short_circuits(tmp_path, monkeypatch):
     ledger = tmp_path / "completed.txt"
     ledger.write_text("http://example.com/a\nhttp://example.com/b\n", encoding="utf-8")
