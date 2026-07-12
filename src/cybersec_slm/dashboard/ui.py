@@ -63,6 +63,36 @@ def stat_grid(pairs, cols: int = 4) -> None:
         columns[i % cols].metric(label, value)
 
 
+def stage_run_control(stage: str, *, run_label: str = "Run this stage") -> None:
+    """Render the run control for one stage: advanced settings + Run / Stop.
+
+    Launches ``control.start(stage, settings=...)`` and stops the active run. Only
+    one stage runs at a time, so Run is disabled while any stage is live.
+    """
+    import streamlit as st
+
+    from . import control
+
+    cstat = control.status()
+    running = cstat["running"]
+    settings = advanced_settings(stage)
+    c1, c2 = st.columns(2)
+    if c1.button(f"▶ {run_label}", disabled=running, use_container_width=True,
+                 key=f"{stage}_run"):
+        res = control.start(stage, settings=settings)
+        if res.get("ok"):
+            st.rerun()
+        else:
+            st.error(res["error"])
+    if c2.button("⏹ Stop", disabled=not running, use_container_width=True,
+                 key=f"{stage}_stop"):
+        control.stop()
+        st.rerun()
+    if running:
+        st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  "
+                   f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
+
+
 def stage_header(key: str, states: dict) -> None:
     """Render a stage page header: the stage label + its status pill."""
     import streamlit as st
@@ -77,3 +107,49 @@ def stage_header(key: str, states: dict) -> None:
 def stage_position(key: str) -> str:
     """'Stage N of 5' label for a stage key."""
     return f"Stage {stages.stage_keys().index(key) + 1} of {len(stages.STAGES)}"
+
+
+def advanced_settings(stage: str) -> dict:
+    """Render an expander of the advanced flags ``stage`` accepts; return settings.
+
+    Only shows the widgets for flags that stage supports (mirrors the CLI via
+    ``control._STAGE_FLAGS``), so every page reuses one consistent panel.
+    """
+    import streamlit as st
+
+    from .control import _STAGE_FLAGS
+
+    allowed = _STAGE_FLAGS.get(stage, set())
+    s: dict = {}
+    if not allowed:
+        return s
+    with st.expander("Advanced settings"):
+        if "workers" in allowed:
+            s["workers"] = int(st.number_input(
+                "workers", 1, 32, value=4, key=f"{stage}_workers"))
+        if "source_timeout" in allowed:
+            s["source_timeout"] = int(st.number_input(
+                "source timeout (s)", 30, 7200, value=1800, key=f"{stage}_timeout"))
+        if "limit" in allowed:
+            lim = int(st.number_input("per-file record limit (0 = no cap)", 0,
+                                      10_000_000, value=0, key=f"{stage}_limit"))
+            if lim:
+                s["limit"] = lim
+        if "sources" in allowed:
+            src = st.text_input("sources CSV path (blank = default catalog)",
+                                key=f"{stage}_sources")
+            if src.strip():
+                s["sources"] = src.strip()
+        if "keep_raw" in allowed:
+            s["keep_raw"] = st.checkbox("keep data/raw/ after cleaning",
+                                        key=f"{stage}_keepraw")
+        if "no_auto_rebalance" in allowed:
+            s["no_auto_rebalance"] = st.checkbox(
+                "disable auto-rebalance", key=f"{stage}_norebal")
+        if "no_enforce" in allowed:
+            s["no_enforce"] = st.checkbox(
+                "report only (do not fail on blockers)", key=f"{stage}_noenforce")
+        if "fresh" in allowed:
+            s["fresh"] = st.checkbox("fresh (ignore existing dataset)",
+                                     key=f"{stage}_fresh")
+    return s
