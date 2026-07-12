@@ -38,5 +38,5 @@ def show_table() -> None:
     ok = (df["status"] == "ok").sum()
     skip = df["status"].str.startswith("skipped").sum()
     fail = df["status"].str.startswith("failed").sum()
-    print(f"\nrows: {len(out)}  | ok: {ok}  skipped(>5GB): {skip}  failed: {fail}")
+    print(f"\nrows: {len(out)}  | ok: {ok}  skipped: {skip}  failed: {fail}")
     print(f"written: {out_path}")

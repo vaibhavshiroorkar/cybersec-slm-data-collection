@@ -1,5 +1,4 @@
 import json
-import os
 
 from cybersec_slm.ingestion import common
 
@@ -14,7 +13,7 @@ def test_polars_enrich_adds_provenance_and_text(tmp_path):
     src.write_text("content,other\nhello world,x\nfoo,y\n", encoding="utf-8")
     out = tmp_path / "out.jsonl"
     meta = {"source": "S", "url": "http://u", "license": "MIT"}
-    size = common._polars_to_jsonl(str(src), str(out), common.CAP_BYTES, meta)
+    size = common._polars_to_jsonl(str(src), str(out), meta)
     assert size > 0
     recs = _read_jsonl(out)
     assert len(recs) == 2
@@ -30,7 +29,7 @@ def test_polars_matches_pandas_provenance(tmp_path):
     src.write_text("body,n\nalpha,1\nbeta,2\n", encoding="utf-8")
     meta = {"source": "S", "url": "http://u", "license": "MIT"}
     pol = tmp_path / "pol.jsonl"
-    common._polars_to_jsonl(str(src), str(pol), common.CAP_BYTES, meta)
+    common._polars_to_jsonl(str(src), str(pol), meta)
     pan = tmp_path / "pan.jsonl"
     df = common.read_any(str(src))
     df = common.enrich_df(df, source="S", url="http://u", lic="MIT")
@@ -39,16 +38,6 @@ def test_polars_matches_pandas_provenance(tmp_path):
     pol_rows = [{k: r.get(k) for k in keys} for r in _read_jsonl(pol)]
     pan_rows = [{k: r.get(k) for k in keys} for r in _read_jsonl(pan)]
     assert pol_rows == pan_rows
-
-
-def test_polars_cap_removes_oversize_output(tmp_path):
-    src = tmp_path / "in.csv"
-    src.write_text("content\n" + "\n".join(f"row{i}" for i in range(100)) + "\n",
-                   encoding="utf-8")
-    out = tmp_path / "out.jsonl"
-    ret = common._polars_to_jsonl(str(src), str(out), cap=10, meta={"source": "S"})
-    assert ret == 11                    # cap + 1
-    assert not os.path.exists(out)      # oversize output removed
 
 
 def test_to_jsonl_falls_back_when_polars_fails(tmp_path, monkeypatch):

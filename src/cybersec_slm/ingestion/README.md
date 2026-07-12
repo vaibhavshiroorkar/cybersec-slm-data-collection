@@ -52,8 +52,6 @@ the `Sources.csv` license text or extends the allow patterns in `license_gate.py
 Set `CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0` to disable it (local dev/testing).
 
 ## Notes
-- A 5 GB cap (`common.CAP_BYTES`) guards both downloads and produced JSONL;
-  oversized files are skipped but still recorded in the log.
 - Kaggle sources need credentials (`~/.kaggle/kaggle.json` or the
   `KAGGLE_USERNAME` / `KAGGLE_KEY` environment variables).
 - `scrape_html.py`'s JS path needs the Playwright browser: `playwright install chromium`.

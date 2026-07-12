@@ -2,9 +2,8 @@
 """Unified dataset fetcher -> data/raw/<domain>/<owner>/ (original + jsonl).
 
 One handler per source kind (hf, kaggle, github, url), all sharing common.py.
-Files over the 5 GB cap are skipped but still recorded in the ingest log so they
-appear in the final table. The per-source streaming worker
-(:func:`cybersec_slm.ingestion.worker.process_source`) calls these handlers.
+The per-source streaming worker (:func:`cybersec_slm.ingestion.worker.process_source`)
+calls these handlers.
 """
 
 import os
@@ -12,7 +11,6 @@ import shutil
 from urllib.parse import urlparse
 
 from .common import (
-    CAP_BYTES,
     EXT_PRIORITY,
     ONE_MB,
     RAW_DATA,
@@ -22,7 +20,6 @@ from .common import (
     download,
     group_key,
     logger,
-    remote_size,
     sha256_file,
     to_jsonl,
 )
@@ -91,25 +88,13 @@ def _folder(domain, owner, name, counts):
 
 
 def _convert_and_log(original, jsonl, log, *, kind, name, domain, desc, url, lic):
-    """Convert one original file -> jsonl, enforce cap, record provenance."""
+    """Convert one original file -> jsonl, record provenance."""
     fmt = os.path.splitext(original)[1].lstrip(".")
     orig_mb = os.path.getsize(original) / ONE_MB
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
                 description=desc, source_url=url, origin_format=fmt, license=lic)
-    if os.path.getsize(original) > CAP_BYTES:
-        logger.warning(f"SKIP >5GB original: {os.path.basename(original)}")
-        os.remove(original)
-        log.record(**meta, orig_mb=round(orig_mb, 1), status="skipped (>5GB)")
-        return
     record_meta = {"source": desc, "url": url, "license": lic}
     size = to_jsonl(original, jsonl, meta=record_meta)
-    if size > CAP_BYTES:
-        logger.warning(f"SKIP >5GB jsonl: {os.path.basename(jsonl)}")
-        if os.path.exists(jsonl):
-            os.remove(jsonl)
-        os.remove(original)
-        log.record(**meta, orig_mb=round(orig_mb, 1), status="skipped (jsonl >5GB)")
-        return
     rows = count_lines(jsonl)
     logger.info(f"  {os.path.basename(jsonl)}: {rows:,} rows, {size/ONE_MB:.1f} MB")
     log.record(**meta, orig_mb=round(orig_mb, 1), jsonl_mb=round(size / ONE_MB, 1),
@@ -121,8 +106,7 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
 
     Used for archive/repo sources (github + zip) so a repo that stores its data
     as many small files (e.g. iann0036/iam-dataset) collapses into one output
-    instead of one-jsonl-per-file. The 5 GB cap is enforced cumulatively and the
-    source is recorded once.
+    instead of one-jsonl-per-file. The source is recorded once.
     """
     record_meta = {"source": desc, "url": url, "license": lic}
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
@@ -130,13 +114,6 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
     open(jsonl, "wb").close()
     orig_total = 0
     for path in paths:
-        if os.path.getsize(path) > CAP_BYTES or os.path.getsize(jsonl) > CAP_BYTES:
-            logger.warning(f"SKIP >5GB (cumulative): {name}")
-            if os.path.exists(jsonl):
-                os.remove(jsonl)
-            log.record(**meta, orig_mb=round(orig_total / ONE_MB, 1) or None,
-                       status="skipped (>5GB)")
-            return
         tmp = jsonl + ".part"
         try:
             to_jsonl(path, tmp, meta=record_meta)
@@ -188,12 +165,8 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
         jsonl = os.path.join(folder, key + ".jsonl")
         open(jsonl, "wb").close()
         total = rows = orig_total = 0
-        skipped = False
         shard_meta = {"source": desc, "url": url0, "license": lic}
         for i, rel in enumerate(sorted(members)):
-            if sib.get(rel, 0) > CAP_BYTES:
-                skipped = True
-                break
             url = f"https://huggingface.co/datasets/{ref}/resolve/main/{rel}"
             orig = os.path.join(folder, (key if len(members) == 1 else f"{key}.part{i}")
                                 + (".original.jsonl" if fext == ".jsonl" else fext))
@@ -214,16 +187,6 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
                 if os.path.exists(tmp):
                     os.remove(tmp)
             total = os.path.getsize(jsonl)
-            if total > CAP_BYTES:
-                skipped = True
-                break
-        if skipped:
-            logger.warning(f"SKIP >5GB (cumulative): {name}")
-            if os.path.exists(jsonl):
-                os.remove(jsonl)
-            log.record(**meta, orig_mb=round(orig_total / ONE_MB, 1) or None,
-                       status="skipped (>5GB)")
-            continue
         rows = count_lines(jsonl)
         logger.info(f"  {key}.jsonl: {rows:,} rows, {total/ONE_MB:.1f} MB"
                     + (f" ({len(members)} shards)" if len(members) > 1 else ""))
@@ -249,13 +212,6 @@ def fetch_kaggle(ref, domain, desc, lic, folder, log):
     for rel in sorted(chosen):
         stem, fext = os.path.splitext(os.path.basename(rel))[0], os.path.splitext(rel)[1]
         name = f"{ref.split('/')[-1]}/{stem}"
-        if sizes.get(rel, 0) > CAP_BYTES:
-            logger.warning(f"SKIP >5GB (pre-check): {rel} ({sizes[rel]/1024**3:.1f} GB)")
-            log.record(kind="kaggle", name=name, category=category_of("kaggle"), domain=domain,
-                       description=desc, source_url=url, origin_format=fext.lstrip("."),
-                       orig_mb=round(sizes[rel] / ONE_MB, 1), license=lic,
-                       status="skipped (>5GB)")
-            continue
         api.dataset_download_file(ref, rel, path=tmp, quiet=True)
         got = os.path.join(tmp, os.path.basename(rel))
         if not os.path.exists(got) and os.path.exists(got + ".zip"):
@@ -277,14 +233,7 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         url, name = gh           # repo page -> archive zip / raw file
     else:
         name = _download_name(url)
-    sz = remote_size(url)
     stem, fext = os.path.splitext(name)
-    if sz and sz > CAP_BYTES:
-        logger.warning(f"SKIP >5GB (pre-check): {name}")
-        log.record(kind=kind, name=stem, category=category_of(kind), domain=domain,
-                   description=desc, source_url=url, origin_format=fext.lstrip("."),
-                   orig_mb=round(sz / ONE_MB, 1), license=lic, status="skipped (>5GB)")
-        return
     orig = os.path.join(folder, name)
     download(url, orig)
     if orig.lower().endswith(".zip") or _is_zipfile(orig):
