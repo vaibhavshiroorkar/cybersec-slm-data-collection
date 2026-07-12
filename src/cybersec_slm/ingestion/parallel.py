@@ -409,6 +409,57 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
     return summary
 
 
+# ── Stage 3: Clean (whole tree + cross-source dedup) ──────────────────────────
+
+def run_clean(*, keep_raw: bool = False, limit: int | None = None,
+              resume: bool = False) -> dict:
+    """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
+
+    The clean stage of the five-stage pipeline. Cleans every fetched source in one
+    pass (per-source transforms, per-source dedup disabled), writes
+    ``logs/clean_report.csv``, then runs the single deterministic cross-source
+    dedup pass (:func:`cleaning.pipeline.final_global_dedup`). Deletes ``data/raw/``
+    afterward unless ``keep_raw``. Fresh (non-resume) wipes ``data/clean/`` and the
+    dedup + report state first; ``resume`` continues a partial dedup pass.
+
+    Cross-source dedup folds into this stage (there is no separate "dedup" stage).
+    """
+    raw_root = core.RAW_DATA
+    if not resume:
+        cleaning_pipeline.reset_dedup_state()
+        _wipe_dir(cleaning_pipeline.OUT_CLEAN_DATA)
+        try:
+            os.remove(os.path.join(cleaning_pipeline.REPORTS, "clean_report.csv"))
+        except OSError:
+            pass
+
+    if not os.path.isdir(raw_root):
+        logger.warning("clean: no raw data to clean (run `cybersec-slm ingest` first)")
+        return {"files": 0, "in": 0, "out": 0, "dedup": {}}
+
+    logger.info(f"clean: {raw_root} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
+    # clean_one_source scans find_input_files(raw_root) filtered to the given dir;
+    # passing the raw root itself cleans the whole tree in one pass with the
+    # process-cached transformers (deduper disabled). Cross-source dedup follows.
+    rows = cleaning_pipeline.clean_one_source(
+        raw_root, raw_root=raw_root,
+        clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit)
+    if rows:
+        cleaning_pipeline._write_report(rows)
+
+    dedup = cleaning_pipeline.final_global_dedup(
+        cleaning_pipeline.OUT_CLEAN_DATA, resume=resume)
+
+    if not keep_raw:
+        _wipe_dir(raw_root)
+
+    total_in = sum(r.get("in", 0) for r in rows)
+    total_out = sum(r.get("out", 0) for r in rows)
+    logger.info(f"clean: done files={len(rows)} in={total_in} out={total_out} "
+                f"exact_dups={dedup.get('exact_dups')} kept={dedup.get('kept')}")
+    return {"files": len(rows), "in": total_in, "out": total_out, "dedup": dedup}
+
+
 # ── Sequential clean of an already-fetched raw tree ───────────────────────────
 
 def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
