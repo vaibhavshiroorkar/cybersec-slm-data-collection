@@ -17,6 +17,7 @@ import re
 
 from .common import logger, try_import
 
+
 # Presidio runs spaCy NER over the *entire* text, so cost grows with length.
 # Oversized records (e.g. smart-contract source+bytecode blobs, tens of KB each)
 # are pure structured payloads with no prose PII, yet dominate the clean-pass

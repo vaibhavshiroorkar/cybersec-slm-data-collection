@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 
-import pytest
-
 from cybersec_slm.ingestion import light_eda
 
 

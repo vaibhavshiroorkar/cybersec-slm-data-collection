@@ -210,7 +210,7 @@ def fetch_kaggle(ref, domain, desc, lic, folder, log):
     url = f"https://www.kaggle.com/datasets/{ref}"
     tmp = os.path.join(folder, "_dl"); os.makedirs(tmp, exist_ok=True)
     for rel in sorted(chosen):
-        stem, fext = os.path.splitext(os.path.basename(rel))[0], os.path.splitext(rel)[1]
+        stem = os.path.splitext(os.path.basename(rel))[0]
         name = f"{ref.split('/')[-1]}/{stem}"
         api.dataset_download_file(ref, rel, path=tmp, quiet=True)
         got = os.path.join(tmp, os.path.basename(rel))
