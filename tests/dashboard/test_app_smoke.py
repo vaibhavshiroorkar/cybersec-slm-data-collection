@@ -50,7 +50,7 @@ def _seed_minimal(root: str) -> None:
 
 @pytest.mark.parametrize("script", ["app.py", "pages/1_Sourcing.py", "pages/2_Ingest.py",
                                     "pages/3_Clean.py", "pages/4_EDA.py", "pages/5_Schema.py",
-                                    "pages/2_Dataset.py"])
+                                    "pages/6_Dataset.py"])
 def test_page_renders_without_error(script, tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
@@ -63,7 +63,7 @@ def test_agent_page_shows_setup_instructions_when_not_configured(tmp_path, monke
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     _seed_minimal(str(tmp_path))
-    at = AppTest.from_file(os.path.join(_DASH, "pages/3_Agent.py"), default_timeout=30)
+    at = AppTest.from_file(os.path.join(_DASH, "pages/7_Agent.py"), default_timeout=30)
     at.run()
     assert not at.exception
     assert any("uv sync --extra dashboard --extra agent" in info.value for info in at.info)
