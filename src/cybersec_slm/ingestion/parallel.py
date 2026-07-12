@@ -229,7 +229,8 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
 
 def run_ingest(spec: str | None = None, *, workers: int | None = None,
                resume: bool = False, limit: int | None = None,
-               source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S) -> dict:
+               source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
+               max_source_gb: float | None = None) -> dict:
     """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
 
     Each source is fetched and passed through the license + light-EDA gate by a
@@ -239,7 +240,9 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
     cross-source dedup, and raw deletion all belong to :func:`run_clean`.
     """
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
-    descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
+    max_mb = max_source_gb * 1024 if max_source_gb else None
+    descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG,
+                                           max_mb=max_mb)
     if not descriptors:
         logger.warning("no sources to ingest")
         return _empty_summary()
@@ -311,7 +314,7 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 # ── Stage 3: Clean (whole tree + cross-source dedup) ──────────────────────────
 
 def run_clean(*, keep_raw: bool = True, limit: int | None = None,
-              resume: bool = False) -> dict:
+              resume: bool = False, drop_non_english: bool = False) -> dict:
     """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
 
     The clean stage of the five-stage pipeline. Cleans every fetched source in one
@@ -343,7 +346,8 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     # process-cached transformers (deduper disabled). Cross-source dedup follows.
     rows = cleaning_pipeline.clean_one_source(
         raw_root, raw_root=raw_root,
-        clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit)
+        clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
+        drop_non_english=drop_non_english)
     if rows:
         cleaning_pipeline._write_report(rows)
 
@@ -422,6 +426,8 @@ def run_v2_pipeline(spec: str | None = None, *,
                     keep_raw: bool = True,
                     limit: int | None = None,
                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
+                    max_source_gb: float | None = None,
+                    drop_non_english: bool = False,
                     enforce_eda: bool = True,
                     normalize: bool = True) -> dict:
     """Run the five stages in sequence: ingest -> clean -> EDA -> schema.
@@ -455,10 +461,12 @@ def run_v2_pipeline(spec: str | None = None, *,
 
     # Stage 2: fetch every source to data/raw/ (no cleaning).
     ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
-                               source_timeout=source_timeout)
+                               source_timeout=source_timeout,
+                               max_source_gb=max_source_gb)
 
     # Stage 3: clean the whole raw tree + cross-source dedup -> data/clean/.
-    clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume)
+    clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume,
+                             drop_non_english=drop_non_english)
 
     # Stage 4: deep global EDA sufficiency gate.
     try:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared core used by every pipeline stage — one place per purpose.
+"""Shared core used by every pipeline stage: one place per purpose.
 
 Holds what ingestion and cleaning both need: an optional-dependency loader,
 a single configured logger (loguru if present, else stdlib), the workspace data
@@ -35,9 +35,21 @@ def try_import(name: str):
 # Load a project .env (if present) so API keys land in os.environ before any
 # stage reads them. python-dotenv is optional; without it, keys must be exported
 # in the shell. Existing environment variables are never overridden.
+#
+# Resolve the .env deterministically: first search up from the current working
+# directory (find_dotenv), then fall back to the repo root derived from this
+# file's location. The fallback matters because the dashboard is often launched
+# from a different working directory (e.g. by Streamlit), where a cwd-only search
+# would silently find nothing and every API key would look "unset".
 _dotenv = try_import("dotenv")
 if _dotenv is not None:
-    _dotenv.load_dotenv(_dotenv.find_dotenv(usecwd=True))
+    _repo_env = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        ".env")
+    _env_path = _dotenv.find_dotenv(usecwd=True) or (
+        _repo_env if os.path.exists(_repo_env) else "")
+    if _env_path:
+        _dotenv.load_dotenv(_env_path)
 
 
 # ---------------------------------------------------------------- paths ------

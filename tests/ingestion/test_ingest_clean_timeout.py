@@ -52,7 +52,7 @@ def test_timed_out_source_is_failed_and_run_completes(tmp_path, monkeypatch):
         def record_many(self, rows):
             pass
     monkeypatch.setattr(parallel, "IngestLog", _Log)
-    monkeypatch.setattr(parallel.sources, "load_descriptors", lambda spec=None: [
+    monkeypatch.setattr(parallel.sources, "load_descriptors", lambda spec=None, **kw: [
         {"kind": "url", "url": "http://hang", "domain": "D", "license": "",
          "description": ""}])
 
@@ -96,7 +96,7 @@ def test_broken_pool_rebuilds_then_gives_up(tmp_path, monkeypatch):
         def record_many(self, rows):
             pass
     monkeypatch.setattr(parallel, "IngestLog", _Log)
-    monkeypatch.setattr(parallel.sources, "load_descriptors", lambda spec=None: [
+    monkeypatch.setattr(parallel.sources, "load_descriptors", lambda spec=None, **kw: [
         {"kind": "url", "url": "http://x", "domain": "D", "license": "",
          "description": ""}])
     monkeypatch.setattr(parallel.worker, "process_source",

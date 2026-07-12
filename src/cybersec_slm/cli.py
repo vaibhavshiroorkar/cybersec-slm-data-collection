@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default: keep it)")
     c.add_argument("--resume", action="store_true",
                    help="clean stage: continue a partial cross-source dedup pass")
+    c.add_argument("--drop-non-english", action="store_true",
+                   help="drop non-English records instead of translating them")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     c.add_argument("--cap", type=int, default=None,
@@ -94,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     ig.add_argument("--resume", action="store_true",
                     help="skip sources already fetched in a prior run "
                          "(logs/completed_sources.txt)")
+    ig.add_argument("--max-source-gb", type=float, default=None,
+                    help="skip sources larger than this many GB (catalog size)")
     ig.add_argument("--source-timeout", type=float, default=1800.0,
                     help="per-source wall-clock timeout in seconds "
                          "(abandon a hung source; default 1800)")
@@ -165,6 +169,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cap records per file (smoke test)")
     a.add_argument("--no-auto-rebalance", action="store_true",
                    help="disable automatic rebalancing of over-represented subdomains")
+    a.add_argument("--max-source-gb", type=float, default=None,
+                   help="skip sources larger than this many GB (catalog size)")
+    a.add_argument("--drop-non-english", action="store_true",
+                   help="drop non-English records instead of translating them")
     a.add_argument("--source-timeout", type=float, default=1800.0,
                    help="per-source wall-clock timeout in seconds "
                         "(abandon a hung source; default 1800)")
@@ -179,7 +187,8 @@ def main(argv: list[str] | None = None) -> None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
             from .ingestion import parallel
             parallel.run_clean(keep_raw=not args.purge_raw, limit=args.limit,
-                               resume=args.resume)
+                               resume=args.resume,
+                               drop_non_english=args.drop_non_english)
         elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
@@ -198,7 +207,8 @@ def main(argv: list[str] | None = None) -> None:
                             workers=args.workers,
                             resume=args.resume,
                             limit=args.limit,
-                            source_timeout=args.source_timeout)
+                            source_timeout=args.source_timeout,
+                            max_source_gb=args.max_source_gb)
 
     elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
@@ -255,6 +265,8 @@ def main(argv: list[str] | None = None) -> None:
             keep_raw=not args.purge_raw,
             limit=getattr(args, "limit", None),
             source_timeout=args.source_timeout,
+            max_source_gb=args.max_source_gb,
+            drop_non_english=args.drop_non_english,
         )
 
 

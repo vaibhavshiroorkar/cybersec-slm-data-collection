@@ -239,7 +239,8 @@ def _row_to_descriptor(row: dict) -> dict | None:
     return None
 
 
-def load_descriptors(spec: str, *, order_by_size: bool = True) -> list[dict]:
+def load_descriptors(spec: str, *, order_by_size: bool = True,
+                     max_mb: float | None = None) -> list[dict]:
     """Read the catalog CSV at ``spec`` into a list of source descriptors.
 
     When ``order_by_size`` (the default), sources are returned smallest-first by
@@ -247,6 +248,10 @@ def load_descriptors(spec: str, *, order_by_size: bool = True) -> list[dict]:
     and defers the multi-GB downloads, for quicker feedback and steadier progress.
     Rows with no recorded size sort last. Pass ``order_by_size=False`` to keep
     the catalog's original row order.
+
+    When ``max_mb`` is set, sources whose catalog size is known to exceed it are
+    skipped up front (never downloaded). Sources with no recorded size are kept,
+    since their size can't be judged before fetching.
     """
     import pandas as pd
 
@@ -256,16 +261,25 @@ def load_descriptors(spec: str, *, order_by_size: bool = True) -> list[dict]:
     df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
     pairs: list[tuple[float, dict]] = []
+    skipped_oversize = 0
     for row in df.to_dict("records"):
         d = _row_to_descriptor(row)
-        if d is not None:
-            pairs.append((_size_hint(row), d))
+        if d is None:
+            continue
+        sz = _size_hint(row)
+        if max_mb is not None and sz != float("inf") and sz > max_mb:
+            skipped_oversize += 1
+            continue
+        pairs.append((sz, d))
     if order_by_size:
         # stable sort keeps catalog order among equal-size sources
         pairs.sort(key=lambda p: p[0])
     out = [d for _sz, d in pairs]
     logger.info(f"loaded {len(out)} sources from {os.path.basename(path)}"
                 + (" (smallest-first)" if order_by_size else ""))
+    if skipped_oversize:
+        logger.info(f"skipped {skipped_oversize} sources over the "
+                    f"{max_mb / 1024:.1f} GB size cap")
     return out
 
 

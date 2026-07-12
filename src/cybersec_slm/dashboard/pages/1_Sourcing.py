@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Sourcing (stage 1): the source catalog + a discover control.
+"""Sourcing (stage 1): inspect the source catalog.
 
-Presentation only; every value comes from :mod:`cybersec_slm.dashboard.data` /
-:mod:`cybersec_slm.dashboard.control`.
+Read-only. Running a stage and watching the log both live on the Overview page;
+every value here comes from :mod:`cybersec_slm.dashboard.data`.
 """
 
 from __future__ import annotations
@@ -13,11 +13,8 @@ from cybersec_slm.dashboard import charts, data, ui
 
 ui.inject_css()
 ui.stage_header("source", data.stage_states())
-st.caption("Discover and curate sources into `sources/Sources.csv`. Discovery uses "
-           "Google Programmable Search; set `GOOGLE_SEARCH_API_KEY` and "
-           "`GOOGLE_SEARCH_ENGINE_ID` (env) before running it.")
-
-ui.stage_run_control("source", run_label="Discover sources")
+st.caption("The curated source catalog in `sources/Sources.csv`. Discovery runs "
+           "from the Overview page; this page shows what is catalogued.")
 st.divider()
 
 # ---------------------------------------------------------------- catalog ------
@@ -28,23 +25,21 @@ ui.stat_grid([
     ("Sub-domains", charts.fmt_int(len(cat["by_domain"]))),
 ], cols=2)
 
-rows = [{"Sub-Domain": k, "sources": v}
-        for k, v in sorted(cat["by_domain"].items(), key=lambda kv: kv[1], reverse=True)]
-if rows:
-    with st.container(height=360):
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+st.markdown("**By sub-domain**")
+by_dom = [{"sub-domain": k, "sources": v}
+          for k, v in sorted(cat["by_domain"].items(), key=lambda kv: kv[1], reverse=True)]
+if by_dom:
+    ui.table(by_dom, height=280)
 else:
     st.caption("No `sources/Sources.csv` found yet.")
 
 st.divider()
 
-# ------------------------------------------------------------------- log -------
-st.subheader("Stage log")
-
-
-@st.fragment(run_every=3)
-def _logs() -> None:
-    ui.log_box(data.log_tail(200))
-
-
-_logs()
+# --------------------------------------------------------------- full table ----
+st.subheader("Sources.csv")
+rows = data.catalog_rows()
+if not rows:
+    st.caption("No `sources/Sources.csv` found yet.")
+else:
+    st.caption(f"{len(rows)} rows")
+    ui.table(rows, height=460)

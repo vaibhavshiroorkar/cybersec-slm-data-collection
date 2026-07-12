@@ -55,7 +55,7 @@ def _install(monkeypatch, ledger_path):
     monkeypatch.setattr(parallel.shutil, "rmtree", lambda p, **k: None)
     monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
     monkeypatch.setattr(parallel.sources, "load_descriptors",
-                        lambda spec=None: _descriptors())
+                        lambda spec=None, **kw: _descriptors())
 
     class _DummyLog:
         def record(self, **kw):
@@ -173,7 +173,7 @@ def test_timeout_break_preserves_unsubmitted_descriptors(tmp_path, monkeypatch):
     monkeypatch.setattr(parallel.shutil, "rmtree", lambda p, **k: None)
     monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
     monkeypatch.setattr(parallel.sources, "load_descriptors",
-                        lambda spec=None: descriptors)
+                        lambda spec=None, **kw: descriptors)
 
     class _DummyLog:
         def record(self, **kw):

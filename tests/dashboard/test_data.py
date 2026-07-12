@@ -283,14 +283,122 @@ def test_run_status_ignores_empty_stub_log(tmp_path, monkeypatch):
     assert data.run_status()["state"] == "idle"                    # not "running"
 
 
-def test_raw_funnel_metrics_use_ingest_ledger(tmp_path, monkeypatch):
+def test_raw_funnel_counts_disk_sources_and_catalog_lines(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
+    # Two source folders on disk under data/raw/<sub-domain>/<source>/.
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cloud Security" / "src-a").mkdir(parents=True)
+    (raw / "Cryptography" / "src-b").mkdir(parents=True)
+    # Line/size totals come from the catalog, not a live scan of the raw tree.
+    monkeypatch.setattr(data, "catalog_totals", lambda: {
+        "raw_lines": 22_000_000, "raw_size_mb": 43000.0,
+        "cleaned_lines": 500, "cleaned_size_mb": 12.0})
 
     funnel = data.data_funnel()
-    assert funnel["raw"]["sources"] == 2
-    assert funnel["raw"]["lines"] == 14
-    assert funnel["raw"]["size_mb"] == 4.0
+    assert funnel["raw"]["sources"] == 2                 # counted on disk
+    assert funnel["raw"]["lines"] == 22_000_000          # from the catalog
+    assert funnel["raw"]["size_mb"] == 43000.0
+
+
+def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))                                 # no data/raw/ created
+    monkeypatch.setattr(data, "catalog_totals", lambda: {
+        "raw_lines": 22_000_000, "raw_size_mb": 43000.0,
+        "cleaned_lines": 0, "cleaned_size_mb": 0.0})
+
+    funnel = data.data_funnel()
+    assert funnel["raw"]["sources"] == 0
+    assert funnel["raw"]["lines"] == 0                   # not claimed without raw
+    assert funnel["raw"]["size_mb"] == 0.0
+
+
+def test_ingest_progress_uses_completed_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cloud Security" / "src-a").mkdir(parents=True)
+    (raw / "Cryptography" / "src-b").mkdir(parents=True)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    # Ledger records more checked sources than produced folders (skips/failures).
+    (logs / "completed_sources.txt").write_text(
+        "hf:a\nurl:b\nurl:c\nkaggle:d\n", encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_total", lambda: 10)
+
+    prog = data.ingest_progress()
+    assert prog == {"checked": 4, "with_data": 2, "total": 10}
+
+
+def test_ingest_progress_falls_back_to_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cryptography" / "src-b").mkdir(parents=True)   # no ledger present
+    monkeypatch.setattr(data, "_catalog_total", lambda: 10)
+
+    prog = data.ingest_progress()
+    assert prog == {"checked": 1, "with_data": 1, "total": 10}
+
+
+def test_ingest_outcome_parses_log_and_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    con = sqlite3.connect(str(logs / "ingest_log.sqlite"))
+    con.execute("CREATE TABLE ingest (name TEXT, status TEXT)")
+    con.execute("INSERT INTO ingest VALUES (?, ?)", ("nsa-cnsa-2-0", "failed: crawl rc=0"))
+    con.execute("INSERT INTO ingest VALUES (?, ?)", ("good-src", "ok"))
+    con.commit()
+    con.close()
+    (logs / "pipeline.9.log").write_text(
+        "2026-07-12 18:23 | INFO | x:1 -   FAILED demo-src: "
+        "HTTPStatusError: Client error '403 Forbidden' for url 'http://x'\n"
+        "2026-07-12 18:53 | ERROR | x:1 -   TIMEOUT slow-src: exceeded 1800s; abandoning\n"
+        "2026-07-12 19:23 | INFO | x:1 - ingest: done ok=8 failed=5 skipped=0 "
+        "rejected=3 timed_out=2\n", encoding="utf-8")
+
+    out = data.ingest_outcome()
+    assert out["summary"] == {"ok": 8, "failed": 5, "skipped": 0,
+                              "rejected": 3, "timed_out": 2}
+    by_src = {i["source"]: i for i in out["issues"]}
+    assert by_src["demo-src"]["kind"] == "failed"
+    assert by_src["demo-src"]["reason"] == "blocked (403 Forbidden)"
+    assert by_src["slow-src"]["reason"] == "timed out (over 1800s)"
+    assert by_src["nsa-cnsa-2-0"]["reason"] == "crawl returned nothing"
+    assert "good-src" not in by_src                       # ok rows are not issues
+
+
+def test_ingest_outcome_empty_without_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    out = data.ingest_outcome()
+    assert out == {"summary": None, "issues": []}
+
+
+def test_sources_without_data_reconciles_catalog_to_disk(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    from cybersec_slm.ingestion import license_gate
+    from cybersec_slm.ingestion import sources as srcs
+
+    descs = [
+        {"kind": "hf", "ref": "ownerA/ds", "domain": "Cloud Security"},      # has data
+        {"kind": "kaggle", "ref": "ownerB/ds", "domain": "Cryptography"},    # license-denied
+        {"kind": "pdf", "slug": "lonely-pdf", "domain": "Network Security"},  # no folder
+    ]
+    monkeypatch.setattr(srcs, "load_descriptors", lambda *a, **k: descs)
+    monkeypatch.setattr(license_gate, "is_license_ok",
+                        lambda d: (False, "non-commercial (nc)")
+                        if (d.get("ref") or "").startswith("ownerB") else (True, "ok"))
+
+    raw = tmp_path / "data" / "raw" / "Cloud Security" / "ownerA"
+    raw.mkdir(parents=True)
+    (raw / "f.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
+
+    rows = data.sources_without_data()
+    by = {r["source"]: r for r in rows}
+    assert "ownerA" not in by                              # produced data -> excluded
+    assert by["ownerB"]["type"] == "license"
+    assert by["ownerB"]["reason"] == "non-commercial (nc)"
+    assert by["lonely-pdf"]["type"] == "no records"        # fetched, nothing on disk
 
 
 def test_fmt_duration():
