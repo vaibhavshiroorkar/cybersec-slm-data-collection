@@ -171,6 +171,54 @@ def run_phase(lookback: int = 500) -> dict:
             "index": idx + 1, "total": total, "terminal": key == "schema"}
 
 
+def _artifact_done(key: str) -> bool:
+    """Whether a stage has produced its output artifact (survives raw deletion)."""
+    if key == "source":
+        return bool(_catalog_total())
+    if key == "ingest":
+        return _ingest_ledger_stats()["sources"] > 0 or _completed_count() > 0
+    if key == "clean":
+        return clean_report().get("total") is not None
+    if key == "eda":
+        return latest_eda() is not None
+    if key == "schema":
+        return manifest() is not None
+    return False
+
+
+def stage_states() -> dict:
+    """Per-stage status for the Overview strip: ``{key: {"state", "detail"}}``.
+
+    ``state`` is ``done`` / ``running`` / ``failed`` / ``pending``. Derived from the
+    live (or last-reached) phase plus each stage's output artifact, so a completed
+    run shows every stage ``done`` even after ``data/raw/`` was deleted. A gate
+    failure marks ``eda`` as ``failed``.
+    """
+    ph = run_phase()
+    running = run_status()["state"] == "running"
+    pk = ph.get("phase")
+    keys = stages.stage_keys()
+    out: dict[str, dict] = {}
+    if pk == "gate_failed":
+        eda_i = keys.index("eda")
+        for i, k in enumerate(keys):
+            if k == "eda":
+                out[k] = {"state": "failed", "detail": ph.get("detail", "")}
+            else:
+                out[k] = {"state": "done" if i < eda_i else "pending", "detail": ""}
+        return out
+    cur = keys.index(pk) if pk in keys else -1
+    for i, k in enumerate(keys):
+        if running and i == cur:
+            state = "running"
+        elif i < cur or _artifact_done(k):
+            state = "done"
+        else:
+            state = "pending"
+        out[k] = {"state": state, "detail": ph.get("detail", "") if i == cur else ""}
+    return out
+
+
 def run_status() -> dict:
     """Run state: authoritative from the dashboard control file when present.
 

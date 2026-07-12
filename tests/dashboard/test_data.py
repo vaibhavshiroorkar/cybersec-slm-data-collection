@@ -218,6 +218,35 @@ def test_run_phase_unknown_without_logs(tmp_path, monkeypatch):
     assert data.run_phase()["phase"] == "unknown"
 
 
+def test_stage_states_all_done_when_artifacts_present(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    (logs / "eda").mkdir(parents=True)
+    (logs / "completed_sources.txt").write_text("a\n", encoding="utf-8")
+    (logs / "clean_report.csv").write_text(
+        "sub_domain,source,file,in,out\nTOTAL,,1 files,10,8\n", encoding="utf-8")
+    (logs / "eda" / "latest.json").write_text('{"passed": true}', encoding="utf-8")
+    final = tmp_path / "data" / "final"
+    final.mkdir(parents=True)
+    (final / "manifest.json").write_text('{"record_count": 8}', encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_total", lambda: 5)
+
+    st = data.stage_states()
+    assert set(st) == {"source", "ingest", "clean", "eda", "schema"}
+    assert st["clean"]["state"] == "done"
+    assert st["schema"]["state"] == "done"
+
+
+def test_stage_states_gate_failed_marks_eda(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pipeline.1.log").write_text(
+        "x - eda: total=10\nx:1 - EDA sufficiency gate FAILED: 1 blocker\n",
+        encoding="utf-8")
+    assert data.stage_states()["eda"]["state"] == "failed"
+
+
 def test_run_status_includes_phase(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _write_log(tmp_path, "pipeline.4.log", "x - final global dedup over /clean\n")
