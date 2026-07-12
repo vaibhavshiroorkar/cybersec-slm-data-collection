@@ -71,9 +71,9 @@ def _wire(monkeypatch, tmp_path):
     return raw, dup, distinct
 
 
-def test_run_clean_cleans_dedups_and_deletes_raw(tmp_path, monkeypatch):
+def test_run_clean_cleans_and_dedups(tmp_path, monkeypatch):
     raw, dup, distinct = _wire(monkeypatch, tmp_path)
-    result = parallel.run_clean(keep_raw=False)
+    result = parallel.run_clean()
 
     clean_dir = tmp_path / "clean"
     text = _read_all(str(clean_dir))
@@ -83,13 +83,18 @@ def test_run_clean_cleans_dedups_and_deletes_raw(tmp_path, monkeypatch):
     assert result["dedup"]["exact_dups"] >= 1
     # clean report written
     assert (tmp_path / "reports" / "clean_report.csv").exists()
-    # raw deleted by default
-    assert not raw.exists()
     pipeline.reset_cleaner_cache()
 
 
-def test_run_clean_keep_raw_retains_raw(tmp_path, monkeypatch):
+def test_run_clean_retains_raw_by_default(tmp_path, monkeypatch):
     raw, _dup, _distinct = _wire(monkeypatch, tmp_path)
-    parallel.run_clean(keep_raw=True)
+    parallel.run_clean()                 # default keeps raw after ingestion
     assert raw.exists()
+    pipeline.reset_cleaner_cache()
+
+
+def test_run_clean_keep_raw_false_deletes_raw(tmp_path, monkeypatch):
+    raw, _dup, _distinct = _wire(monkeypatch, tmp_path)
+    parallel.run_clean(keep_raw=False)   # explicit purge
+    assert not raw.exists()
     pipeline.reset_cleaner_cache()

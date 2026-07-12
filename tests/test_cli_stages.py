@@ -33,7 +33,7 @@ def test_clean_action_is_optional_for_the_stage():
     args = build_parser().parse_args(["clean"])
     assert args.stage == "clean"
     assert args.action is None
-    assert args.keep_raw is False
+    assert args.purge_raw is False       # raw is kept by default
 
 
 def test_clean_still_accepts_diagnostic_actions():

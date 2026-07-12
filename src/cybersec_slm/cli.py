@@ -7,7 +7,7 @@ Full pipeline (end-to-end):
 Individual stages:
     cybersec-slm source   [--domains ...] [--dry-run]        # 1: search -> Sources.csv
     cybersec-slm ingest   [--sources X.csv] [--workers N] [--resume]  # 2: fetch -> data/raw/
-    cybersec-slm clean    [--keep-raw] [--resume]            # 3: clean + dedup -> data/clean/
+    cybersec-slm clean    [--purge-raw] [--resume]           # 3: clean + dedup -> data/clean/
     cybersec-slm eda      [--no-enforce]                     # 4: sufficiency gate
     cybersec-slm schema   (alias of normalize)               # 5: -> data/final/dataset.jsonl
     cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # clean diagnostics/ops
@@ -40,8 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="omit to run the full clean stage. sanitize|dedup|pii|lang: "
                         "run one transform -> data/_stages/ for inspection; report: "
                         "recount output trees; balance: per-domain record counts")
-    c.add_argument("--keep-raw", action="store_true",
-                   help="clean stage: keep data/raw/ instead of deleting after clean")
+    c.add_argument("--purge-raw", action="store_true",
+                   help="clean stage: delete data/raw/ after cleaning "
+                        "(default: keep it)")
     c.add_argument("--resume", action="store_true",
                    help="clean stage: continue a partial cross-source dedup pass")
     c.add_argument("--limit", type=int, default=None,
@@ -158,8 +159,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--resume", action="store_true",
                    help="skip sources already fetched in a prior run "
                         "(logs/completed_sources.txt)")
-    a.add_argument("--keep-raw", action="store_true",
-                   help="keep data/raw/ instead of deleting after clean")
+    a.add_argument("--purge-raw", action="store_true",
+                   help="delete data/raw/ after cleaning (default: keep it)")
     a.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     a.add_argument("--no-auto-rebalance", action="store_true",
@@ -177,7 +178,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.action is None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
             from .ingestion import parallel
-            parallel.run_clean(keep_raw=args.keep_raw, limit=args.limit,
+            parallel.run_clean(keep_raw=not args.purge_raw, limit=args.limit,
                                resume=args.resume)
         elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
@@ -251,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
             args.sources,
             workers=args.workers,
             resume=args.resume,
-            keep_raw=getattr(args, "keep_raw", False),
+            keep_raw=not args.purge_raw,
             limit=getattr(args, "limit", None),
             source_timeout=args.source_timeout,
         )

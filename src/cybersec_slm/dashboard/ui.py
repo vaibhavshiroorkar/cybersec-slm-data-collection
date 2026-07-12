@@ -140,9 +140,10 @@ def advanced_settings(stage: str) -> dict:
                                 key=f"{stage}_sources")
             if src.strip():
                 s["sources"] = src.strip()
-        if "keep_raw" in allowed:
-            s["keep_raw"] = st.checkbox("keep data/raw/ after cleaning",
-                                        key=f"{stage}_keepraw")
+        if "purge_raw" in allowed:
+            s["purge_raw"] = st.checkbox(
+                "delete data/raw/ after cleaning (default: keep it)",
+                key=f"{stage}_purgeraw")
         if "no_auto_rebalance" in allowed:
             s["no_auto_rebalance"] = st.checkbox(
                 "disable auto-rebalance", key=f"{stage}_norebal")
