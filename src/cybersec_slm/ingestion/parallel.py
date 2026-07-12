@@ -96,6 +96,128 @@ def _force_shutdown(pool) -> None:
         pass
 
 
+def _label(d) -> str:
+    return d.get("ref") or d.get("slug") or d.get("kind")
+
+
+def _run_pool(descriptors, *, submit, on_result, workers: int,
+              source_timeout: float, summary: dict, ctx=None) -> dict:
+    """Drive a ProcessPoolExecutor over `descriptors`, generically.
+
+    This owns every hard part of the parallel run and knows nothing about fetch
+    vs clean:
+
+    * ``submit(pool, descriptor) -> Future`` submits one descriptor's work.
+    * ``on_result(descriptor, meta) -> bool`` records a finished result; it must
+      return ``False`` for an unknown/failed result so the runner retries it.
+
+    The runner keeps ``workers`` submissions in flight, consumes with
+    ``wait(FIRST_COMPLETED)``, sweeps per-source timeouts, handles a
+    ``BrokenProcessPool`` by re-queueing survivors and rebuilding (up to
+    ``MAX_POOL_REBUILDS``), retries transiently-failing sources up to
+    ``MAX_SOURCE_RETRIES``, and drains any descriptors left unconsumed when a round
+    ends early. It mutates ``summary["failed"]`` and ``summary["timed_out"]``.
+    """
+    ctx = ctx or mp.get_context("spawn")
+    retries: dict[str, int] = {}
+    pending_descriptors = list(descriptors)
+    rebuilds = 0
+
+    while pending_descriptors and rebuilds <= MAX_POOL_REBUILDS:
+        round_descriptors = pending_descriptors
+        pending_descriptors = []
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
+        started: dict = {}
+        fut_desc: dict = {}
+        remaining: set = set()
+
+        def _submit(d, pool=pool, started=started, fut_desc=fut_desc,
+                    remaining=remaining):
+            fut = submit(pool, d)
+            started[fut] = _now()
+            fut_desc[fut] = d
+            remaining.add(fut)
+
+        pending_iter = iter(round_descriptors)
+        for _ in range(workers):
+            try:
+                _submit(next(pending_iter))
+            except StopIteration:
+                break
+
+        def _fail_or_retry(d):
+            k = descriptor_key(d)
+            if retries.get(k, 0) < MAX_SOURCE_RETRIES:
+                retries[k] = retries.get(k, 0) + 1
+                _submit(d)                 # resubmit into the SAME live pool
+            else:
+                summary["failed"] += 1
+
+        broke = timed_out = False
+        try:
+            while remaining:
+                done, _pend = wait(remaining, timeout=POLL_INTERVAL_S,
+                                   return_when=FIRST_COMPLETED)
+                for fut in done:
+                    remaining.discard(fut)
+                    d = fut_desc[fut]
+                    try:
+                        meta = fut.result()
+                    except BrokenProcessPool:
+                        # Pool is dead: re-queue this descriptor (already
+                        # discarded from `remaining`) plus the survivors,
+                        # which the outer handler re-queues, then rebuild.
+                        pending_descriptors.append(d)
+                        raise
+                    except Exception as ex:
+                        logger.error(f"  worker crashed for {_label(d)}: "
+                                     f"{type(ex).__name__}: {ex}")
+                        _fail_or_retry(d)
+                        continue
+                    if not on_result(d, meta):
+                        logger.warning(f"  FAILED {_label(d)}: "
+                                       f"{meta.get('error')}")
+                        _fail_or_retry(d)
+                        continue
+                    try:
+                        _submit(next(pending_iter))
+                    except StopIteration:
+                        pass
+                now = _now()
+                overdue = [f for f in remaining
+                           if now - started[f] > source_timeout]
+                if overdue:
+                    for f in overdue:
+                        logger.error(f"  TIMEOUT {_label(fut_desc[f])}: exceeded "
+                                     f"{source_timeout:.0f}s; abandoning")
+                        summary["timed_out"] += 1
+                        summary["failed"] += 1
+                        remaining.discard(f)
+                    pending_descriptors.extend(fut_desc[f] for f in remaining)
+                    timed_out = True
+                    break
+        except BrokenProcessPool as ex:
+            logger.error(f"process pool broke: {ex}")
+            pending_descriptors.extend(fut_desc[f] for f in remaining)
+            broke = True
+        finally:
+            _force_shutdown(pool)
+            # A round that ends early (timeout/broke) leaves descriptors still
+            # sitting unconsumed in this round's local iterator - only in-flight
+            # futures got re-queued above. Drain the rest back into
+            # pending_descriptors so they aren't silently dropped from the run.
+            pending_descriptors.extend(pending_iter)
+
+        if timed_out or broke:
+            rebuilds += 1
+            if rebuilds > MAX_POOL_REBUILDS and pending_descriptors:
+                logger.error(f"  giving up on {len(pending_descriptors)} sources "
+                             f"after {MAX_POOL_REBUILDS} pool rebuilds")
+                summary["failed"] += len(pending_descriptors)
+                pending_descriptors = []
+    return summary
+
+
 # ── Overlapped Ingest + Sequential Clean ──────────────────────────────────────
 
 def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
@@ -153,12 +275,6 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
 
     log = IngestLog()
     summary = _empty_summary()
-    retries: dict[str, int] = {}
-    pending_descriptors = list(descriptors)
-    rebuilds = 0
-
-    def _label(d):
-        return d.get("ref") or d.get("slug") or d.get("kind")
 
     def _clean_ok(d, meta):
         summary["clean_rows"].extend(meta.get("clean_rows", []))
@@ -190,98 +306,13 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
             return False   # unknown/"failed": caller decides retry vs fail
         return True
 
+    def _submit(pool, d):
+        return pool.submit(worker.process_source, d, data_root=core.DATA_ROOT,
+                           limit=limit)
+
     try:
-        while pending_descriptors and rebuilds <= MAX_POOL_REBUILDS:
-            round_descriptors = pending_descriptors
-            pending_descriptors = []
-            pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
-            started: dict = {}
-            fut_desc: dict = {}
-            remaining: set = set()
-
-            def _submit(d, pool=pool, started=started, fut_desc=fut_desc, remaining=remaining):
-                fut = pool.submit(worker.process_source, d, data_root=core.DATA_ROOT, limit=limit)
-                started[fut] = _now()
-                fut_desc[fut] = d
-                remaining.add(fut)
-
-            pending_iter = iter(round_descriptors)
-            for _ in range(workers):
-                try:
-                    _submit(next(pending_iter))
-                except StopIteration:
-                    break
-
-            def _fail_or_retry(d):
-                k = descriptor_key(d)
-                if retries.get(k, 0) < MAX_SOURCE_RETRIES:
-                    retries[k] = retries.get(k, 0) + 1
-                    _submit(d)                 # resubmit into the SAME live pool
-                else:
-                    summary["failed"] += 1
-
-            broke = timed_out = False
-            try:
-                while remaining:
-                    done, _pend = wait(remaining, timeout=POLL_INTERVAL_S,
-                                       return_when=FIRST_COMPLETED)
-                    for fut in done:
-                        remaining.discard(fut)
-                        d = fut_desc[fut]
-                        try:
-                            meta = fut.result()
-                        except BrokenProcessPool:
-                            # Pool is dead: re-queue this descriptor (already
-                            # discarded from `remaining`) plus the survivors,
-                            # which the outer handler re-queues, then rebuild.
-                            pending_descriptors.append(d)
-                            raise
-                        except Exception as ex:
-                            logger.error(f"  worker crashed for {_label(d)}: "
-                                         f"{type(ex).__name__}: {ex}")
-                            _fail_or_retry(d)
-                            continue
-                        if not _record(d, meta):
-                            logger.warning(f"  FAILED {_label(d)}: "
-                                           f"{meta.get('error')}")
-                            _fail_or_retry(d)
-                            continue
-                        try:
-                            _submit(next(pending_iter))
-                        except StopIteration:
-                            pass
-                    now = _now()
-                    overdue = [f for f in remaining
-                               if now - started[f] > source_timeout]
-                    if overdue:
-                        for f in overdue:
-                            logger.error(f"  TIMEOUT {_label(fut_desc[f])}: exceeded "
-                                         f"{source_timeout:.0f}s; abandoning")
-                            summary["timed_out"] += 1
-                            summary["failed"] += 1
-                            remaining.discard(f)
-                        pending_descriptors.extend(fut_desc[f] for f in remaining)
-                        timed_out = True
-                        break
-            except BrokenProcessPool as ex:
-                logger.error(f"process pool broke: {ex}")
-                pending_descriptors.extend(fut_desc[f] for f in remaining)
-                broke = True
-            finally:
-                _force_shutdown(pool)
-                # A round that ends early (timeout/broke) leaves descriptors still
-                # sitting unconsumed in this round's local iterator — only in-flight
-                # futures got re-queued above. Drain the rest back into
-                # pending_descriptors so they aren't silently dropped from the run.
-                pending_descriptors.extend(pending_iter)
-
-            if timed_out or broke:
-                rebuilds += 1
-                if rebuilds > MAX_POOL_REBUILDS and pending_descriptors:
-                    logger.error(f"  giving up on {len(pending_descriptors)} sources "
-                                 f"after {MAX_POOL_REBUILDS} pool rebuilds")
-                    summary["failed"] += len(pending_descriptors)
-                    pending_descriptors = []
+        _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
+                  source_timeout=source_timeout, summary=summary, ctx=ctx)
     finally:
         ledger.close()
 
