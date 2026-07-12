@@ -199,7 +199,7 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
             fut_desc: dict = {}
             remaining: set = set()
 
-            def _submit(d):
+            def _submit(d, pool=pool, started=started, fut_desc=fut_desc, remaining=remaining):
                 fut = pool.submit(worker.process_source, d, data_root=core.DATA_ROOT, limit=limit)
                 started[fut] = _now()
                 fut_desc[fut] = d

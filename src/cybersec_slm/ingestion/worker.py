@@ -81,7 +81,9 @@ def _get_synthetic_ids() -> frozenset[str]:
     return _synthetic_ids_cache
 
 
-def process_source(descriptor: dict, *, data_root: str | None = None, limit: int | None = None) -> dict:
+def process_source(
+    descriptor: dict, *, data_root: str | None = None, limit: int | None = None
+) -> dict:
     """Fetch one source, run light EDA gate, and clean it.
 
     Returns ``{descriptor, status, error, folder, ingest_rows,

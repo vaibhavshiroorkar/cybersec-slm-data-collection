@@ -25,11 +25,10 @@ from __future__ import annotations
 
 import json
 import os
-import random
 from statistics import median
 
 from ..cleaning.common import PARSE_ERROR, find_input_files, text_of
-from ..core import DROPPED, iter_jsonl, json_dumps, logger
+from ..core import DROPPED, iter_jsonl, logger
 from . import hazard_scan
 from .license_gate import classify_license
 from .sources import source_identity, synthetic_identities

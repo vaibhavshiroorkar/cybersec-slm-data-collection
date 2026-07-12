@@ -5,7 +5,7 @@ Full pipeline (end-to-end):
     cybersec-slm all      # overlapped ingest+clean -> dedup -> EDA -> normalize
 
 Individual stages:
-    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # overlapped parallel fetch + inline sequential clean
+    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # overlapped fetch + clean
     cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
     cybersec-slm normalize | eda | validate
     cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv

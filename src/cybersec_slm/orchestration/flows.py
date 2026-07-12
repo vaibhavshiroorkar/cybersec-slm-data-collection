@@ -158,7 +158,7 @@ def build_corpus(sources_spec: str | None = None, *, enforce_eda: bool = True,
                 f"rejected={rejected} failed={len(results) - ok - skipped - rejected}")
 
     # Phase 2: Aggregated Cleaning (sequential, full dedup)
-    clean_result = aggregated_clean()
+    aggregated_clean()
 
     # Phase 3: Deep EDA Gate (topic balance + feedback)
     # SufficiencyError here fails the flow (loop back)
