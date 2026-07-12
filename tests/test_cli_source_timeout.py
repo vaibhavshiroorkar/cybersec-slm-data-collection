@@ -1,8 +1,8 @@
 from cybersec_slm.cli import build_parser
 
 
-def test_run_has_source_timeout_default():
-    args = build_parser().parse_args(["run"])
+def test_ingest_has_source_timeout_default():
+    args = build_parser().parse_args(["ingest"])
     assert args.source_timeout == 1800.0
 
 

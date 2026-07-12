@@ -178,16 +178,16 @@ def _write_log(tmp_path, name, body):
     (logs / name).write_text(body, encoding="utf-8")
 
 
-def test_run_phase_detects_dedup(tmp_path, monkeypatch):
+def test_run_phase_detects_clean(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _write_log(tmp_path, "pipeline.1.log",
-               "x - ingest+clean: 130 sources\n"
-               "x - ingest+clean done: ok=125\n"
-               "x - final global dedup over /data/clean\n"
-               "x - dedup: saved 200000 hashes\n")
+               "x - ingest: 130 sources\n"
+               "x - ingest: done ok=125\n"
+               "x - clean: /data/raw -> /data/clean\n"
+               "x - final global dedup over /data/clean\n")
     ph = data.run_phase()
-    assert ph["phase"] == "dedup"
-    assert ph["index"] == 2 and ph["total"] == 5
+    assert ph["phase"] == "clean"       # cross-source dedup folds into clean
+    assert ph["index"] == 3 and ph["total"] == 5
 
 
 def test_run_phase_detects_gate_failed(tmp_path, monkeypatch):
@@ -202,15 +202,15 @@ def test_run_phase_detects_gate_failed(tmp_path, monkeypatch):
     assert "blocker" in ph["detail"]
 
 
-def test_run_phase_detects_normalize(tmp_path, monkeypatch):
+def test_run_phase_detects_schema(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _write_log(tmp_path, "pipeline.3.log",
                "x - eda: total=1000\n"
-               "x - phase 4: schema normalization -> data/final/dataset.jsonl\n"
+               "x - schema normalization -> data/final/dataset.jsonl\n"
                "x - normalize: input=/data/clean -> /data/final/dataset.jsonl\n")
     ph = data.run_phase()
-    assert ph["phase"] == "normalize"
-    assert ph["index"] == 4
+    assert ph["phase"] == "schema"
+    assert ph["index"] == 5
 
 
 def test_run_phase_unknown_without_logs(tmp_path, monkeypatch):
@@ -221,7 +221,7 @@ def test_run_phase_unknown_without_logs(tmp_path, monkeypatch):
 def test_run_status_includes_phase(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _write_log(tmp_path, "pipeline.4.log", "x - final global dedup over /clean\n")
-    assert data.run_status()["phase"]["phase"] == "dedup"
+    assert data.run_status()["phase"]["phase"] == "clean"
 
 
 def test_run_status_control_file_is_authoritative(tmp_path, monkeypatch):
@@ -282,7 +282,7 @@ def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
         json.dumps({"pid": 999999, "started_at": start, "resume": False}),
         encoding="utf-8")
     (logs / "pipeline.5.log").write_text(
-        f"{start}.000 | INFO | x:1 - ingest+clean: 4 sources\n", encoding="utf-8")
+        f"{start}.000 | INFO | x:1 - ingest: 4 sources\n", encoding="utf-8")
 
     t = data.run_timing()
     assert t["basis"] == "ingest-linear"
