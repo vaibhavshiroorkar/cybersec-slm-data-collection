@@ -326,6 +326,89 @@ def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
     return summary
 
 
+# ── Stage 2: Ingest (fetch-only) ──────────────────────────────────────────────
+
+def run_ingest(spec: str | None = None, *, workers: int | None = None,
+               resume: bool = False, limit: int | None = None,
+               source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S) -> dict:
+    """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
+
+    Each source is fetched and passed through the license + light-EDA gate by a
+    fetch-only worker (``process_source(clean=False)``); its raw folder is left in
+    place for the separate clean stage. Fresh (non-resume) wipes ``data/raw/`` and
+    the resume ledger first; ``resume`` skips sources already fetched. Cleaning,
+    cross-source dedup, and raw deletion all belong to :func:`run_clean`.
+    """
+    os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
+    descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
+    if not descriptors:
+        logger.warning("no sources to ingest")
+        return _empty_summary()
+
+    if resume:
+        done_keys = _load_completed(COMPLETED_LEDGER)
+        n_before = len(descriptors)
+        descriptors = [d for d in descriptors if descriptor_key(d) not in done_keys]
+        n_skip = n_before - len(descriptors)
+        if n_skip:
+            logger.info(f"ingest: resume skipping {n_skip} already-fetched sources "
+                        f"({len(descriptors)} left)")
+        if not descriptors:
+            logger.info("ingest: resume - all sources already fetched")
+            return {**_empty_summary(), "all_done": True}
+    else:
+        _reset_completed(COMPLETED_LEDGER)
+        _wipe_dir(core.RAW_DATA)
+
+    workers = workers or _default_workers()
+    logger.info(f"ingest: {len(descriptors)} sources, {workers} workers, "
+                f"source_timeout={source_timeout:.0f}s -> {core.RAW_DATA}")
+
+    ctx = mp.get_context("spawn")
+    os.makedirs(core.LOGS, exist_ok=True)
+    ledger = open(COMPLETED_LEDGER, "a", encoding="utf-8")
+    log = IngestLog()
+    summary = _empty_summary()
+
+    def _record(d, meta):
+        summary["ingest_rows"].extend(meta.get("ingest_rows", []))
+        leda = meta.get("light_eda_report", {})
+        if leda:
+            summary["light_eda_reports"].append(leda)
+        flags = meta.get("flags", {})
+        if flags:
+            summary["flags"].append({"source": _label(d), **flags})
+        status = meta.get("status")
+        if status == "ok":
+            summary["ok"] += 1
+            ledger.write(descriptor_key(d) + "\n"); ledger.flush()
+        elif status == "skipped":
+            summary["skipped"] += 1
+            ledger.write(descriptor_key(d) + "\n"); ledger.flush()
+        elif status == "rejected":
+            summary["rejected"] += 1
+        else:
+            return False   # unknown/"failed": _run_pool decides retry vs fail
+        return True
+
+    def _submit(pool, d):
+        return pool.submit(worker.process_source, d, data_root=core.DATA_ROOT,
+                           limit=limit, clean=False)
+
+    try:
+        _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
+                  source_timeout=source_timeout, summary=summary, ctx=ctx)
+    finally:
+        ledger.close()
+
+    log.record_many(summary["ingest_rows"])
+    ingestion_run.show_table()
+    logger.info(f"ingest: done ok={summary['ok']} failed={summary['failed']} "
+                f"skipped={summary['skipped']} rejected={summary['rejected']} "
+                f"timed_out={summary['timed_out']}")
+    return summary
+
+
 # ── Sequential clean of an already-fetched raw tree ───────────────────────────
 
 def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
