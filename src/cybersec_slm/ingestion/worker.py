@@ -82,13 +82,16 @@ def _get_synthetic_ids() -> frozenset[str]:
 
 
 def process_source(
-    descriptor: dict, *, data_root: str | None = None, limit: int | None = None
+    descriptor: dict, *, data_root: str | None = None, limit: int | None = None,
+    clean: bool = True,
 ) -> dict:
-    """Fetch one source, run light EDA gate, and clean it.
+    """Fetch one source, run the light EDA gate, and (optionally) clean it.
 
     Returns ``{descriptor, status, error, folder, ingest_rows,
-    light_eda_report, flags, clean_rows}``.  ``ingest_rows`` are replayed into the real
-    ingest log by the parent.
+    light_eda_report, flags, clean_rows}``.  ``ingest_rows`` are replayed into the
+    real ingest log by the parent. With ``clean=False`` (the ingest stage) the
+    worker stops after the gate and leaves the raw folder in place; the separate
+    clean stage cleans the whole raw tree later.
     """
     collector = _Collector()
     result = {"descriptor": descriptor, "status": "ok", "error": None,
@@ -132,7 +135,7 @@ def process_source(
                 result["error"] = leda_report.get("reject_reason", "light EDA rejection")
                 # Move rejected source into data/dropped/ with sidecar report
                 light_eda.reject_source(folder, leda_report)
-            else:
+            elif clean:
                 from ..cleaning.pipeline import clean_one_source
                 result["clean_rows"] = clean_one_source(folder, limit=limit)
     except Exception as ex:  # isolate: never crash the pool over one source
