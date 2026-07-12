@@ -91,7 +91,7 @@ def test_fresh_run_records_all_and_resets_ledger(tmp_path, monkeypatch):
     ledger.write_text("stale:key\n", encoding="utf-8")   # must be wiped on a fresh run
     calls = _install(monkeypatch, ledger)
 
-    parallel.run_ingest_clean(resume=False)
+    parallel.run_ingest(resume=False)
 
     assert set(calls) == {"http://example.com/a", "http://example.com/b"}
     assert parallel._load_completed(str(ledger)) == {
@@ -103,7 +103,7 @@ def test_resume_skips_completed_sources(tmp_path, monkeypatch):
     ledger.write_text("http://example.com/a\n", encoding="utf-8")   # 'a' already done
     calls = _install(monkeypatch, ledger)
 
-    parallel.run_ingest_clean(resume=True)
+    parallel.run_ingest(resume=True)
 
     assert calls == ["http://example.com/b"]              # only the missing source ran
     assert parallel._load_completed(str(ledger)) == {
@@ -191,7 +191,7 @@ def test_timeout_break_preserves_unsubmitted_descriptors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(parallel.worker, "process_source", _stub_process)
 
-    summary = parallel.run_ingest_clean(workers=1, resume=False, source_timeout=1.0)
+    summary = parallel.run_ingest(workers=1, resume=False, source_timeout=1.0)
 
     # The hung descriptor never actually invokes the worker; the two behind it
     # in the queue must still be picked up on the rebuilt round instead of
@@ -209,7 +209,7 @@ def test_resume_all_complete_short_circuits(tmp_path, monkeypatch):
     ledger.write_text("http://example.com/a\nhttp://example.com/b\n", encoding="utf-8")
     calls = _install(monkeypatch, ledger)
 
-    result = parallel.run_ingest_clean(resume=True)
+    result = parallel.run_ingest(resume=True)
 
     assert calls == []                                    # nothing re-fetched
     assert result.get("all_done") is True                 # short-circuited

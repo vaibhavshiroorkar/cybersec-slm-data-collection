@@ -7,10 +7,11 @@ isolated — it never touches the shared SQLite ingest log (it buffers rows in a
 :class:`~cybersec_slm.ingestion.common._Collector` and returns them for the
 parent to write).
 
-The worker only fetches: it converts to JSONL and runs the light-EDA quality
-gate + flag annotation. Cleaning is done by the parent as each source finishes
-(see ``parallel.run_ingest_clean`` -> ``cleaning.pipeline.clean_source_folder``),
-so the heavy cleaning models load once in the parent instead of once per worker.
+The worker fetches: it converts to JSONL and runs the light-EDA quality gate +
+flag annotation. With ``clean=False`` (the ingest stage) it stops there and leaves
+raw in place for the separate clean stage (``parallel.run_clean``). With
+``clean=True`` it also cleans the source inline via
+``cleaning.pipeline.clean_one_source``.
 
 One bad source returns a ``status="failed"`` dict instead of crashing the pool.
 """

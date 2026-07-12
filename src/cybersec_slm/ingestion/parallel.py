@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
-"""Parallel ingestion orchestrator — overlapped fetch + sequential clean.
+"""Parallel ingestion orchestrator - the five-stage pipeline.
 
-Overlapped Ingest + Clean (``run_ingest_clean``):
-    A spawn ``ProcessPoolExecutor`` of fetch-only workers is the producer: each
-    worker fetches ONE source, converts to JSONL, and runs the light-EDA gate
-    (rejected sources move to ``data/dropped/_rejected/``).  The parent process
-    is the consumer: as each source finishes it is cleaned *inline and
-    sequentially* (``clean_source_folder``, deduper disabled, heavy models built
-    once) into ``data/clean/`` and its raw folder is deleted.  A per-source
-    wall-clock timeout abandons a hung source so it cannot stall the run.
+The pipeline runs five physically separate stages (no ingest/clean overlap):
 
-Then, once the pool drains:
-    * deterministic cross-source dedup over ``data/clean/`` (``final_global_dedup``)
+Stage 2 - Ingest (``run_ingest``):
+    A spawn ``ProcessPoolExecutor`` of fetch-only workers fetches every source to
+    ``data/raw/``, converting to JSONL and running the light-EDA gate (rejected
+    sources move to ``data/dropped/_rejected/``). A per-source wall-clock timeout
+    abandons a hung source so it cannot stall the run. Raw is left in place.
+
+Stage 3 - Clean (``run_clean``):
+    The whole ``data/raw/`` tree is cleaned into ``data/clean/`` (per-source
+    transforms, per-source dedup disabled), then one deterministic cross-source
+    dedup pass (``final_global_dedup``) runs. ``data/raw/`` is deleted unless
+    ``keep_raw``.
+
+Then (``run_v2_pipeline``):
     * deep global EDA with topic-balance analysis (blockers stop the pipeline)
     * schema normalization -> ``data/final/dataset.jsonl``
 
-    cybersec-slm run --sources sources/Sources.csv --workers 4
-    cybersec-slm all                          # full pipeline
+    cybersec-slm ingest --sources sources/Sources.csv --workers 4
+    cybersec-slm clean
+    cybersec-slm all                          # full pipeline (all five stages)
+
+The shared process-pool machinery lives in ``_run_pool``; ``run_ingest`` drives it.
 """
 
 from __future__ import annotations
@@ -218,114 +225,6 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
     return summary
 
 
-# ── Overlapped Ingest + Sequential Clean ──────────────────────────────────────
-
-def run_ingest_clean(spec: str | None = None, *, workers: int | None = None,
-                     resume: bool = False, keep_raw: bool = False,
-                     limit: int | None = None,
-                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S) -> dict:
-    """Fetch sources in parallel; clean each inline in the parent as it finishes.
-
-    Producer: a spawn ProcessPoolExecutor of fetch-only workers.
-    Consumer: this parent process cleans each "ok" source with `clean_source_folder`
-    (deduper disabled, heavy models built once), deletes its raw folder unless
-    `keep_raw`, and appends its key to the resume ledger. A source that raises is
-    resubmitted once; a source exceeding `source_timeout` is abandoned (see the
-    timeout sweep). Cross-source dedup runs later in `final_global_dedup`.
-    """
-
-
-    os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
-    descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG)
-    if not descriptors:
-        logger.warning("no sources to process")
-        return _empty_summary()
-
-    if resume:
-        done_keys = _load_completed(COMPLETED_LEDGER)
-        n_before = len(descriptors)
-        descriptors = [d for d in descriptors if descriptor_key(d) not in done_keys]
-        n_skip = n_before - len(descriptors)
-        if n_skip:
-            logger.info(f"resume: skipping {n_skip} already-complete sources "
-                        f"({len(descriptors)} left to process)")
-        if not descriptors:
-            logger.info("resume: all sources already complete")
-            return {**_empty_summary(), "all_done": True}
-    else:
-        _reset_completed(COMPLETED_LEDGER)
-        cleaning_pipeline.reset_dedup_state()
-        _wipe_dir(core.CLEAN_DATA)
-        _wipe_dir(core.RAW_DATA)
-        for f in ["clean_report.csv", "final_table.csv", "normalize_report.json"]:
-            try:
-                os.remove(os.path.join(core.LOGS, f))
-            except OSError:
-                pass
-
-    workers = workers or _default_workers()
-    logger.info(f"ingest+clean: {len(descriptors)} sources, {workers} workers, "
-                f"source_timeout={source_timeout:.0f}s -> {core.CLEAN_DATA}")
-
-
-
-    ctx = mp.get_context("spawn")
-    os.makedirs(core.LOGS, exist_ok=True)
-    ledger = open(COMPLETED_LEDGER, "a", encoding="utf-8")
-
-    log = IngestLog()
-    summary = _empty_summary()
-
-    def _clean_ok(d, meta):
-        summary["clean_rows"].extend(meta.get("clean_rows", []))
-        folder = meta.get("folder")
-        if folder and not keep_raw:
-            shutil.rmtree(folder, ignore_errors=True)
-        summary["ok"] += 1
-        ledger.write(descriptor_key(d) + "\n"); ledger.flush()
-        if summary["clean_rows"]:
-            cleaning_pipeline._write_report(summary["clean_rows"])
-
-    def _record(d, meta):
-        summary["ingest_rows"].extend(meta.get("ingest_rows", []))
-        leda = meta.get("light_eda_report", {})
-        if leda:
-            summary["light_eda_reports"].append(leda)
-        flags = meta.get("flags", {})
-        if flags:
-            summary["flags"].append({"source": _label(d), **flags})
-        status = meta.get("status")
-        if status == "ok":
-            _clean_ok(d, meta)
-        elif status == "skipped":
-            summary["skipped"] += 1
-            ledger.write(descriptor_key(d) + "\n"); ledger.flush()
-        elif status == "rejected":
-            summary["rejected"] += 1
-        else:
-            return False   # unknown/"failed": caller decides retry vs fail
-        return True
-
-    def _submit(pool, d):
-        return pool.submit(worker.process_source, d, data_root=core.DATA_ROOT,
-                           limit=limit)
-
-    try:
-        _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
-                  source_timeout=source_timeout, summary=summary, ctx=ctx)
-    finally:
-        ledger.close()
-
-    log.record_many(summary["ingest_rows"])
-    if summary["clean_rows"]:
-        cleaning_pipeline._write_report(summary["clean_rows"])
-    ingestion_run.show_table()
-    logger.info(f"ingest+clean done: ok={summary['ok']} failed={summary['failed']} "
-                f"skipped={summary['skipped']} rejected={summary['rejected']} "
-                f"timed_out={summary['timed_out']}")
-    return summary
-
-
 # ── Stage 2: Ingest (fetch-only) ──────────────────────────────────────────────
 
 def run_ingest(spec: str | None = None, *, workers: int | None = None,
@@ -467,7 +366,7 @@ def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
 
     Used by the Prefect flow, which fetches via its own mapped tasks and then
     needs a single clean pass. Deterministic cross-source dedup is left to
-    `final_global_dedup`. The CLI uses `run_ingest_clean` (overlap) instead.
+    `final_global_dedup`. The CLI clean stage uses `run_clean` instead.
     """
     from ..cleaning.dedup import Deduper
     from ..cleaning.langfilter import LangFilter
@@ -524,18 +423,24 @@ def run_v2_pipeline(spec: str | None = None, *,
                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
                     enforce_eda: bool = True,
                     normalize: bool = True) -> dict:
-    """Overlapped ingest+clean -> deterministic dedup -> deep EDA -> normalize.
+    """Run the five stages in sequence: ingest -> clean -> EDA -> schema.
+
+    Physically separate stages (no ingest/clean overlap): ingest fetches every
+    source to data/raw/, clean cleans the whole tree and cross-source dedups into
+    data/clean/ (deleting data/raw/ unless keep_raw), then the deep EDA gate and
+    schema normalization run.
 
     Parameters
     ----------
     spec : str | None
         Path to sources CSV; uses default catalog when omitted.
     workers : int | None
-        Process pool size; defaults to os.cpu_count().
+        Ingest process pool size; defaults to os.cpu_count().
     resume : bool
-        Skip sources already fetched+cleaned in a prior run.
+        Skip sources already fetched in a prior run (ingest) and continue a partial
+        dedup pass (clean).
     keep_raw : bool
-        Keep each source's data/raw/ folder after cleaning it.
+        Keep data/raw/ after cleaning instead of deleting it.
     limit : int | None
         Cap records per file (for smoke tests).
     source_timeout : float
@@ -543,19 +448,18 @@ def run_v2_pipeline(spec: str | None = None, *,
     enforce_eda : bool
         Raise SufficiencyError on EDA blockers (default True).
     normalize : bool
-        Run normalization; False stops after EDA.
+        Run schema normalization; False stops after EDA.
     """
     from ..eda import SufficiencyError
 
-    # Overlapped fetch (parallel) + clean (sequential, in the parent)
-    ingest_result = run_ingest_clean(spec, workers=workers, resume=resume,
-                                     keep_raw=keep_raw, limit=limit,
-                                     source_timeout=source_timeout)
+    # Stage 2: fetch every source to data/raw/ (no cleaning).
+    ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
+                               source_timeout=source_timeout)
 
-    # Deterministic cross-source dedup over data/clean/
-    dedup_result = cleaning_pipeline.final_global_dedup(core.CLEAN_DATA, resume=resume)
+    # Stage 3: clean the whole raw tree + cross-source dedup -> data/clean/.
+    clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume)
 
-    # Deep Global EDA
+    # Stage 4: deep global EDA sufficiency gate.
     try:
         eda_result = run_deep_eda(enforce=enforce_eda)
     except SufficiencyError as exc:
@@ -563,16 +467,16 @@ def run_v2_pipeline(spec: str | None = None, *,
         print("Pipeline halted at the EDA sufficiency gate - "
               "address the blockers above and re-run.")
         return {"phase": "eda", "error": str(exc), "ingest": ingest_result,
-                "dedup": dedup_result}
+                "clean": clean_result}
 
-    # Schema Normalization (append to final)
+    # Stage 5: schema normalization (append to final).
     norm_result = {}
     if normalize:
-        # Fresh build: ingestion regenerates data/clean/ upstream, so normalize
-        # fresh (resume=False) instead of appending/deduping against a stale dataset.
+        # Fresh build: clean regenerates data/clean/ upstream, so normalize fresh
+        # (resume=False) instead of appending/deduping against a stale dataset.
         norm_result = run_normalize(resume=resume)
 
-    return {"phase": "complete", "ingest": ingest_result, "dedup": dedup_result,
+    return {"phase": "complete", "ingest": ingest_result, "clean": clean_result,
             "eda": eda_result, "normalize": norm_result}
 
 

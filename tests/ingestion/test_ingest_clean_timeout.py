@@ -61,7 +61,7 @@ def test_timed_out_source_is_failed_and_run_completes(tmp_path, monkeypatch):
                 "light_eda_report": {}, "flags": {}}
     monkeypatch.setattr(parallel.worker, "process_source", _proc)
 
-    result = parallel.run_ingest_clean(resume=False, source_timeout=0.0)
+    result = parallel.run_ingest(resume=False, source_timeout=0.0)
     assert result["timed_out"] == 1
     assert result["failed"] == 1
     assert result["ok"] == 0
@@ -102,6 +102,6 @@ def test_broken_pool_rebuilds_then_gives_up(tmp_path, monkeypatch):
     monkeypatch.setattr(parallel.worker, "process_source",
                         lambda d, **k: {"status": "ok"})
 
-    result = parallel.run_ingest_clean(resume=False)
+    result = parallel.run_ingest(resume=False)
     assert result["failed"] == 1        # rebuilt MAX_POOL_REBUILDS times, then gave up
     assert result["ok"] == 0
