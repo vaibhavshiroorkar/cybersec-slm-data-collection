@@ -2,13 +2,16 @@
 """Unified command-line entry point for the pipeline.
 
 Full pipeline (end-to-end):
-    cybersec-slm all      # overlapped ingest+clean -> dedup -> EDA -> normalize
+    cybersec-slm all      # ingest -> clean -> EDA -> schema (five stages)
 
 Individual stages:
-    cybersec-slm run      [--sources X.csv] [--workers N] [--resume]  # overlapped fetch + clean
-    cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # diagnostics/ops
-    cybersec-slm normalize | eda | validate
-    cybersec-slm source   [--domains ...] [--dry-run]        # search engines -> Sources.csv
+    cybersec-slm source   [--domains ...] [--dry-run]        # 1: search -> Sources.csv
+    cybersec-slm ingest   [--sources X.csv] [--workers N] [--resume]  # 2: fetch -> data/raw/
+    cybersec-slm clean    [--keep-raw] [--resume]            # 3: clean + dedup -> data/clean/
+    cybersec-slm eda      [--no-enforce]                     # 4: sufficiency gate
+    cybersec-slm schema   (alias of normalize)               # 5: -> data/final/dataset.jsonl
+    cybersec-slm clean    [sanitize|dedup|pii|lang|report|balance]   # clean diagnostics/ops
+    cybersec-slm validate
     cybersec-slm dashboard [--port N]                        # Streamlit monitor + explorer
 
 Ingestion reads sources/Sources.csv. NVD needs no flag — set NVD_API_KEY (env) to
@@ -28,26 +31,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="stage", required=True)
 
-    # ── clean (diagnostics / ops) ─────────────────────────────────────────────
+    # ── clean (stage 3) + diagnostics / ops ───────────────────────────────────
     c = sub.add_parser("clean",
-                       help="cleaning diagnostics/ops (single-stage, report, balance)")
-    c.add_argument("action",
+                       help="clean data/raw/ -> data/clean/ + cross-source dedup "
+                            "(stage 3); or a single-stage diagnostic")
+    c.add_argument("action", nargs="?", default=None,
                    choices=["sanitize", "dedup", "pii", "lang", "report", "balance"],
-                   help="sanitize|dedup|pii|lang: run one transform -> data/_stages/ "
-                        "for inspection; report: recount output trees; "
-                        "balance: per-domain record counts")
+                   help="omit to run the full clean stage. sanitize|dedup|pii|lang: "
+                        "run one transform -> data/_stages/ for inspection; report: "
+                        "recount output trees; balance: per-domain record counts")
+    c.add_argument("--keep-raw", action="store_true",
+                   help="clean stage: keep data/raw/ instead of deleting after clean")
+    c.add_argument("--resume", action="store_true",
+                   help="clean stage: continue a partial cross-source dedup pass")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     c.add_argument("--cap", type=int, default=None,
                    help="max records per domain (balance action)")
     c.add_argument("--source-share", type=float, default=None, metavar="SHARE",
                    help="balance action: downsample any single source above SHARE "
-                        "(e.g. 0.6) of its subdomain. Opt-in — destroys data when "
+                        "(e.g. 0.6) of its subdomain. Opt-in - destroys data when "
                         "secondary sources are small; prefer adding sources.")
 
-    # ── normalize ─────────────────────────────────────────────────────────────
-    n = sub.add_parser("normalize",
-                       help="schema-normalize data/clean/ -> data/final/dataset.jsonl")
+    # ── normalize / schema (stage 5) ──────────────────────────────────────────
+    n = sub.add_parser("normalize", aliases=["schema"],
+                       help="schema-normalize data/clean/ -> data/final/dataset.jsonl "
+                            "(stage 5)")
     n.add_argument("--input", default=None,
                    help="cleaned-records root (default: data/clean/)")
     n.add_argument("--fresh", action="store_true",
@@ -72,23 +81,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("validate",
                    help="validate data/clean/ records against Pydantic schema")
 
-    # ── run (parallel streaming) ──────────────────────────────────────────────
-    r = sub.add_parser("run",
-                       help="overlapped parallel fetch + inline sequential clean -> data/clean/")
-    r.add_argument("--sources", default=None,
-                   help="path to a sources .csv (default: sources/Sources.csv)")
-    r.add_argument("--workers", type=int, default=None,
-                   help="process pool size (default: min(cpu, 8))")
-    r.add_argument("--limit", type=int, default=None,
-                   help="cap records per file (smoke test)")
-    r.add_argument("--keep-raw", action="store_true",
-                   help="keep data/raw/ instead of deleting after clean")
-    r.add_argument("--resume", action="store_true",
-                   help="skip sources already fetched in a prior run "
-                        "(logs/completed_sources.txt)")
-    r.add_argument("--source-timeout", type=float, default=1800.0,
-                   help="per-source wall-clock timeout in seconds "
-                        "(abandon a hung source; default 1800)")
+    # ── ingest (stage 2: fetch-only) ──────────────────────────────────────────
+    ig = sub.add_parser("ingest",
+                        help="fetch all sources -> data/raw/ (stage 2; no cleaning)")
+    ig.add_argument("--sources", default=None,
+                    help="path to a sources .csv (default: sources/Sources.csv)")
+    ig.add_argument("--workers", type=int, default=None,
+                    help="process pool size (default: min(cpu, 8))")
+    ig.add_argument("--limit", type=int, default=None,
+                    help="cap records per file (smoke test)")
+    ig.add_argument("--resume", action="store_true",
+                    help="skip sources already fetched in a prior run "
+                         "(logs/completed_sources.txt)")
+    ig.add_argument("--source-timeout", type=float, default=1800.0,
+                    help="per-source wall-clock timeout in seconds "
+                         "(abandon a hung source; default 1800)")
 
     # ── source (search-engine source discovery) ─────────────────────────────
     d = sub.add_parser("source",
@@ -142,7 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run headless (don't auto-open a browser; for remote use)")
 
     # ── all ───────────────────────────────────────────────────────────────────
-    a = sub.add_parser("all", help="v2: ingest -> clean -> EDA -> normalize (full pipeline)")
+    a = sub.add_parser("all",
+                       help="full pipeline: ingest -> clean -> EDA -> schema (5 stages)")
+    a.add_argument("--sources", default=None,
+                   help="path to a sources .csv (default: sources/Sources.csv)")
+    a.add_argument("--workers", type=int, default=None,
+                   help="ingest process pool size (default: min(cpu, 8))")
     a.add_argument("--resume", action="store_true",
                    help="skip sources already fetched in a prior run "
                         "(logs/completed_sources.txt)")
@@ -162,8 +174,12 @@ def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
     if args.stage == "clean":
-        from .cleaning import run as cleaning
-        if args.action == "balance":
+        if args.action is None:
+            # Stage 3: clean the whole raw tree + cross-source dedup.
+            from .ingestion import parallel
+            parallel.run_clean(keep_raw=args.keep_raw, limit=args.limit,
+                               resume=args.resume)
+        elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
             if args.cap:
@@ -171,20 +187,19 @@ def main(argv: list[str] | None = None) -> None:
             if args.source_share is not None:
                 apply_source_cap(args.source_share)
         else:
+            from .cleaning import run as cleaning
             cleaning.run(args.action, limit=args.limit)
 
-    elif args.stage == "run":
-        # overlapped parallel fetch + inline sequential clean (stops after clean)
+    elif args.stage == "ingest":
+        # Stage 2: fetch every source to data/raw/ (no cleaning).
         from .ingestion import parallel
-        parallel.run_v2_pipeline(args.sources,
-                                 workers=args.workers,
-                                 resume=args.resume,
-                                 keep_raw=args.keep_raw,
-                                 limit=args.limit,
-                                 source_timeout=args.source_timeout,
-                                 normalize=False)  # 'run' stops after clean
+        parallel.run_ingest(args.sources,
+                            workers=args.workers,
+                            resume=args.resume,
+                            limit=args.limit,
+                            source_timeout=args.source_timeout)
 
-    elif args.stage == "normalize":
+    elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
         run_normalization(args.input, resume=not args.fresh, limit=args.limit)
 
@@ -227,12 +242,14 @@ def main(argv: list[str] | None = None) -> None:
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        # overlapped ingest+clean -> dedup -> EDA -> normalize
+        # Full pipeline: ingest -> clean -> EDA -> schema (five stages, no overlap).
         if getattr(args, "no_auto_rebalance", False):
             from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False
         from .ingestion import parallel
         parallel.run_v2_pipeline(
+            args.sources,
+            workers=args.workers,
             resume=args.resume,
             keep_raw=getattr(args, "keep_raw", False),
             limit=getattr(args, "limit", None),
