@@ -30,10 +30,11 @@ CONTROL_NAME = "pipeline_run.json"
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
 _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
-            "resume", "no_auto_rebalance"},
+            "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english"},
     "source": set(),
-    "ingest": {"workers", "sources", "source_timeout", "limit", "resume"},
-    "clean": {"purge_raw", "limit", "resume"},
+    "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
+               "max_source_gb"},
+    "clean": {"purge_raw", "limit", "resume", "drop_non_english"},
     "eda": {"no_auto_rebalance", "no_enforce"},
     "schema": {"fresh", "limit"},
 }
@@ -46,7 +47,9 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("sources", "--sources", "value"),
     ("source_timeout", "--source-timeout", "value"),
     ("limit", "--limit", "value"),
+    ("max_source_gb", "--max-source-gb", "value"),
     ("purge_raw", "--purge-raw", "bool"),
+    ("drop_non_english", "--drop-non-english", "bool"),
     ("no_auto_rebalance", "--no-auto-rebalance", "bool"),
     ("no_enforce", "--no-enforce", "bool"),
     ("fresh", "--fresh", "bool"),

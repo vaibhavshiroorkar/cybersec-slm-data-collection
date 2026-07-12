@@ -64,7 +64,8 @@ def _new_counts():
 
 
 def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
-                out_flagged, out_dropped, limit: int | None = None) -> list[dict]:
+                out_flagged, out_dropped, limit: int | None = None,
+                drop_non_english: bool = False) -> list[dict]:
     """Run the cleaning stages over `files` into the given output roots.
 
     `files` is an iterable of (abs_path, sub_domain, source, rel) as produced by
@@ -72,6 +73,11 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
     are passed in so callers control sharing — the parallel per-source worker
     passes a disabled deduper (`clean_one_source`), because global cross-source
     dedup runs later in one pass (`final_global_dedup`). Returns report rows.
+
+    ``drop_non_english`` flips the language policy: by default a confidently
+    non-allowed-language record is translated into English and kept; when True it
+    is dropped instead (no translator call), which also avoids the slow, sometimes
+    failing translation service on corpora that are already almost entirely English.
     """
     rows: list[dict] = []
     for entry in files:
@@ -152,8 +158,14 @@ def clean_files(files, *, deduper, redactor, langf, translator, out_cleaned,
 
                 lang = langf.detect(txt)
                 if not langf.lang_allowed(lang):
-                    # Confidently non-allowed: translate into English and keep,
-                    # rather than dropping. Drop only if translation is impossible.
+                    if drop_non_english:
+                        # Policy: drop non-allowed-language records outright.
+                        c["non_en_dropped"] += 1
+                        dw.write(_annotate(rec2, sub, source, rel, "langfilter",
+                                           f"non-allowed language (dropped): {lang}"))
+                        continue
+                    # Default: translate into English and keep, rather than
+                    # dropping. Drop only if translation is impossible.
                     translated, ok = translator.translate(txt, src=lang)
                     if ok:
                         c["translated"] += 1
@@ -203,7 +215,8 @@ def reset_cleaner_cache() -> None:
 
 def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
                      clean_data_dir: str = OUT_CLEAN_DATA,
-                     limit: int | None = None) -> list[dict]:
+                     limit: int | None = None,
+                     drop_non_english: bool = False) -> list[dict]:
     """Clean a single source's .jsonl files into `data/clean/` (no global dedup).
 
     Used by the parallel per-source worker. Global cross-source dedup is deferred
@@ -228,7 +241,7 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     return clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
                        translator=translator, out_cleaned=clean_data_dir,
                        out_flagged=OUT_FLAGGED, out_dropped=OUT_DROPPED,
-                       limit=limit)
+                       limit=limit, drop_non_english=drop_non_english)
 
 
 def clean_source_folder(folder: str, *, redactor, langf, translator,
@@ -236,7 +249,8 @@ def clean_source_folder(folder: str, *, redactor, langf, translator,
                         clean_data_dir: str = OUT_CLEAN_DATA,
                         flagged_dir: str = OUT_FLAGGED,
                         dropped_dir: str = OUT_DROPPED,
-                        limit: int | None = None) -> list[dict]:
+                        limit: int | None = None,
+                        drop_non_english: bool = False) -> list[dict]:
     """Clean ONE already-fetched source folder into data/clean/ (dedup disabled).
 
     Scans only `folder` (O(files-in-source), not the whole raw tree) but computes
@@ -259,7 +273,8 @@ def clean_source_folder(folder: str, *, redactor, langf, translator,
     deduper = Deduper(enabled=False)
     return clean_files(files, deduper=deduper, redactor=redactor, langf=langf,
                        translator=translator, out_cleaned=clean_data_dir,
-                       out_flagged=flagged_dir, out_dropped=dropped_dir, limit=limit)
+                       out_flagged=flagged_dir, out_dropped=dropped_dir, limit=limit,
+                       drop_non_english=drop_non_english)
 
 
 def reset_dedup_state() -> None:

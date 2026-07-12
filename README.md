@@ -104,6 +104,7 @@ limits of automated PII redaction on a security corpus are documented in
 | Doc | What's in it |
 |---|---|
 | [commands.md](docs/commands.md) | Every command, flag, and run mode; Docker; configuration; development |
+| [pipeline-flow.md](docs/pipeline-flow.md) | Following the data: a plain-language walk of what happens to a record from catalog to finished dataset |
 | [architecture/architecture.md](docs/architecture/architecture.md) | How the pipeline works, stage by stage, with the data flow and security controls |
 | [architecture/canonical_schema.md](docs/architecture/canonical_schema.md) | The canonical 22-field record schema (the downstream handoff contract) |
 | [operations/deploy.md](docs/operations/deploy.md) | AWS deployment (Prefect Cloud + ECS Fargate, ECR, S3) |

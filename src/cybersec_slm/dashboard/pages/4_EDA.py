@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""EDA (stage 4): the sufficiency gate over data/clean/, plus trends + feedback.
+"""EDA (stage 4): the sufficiency gate over data/clean/, plus metrics and trends.
 
-Presentation only; every value comes from :mod:`cybersec_slm.dashboard.data` /
-:mod:`cybersec_slm.dashboard.control`.
+Read-only. Re-run EDA and watch the log from the Overview page; every value here
+comes from :mod:`cybersec_slm.dashboard.data`.
 """
 
 from __future__ import annotations
@@ -13,25 +13,24 @@ from cybersec_slm.dashboard import charts, data, ui
 
 ui.inject_css()
 ui.stage_header("eda", data.stage_states())
-st.caption("Validate the cleaned corpus against the sufficiency gate. A blocker "
-           "halts the full pipeline; re-run after adding or rebalancing data.")
-
-ui.stage_run_control("eda", run_label="Re-run EDA")
+st.caption("The cleaned corpus checked against the sufficiency gate. A blocker "
+           "halts the full pipeline until data is added or rebalanced.")
 st.divider()
 
 # --------------------------------------------------------------- gate ----------
 st.subheader("Sufficiency gate")
 eda = data.latest_eda()
 if not eda:
-    st.info("No EDA run yet (`logs/eda/latest.json` absent). Run this stage.")
+    st.info("No EDA run yet (`logs/eda/latest.json` absent). Run this stage from "
+            "the Overview page.")
 else:
     passed = eda.get("passed")
     violations = eda.get("violations", []) or []
     blockers = [v for v in violations if v.get("severity") == "blocker"]
     warnings = [v for v in violations if v.get("severity") == "warning"]
     (st.success if passed else st.error)(
-        f"{'✅ PASS' if passed else '❌ FAIL'} - {len(blockers)} blocker(s), "
-        f"{len(warnings)} warning(s)   ·   {eda.get('ts', '')}")
+        f"{'PASS' if passed else 'FAIL'}  ·  {len(blockers)} blocker(s), "
+        f"{len(warnings)} warning(s)  ·  {eda.get('ts', '')}")
     for v in blockers:
         st.error(f"blocker [{v['check']}]: {v['message']}")
     for v in warnings:
@@ -51,11 +50,21 @@ else:
         ("Topic CV", f"{m.get('topic_cv', 0.0):.2f}"),
     ], cols=4)
 
+    # Per-subdomain volume + share, the gate's core evidence.
+    subs = m.get("subdomains", {}) or {}
+    dist = m.get("subdomain_distribution", {}) or {}
+    if subs:
+        st.markdown("**Records per sub-domain**")
+        rows = [{"sub-domain": k, "records": v,
+                 "share": charts.fmt_pct(dist.get(k))}
+                for k, v in sorted(subs.items(), key=lambda kv: kv[1], reverse=True)]
+        ui.table(rows, height=300)
+
     feedback = eda.get("feedback", {}) or {}
     if feedback.get("recommendations"):
         st.markdown("**Actionable feedback (topic balance)**")
         for rec in feedback["recommendations"]:
-            st.info(f"💡 {rec}")
+            st.info(rec)
 
 st.divider()
 
@@ -68,16 +77,3 @@ else:
     st.line_chart({"total records": [r["total"] for r in rows]})
     st.line_chart({"dup rate": [r["dup_rate"] for r in rows],
                    "drift": [r["drift"] for r in rows]})
-
-st.divider()
-
-# ------------------------------------------------------------------- log -------
-st.subheader("Stage log")
-
-
-@st.fragment(run_every=3)
-def _logs() -> None:
-    ui.log_box(data.log_tail(200))
-
-
-_logs()

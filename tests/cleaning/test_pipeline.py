@@ -114,6 +114,44 @@ def test_end_to_end(tmp_path, monkeypatch):
     assert russian not in cleaned_text                  # original non-en gone
 
 
+def test_drop_non_english_drops_instead_of_translating(tmp_path, monkeypatch):
+    """With drop_non_english=True the non-English record is dropped and the
+    translator is never consulted."""
+    corpus = tmp_path / "corpus"
+    russian = ("Это длинный пример текста на русском языке предназначенный для "
+               "проверки фильтрации языка в конвейере очистки данных проекта.")
+    english = ("Network security operations require constant monitoring of the "
+               "system logs and alerts for any suspicious activity now today.")
+    _write_jsonl(str(corpus / "Test" / "s1" / "a.jsonl"), [
+        {"source": "x", "url": "", "license": "", "text": english},
+        {"source": "x", "url": "", "license": "", "text": russian},
+    ])
+    clean_dir = _redirect_outputs(monkeypatch, tmp_path)
+    pipeline.reset_cleaner_cache()
+
+    class _BoomTranslator:
+        backend = "stub"
+
+        def translate(self, text, src=None):
+            raise AssertionError("translator must not be called when dropping")
+
+    monkeypatch.setattr(pipeline, "Translator", _BoomTranslator)
+
+    rows = pipeline.clean_one_source(
+        str(corpus / "Test" / "s1"), raw_root=str(corpus),
+        clean_data_dir=clean_dir, drop_non_english=True)
+    totals = {k: sum(r[k] for r in rows)
+              for k in ("in", "translated", "non_en_dropped")}
+    assert totals["in"] == 2
+    assert totals["translated"] == 0
+    assert totals["non_en_dropped"] == 1
+
+    cleaned = _read_all(clean_dir)
+    assert "Network security operations" in cleaned      # english kept
+    assert russian not in cleaned                        # russian dropped
+    assert "non-allowed language (dropped)" in _read_all(str(tmp_path / "dropped"))
+
+
 def test_final_dedup_deterministic_first_wins(tmp_path, monkeypatch):
     """Sorted file order makes 'first duplicate wins' stable: the alphabetically
     first file keeps the record, the later file drops it."""

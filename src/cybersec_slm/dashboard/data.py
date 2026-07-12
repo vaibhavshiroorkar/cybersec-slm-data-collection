@@ -228,7 +228,7 @@ def run_status() -> dict:
     pipeline log's mtime (a long, quiet download can briefly read as idle).
 
     ``phase`` (parsed from the log) rides along so the UI can show which stage the
-    run is in — or, when idle, the last run's outcome — instead of only on/off.
+    run is in (or, when idle, the last run's outcome) instead of only on/off.
     """
     from . import control
     cstat = control.status()
@@ -254,6 +254,15 @@ def _catalog_total() -> int | None:
     return len(rows) if rows else None
 
 
+def _catalog_path() -> str:
+    return os.path.join(_repo_root(), "sources", "Sources.csv")
+
+
+def catalog_rows() -> list[dict]:
+    """Every row of the source catalog (``sources/Sources.csv``), as read."""
+    return _read_csv(_catalog_path())
+
+
 def catalog_summary() -> dict:
     """Source catalog overview: total rows + per-Sub-Domain counts.
 
@@ -261,13 +270,277 @@ def catalog_summary() -> dict:
     meaningful distribution to show even before any run has produced a manifest.
     Returns ``{"total": int, "by_domain": {name: count}}`` (empty when absent).
     """
-    path = os.path.join(_repo_root(), "sources", "Sources.csv")
-    rows = _read_csv(path)
+    rows = catalog_rows()
     by_domain: dict[str, int] = {}
     for r in rows:
         dom = (r.get("Sub-Domain") or "").strip() or "Uncategorized"
         by_domain[dom] = by_domain.get(dom, 0) + 1
     return {"total": len(rows), "by_domain": by_domain}
+
+
+def _cat_num(v) -> float:
+    """Parse a catalog numeric cell (tolerates commas / blanks) to a float."""
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cat_yes(v) -> bool:
+    return str(v or "").strip().lower() in ("yes", "true", "y", "1")
+
+
+def catalog_totals() -> dict:
+    """Authoritative line/size totals from the catalog (fast, avoids scanning data/).
+
+    The catalog keeps per-source ``Total Lines`` / ``Cleaned Lines`` and sizes that
+    the ledger and a full corpus scan agree with, so the funnel reads them here
+    instead of walking the (100+ GB, dozens-of-millions-of-records) raw tree on
+    every page load. Zeros when no catalog is present.
+    """
+    rows = catalog_rows()
+    return {
+        "raw_lines": int(sum(_cat_num(r.get("Total Lines")) for r in rows)),
+        "raw_size_mb": sum(_cat_num(r.get("JSONL Size (MB)")) for r in rows),
+        "cleaned_lines": int(sum(_cat_num(r.get("Cleaned Lines")) for r in rows)),
+        "cleaned_size_mb": sum(_cat_num(r.get("Cleaned Size (MB)")) for r in rows),
+    }
+
+
+def ingest_progress() -> dict:
+    """Ingest coverage: sources checked and how many produced data, vs the total.
+
+    ``checked`` is how many sources the ingest stage has processed (from the
+    resume ledger ``completed_sources.txt``), which includes ones that were then
+    skipped (license-blocked, failed fetch, or no usable content). ``with_data``
+    is how many produced a folder under ``data/raw/``. ``total`` is the catalog
+    size. So "184 checked, 149 with data, of 192" reads correctly: nearly every
+    source was tried; not all yielded a downloadable corpus. Falls back to the
+    on-disk folder count when the ledger is absent.
+    """
+    with_data = _count_source_dirs(os.path.join(_root(), "data", "raw"))
+    checked = _completed_count() or with_data
+    total = _catalog_total() or 0
+    return {"checked": checked, "with_data": with_data, "total": total}
+
+
+def raw_table() -> list[dict]:
+    """Per-source rows for what is physically under ``data/raw/`` (file count + size).
+
+    One row per ``<sub-domain>/<source>`` folder, so the table maps the folder
+    tree exactly. Walks the whole raw tree once (100+ GB, so callers should cache
+    it), reporting on-disk bytes rather than catalog figures. Record counts are
+    omitted here because counting them means reading every JSONL line (minutes).
+    """
+    raw_root = os.path.join(_root(), "data", "raw")
+    if not os.path.exists(raw_root):
+        return []
+    rows: list[dict] = []
+    try:
+        for dom in os.scandir(raw_root):
+            if not dom.is_dir() or dom.name.startswith("."):
+                continue
+            for src in os.scandir(dom.path):
+                if not src.is_dir() or src.name.startswith("."):
+                    continue
+                files, total = 0, 0
+                for r, _, fs in os.walk(src.path):
+                    for f in fs:
+                        try:
+                            total += os.path.getsize(os.path.join(r, f))
+                            files += 1
+                        except OSError:
+                            pass
+                rows.append({"sub-domain": dom.name, "source": src.name,
+                             "files": files, "size_mb": total / (1024 * 1024)})
+    except OSError:
+        return rows
+    rows.sort(key=lambda r: r["size_mb"], reverse=True)
+    return rows
+
+
+def _short_reason(kind: str, raw: str) -> str:
+    """Turn a raw log/ledger failure string into a short human reason."""
+    if kind == "timed out":
+        m = re.search(r"exceeded (\d+)\s*s", raw)
+        return f"timed out (over {m.group(1)}s)" if m else "timed out"
+    for code, label in (("403", "blocked (403 Forbidden)"),
+                        ("404", "missing (404 Not Found)"),
+                        ("401", "unauthorized (401)"),
+                        ("500", "server error (500)")):
+        if code in raw:
+            return label
+    if "crawl rc=0" in raw:
+        return "crawl returned nothing"
+    return (raw.split(":", 1)[0].strip() or "fetch failed")[:60]
+
+
+def ingest_outcome() -> dict:
+    """Per-source outcome of the most recent ingest run: why sources produced no data.
+
+    Combines the SQLite ledger's non-ok rows with the ``FAILED`` / ``TIMEOUT``
+    lines and the ``ingest: done ok=.. failed=.. rejected=.. timed_out=..`` summary
+    in the newest pipeline log. Returns::
+
+        {"summary": {"ok","failed","rejected","timed_out","skipped"} | None,
+         "issues": [{"source","kind","reason"} ...]}
+
+    A resume run only re-attempts the sources it hadn't fetched, so this reflects
+    the latest attempt, not the whole catalog's history. Empty when nothing ran.
+    """
+    issues: dict[str, dict] = {}
+
+    # Ledger first: persistent per-source non-ok statuses (e.g. empty crawl).
+    db_path = os.path.join(_logs(), "ingest_log.sqlite")
+    if os.path.exists(db_path):
+        try:
+            with sqlite3.connect(db_path) as con:
+                for name, status in con.execute(
+                        "SELECT name, status FROM ingest "
+                        "WHERE status NOT LIKE 'ok%'"):
+                    src = (name or "").split("/")[0].strip() or name
+                    issues[src] = {"source": src, "kind": "rejected",
+                                   "reason": _short_reason("rejected", status or "")}
+        except sqlite3.Error:
+            pass
+
+    # Log next: fetch failures and timeouts carry the clearest reasons.
+    summary: dict | None = None
+    logs = _pipeline_logs()
+    if logs:
+        try:
+            with open(logs[-1], encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            lines = []
+        for ln in lines:
+            sm = re.search(r"ingest: done ((?:\w+=\d+\s*)+)", ln)
+            if sm:
+                summary = {k: int(v) for k, v in
+                           re.findall(r"(\w+)=(\d+)", sm.group(1))}
+            fm = re.search(r"\bFAILED ([^:]+):\s*(.+)", ln)
+            if fm:
+                src = fm.group(1).strip()
+                issues[src] = {"source": src, "kind": "failed",
+                               "reason": _short_reason("failed", fm.group(2))}
+            tm = re.search(r"\bTIMEOUT ([^:]+):\s*(.+)", ln)
+            if tm:
+                src = tm.group(1).strip()
+                issues[src] = {"source": src, "kind": "timed out",
+                               "reason": _short_reason("timed out", tm.group(2))}
+
+    ordered = sorted(issues.values(), key=lambda d: (d["kind"], d["source"]))
+    return {"summary": summary, "issues": ordered}
+
+
+def _descriptor_base(d: dict) -> str:
+    """The data/raw folder name a source descriptor fetches into.
+
+    Mirrors the fetch layer: dataset kinds land under their owner (hf/kaggle) or
+    file name (url/github); everything else lands under its slug.
+    """
+    kind = d.get("kind")
+    ref = d.get("ref") or ""
+    if kind in ("hf", "kaggle"):
+        return ref.split("/")[0]
+    if kind in ("url", "github"):
+        return ref.split("/")[-1]
+    return d.get("slug") or ""
+
+
+def _folder_has_jsonl(folder: str) -> bool:
+    """True if the folder (or one level down) holds a .jsonl file. Cheap + bounded."""
+    if not os.path.isdir(folder):
+        return False
+    try:
+        for e in os.scandir(folder):
+            if e.is_file() and e.name.endswith(".jsonl"):
+                return True
+            if e.is_dir():
+                for e2 in os.scandir(e.path):
+                    if e2.is_file() and e2.name.endswith(".jsonl"):
+                        return True
+    except OSError:
+        pass
+    return False
+
+
+def sources_without_data() -> list[dict]:
+    """Every catalogued source that produced no records, each with the reason.
+
+    Reconciles the full catalog against ``data/raw/``: a source with a JSONL file
+    on disk produced data and is skipped; the rest are reported. Reasons come from
+    the commercial-license gate (the common case: non-commercial / copyleft /
+    unrecognised licenses are turned away before download) and, for sources that
+    were fetched but yielded nothing, the latest run's failure log. Each row is
+    ``{"sub-domain", "source", "type", "reason"}`` where ``type`` is ``license``,
+    ``failed``, ``timed out``, ``rejected``, or ``no records``.
+    """
+    try:
+        from ..ingestion import sources as _srcs
+        from ..ingestion.license_gate import is_license_ok
+    except Exception:
+        return []
+    catalog = _catalog_path()
+    if not os.path.exists(catalog):
+        return []
+    try:
+        descs = _srcs.load_descriptors(catalog, order_by_size=False)
+    except Exception:
+        return []
+
+    raw_root = os.path.join(_root(), "data", "raw")
+    fails = {i["source"]: i for i in ingest_outcome().get("issues", [])}
+    out: list[dict] = []
+    for d in descs:
+        dom, base = d.get("domain", ""), _descriptor_base(d)
+        if _folder_has_jsonl(os.path.join(raw_root, dom, base)):
+            continue
+        licok, lreason = is_license_ok(d)
+        if not licok:
+            out.append({"sub-domain": dom, "source": base,
+                        "type": "license", "reason": lreason})
+            continue
+        key = d.get("slug") or (d.get("ref") or "").split("/")[-1] or base
+        hit = fails.get(key) or fails.get(base)
+        if hit:
+            out.append({"sub-domain": dom, "source": base,
+                        "type": hit["kind"], "reason": hit["reason"]})
+        else:
+            out.append({"sub-domain": dom, "source": base, "type": "no records",
+                        "reason": "fetched but produced no records (failed, timed out, or empty)"})
+    out.sort(key=lambda r: (r["type"], r["sub-domain"], r["source"]))
+    return out
+
+
+def cleaned_table() -> list[dict]:
+    """Per-source cleaned rows read straight from ``data/clean/`` (records + size).
+
+    Gives the Clean page a real table even before a ``clean_report.csv`` exists:
+    one row per ``<sub-domain>/<source>`` folder with its JSONL record count and
+    size on disk. Empty when nothing has been cleaned yet.
+    """
+    clean_root = os.path.join(_root(), "data", "clean")
+    if not os.path.exists(clean_root):
+        return []
+    out: list[dict] = []
+    try:
+        for dom in os.scandir(clean_root):
+            if not dom.is_dir() or dom.name.startswith("."):
+                continue
+            for src in os.scandir(dom.path):
+                if not src.is_dir() or src.name.startswith("."):
+                    continue
+                out.append({
+                    "sub-domain": dom.name,
+                    "source": src.name,
+                    "records": _count_jsonl_records(src.path),
+                    "size (MB)": round(_dir_size_mb(src.path), 2),
+                })
+    except OSError:
+        return out
+    out.sort(key=lambda r: r["records"], reverse=True)
+    return out
 
 
 def log_tail(n: int = 40) -> list[str]:
@@ -303,6 +576,41 @@ def live_progress(tail: int = 40) -> dict:
     """
     return {"completed": _completed_count(), "total": _catalog_total(),
             "log_tail": log_tail(tail)}
+
+
+def session_history(limit: int = 15) -> list[dict]:
+    """Recent pipeline sessions, newest first (one per ``pipeline.<pid>.log``).
+
+    Each row: the process id (the "session number", which is also the log file's
+    name), when it started, seconds since its last activity, its log size, and
+    whether it is the current active run. Lets the UI point at a specific log file.
+    """
+    cur = run_status()
+    cur_pid = cur.get("pid")
+    running = cur.get("state") == "running"
+    now = time.time()
+    out: list[dict] = []
+    for p in sorted(_pipeline_logs(), key=os.path.getmtime, reverse=True)[:limit]:
+        name = os.path.basename(p)
+        m = re.search(r"pipeline\.(\d+)\.log", name)
+        pid = int(m.group(1)) if m else None
+        try:
+            mtime, size = os.path.getmtime(p), os.path.getsize(p)
+        except OSError:
+            mtime, size = now, 0
+        ts = None
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                ts = _parse_log_ts(f.readline())
+        except OSError:
+            pass
+        out.append({
+            "pid": pid, "log": name,
+            "started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if ts else "",
+            "age_s": now - mtime, "size_kb": round(size / 1024, 1),
+            "current": bool(pid == cur_pid and running),
+        })
+    return out
 
 
 def _parse_log_ts(s: str) -> float | None:
@@ -342,7 +650,7 @@ def run_timing() -> dict:
 
     Returns ``{"elapsed_s", "eta_s", "basis"}``. ``elapsed_s`` is seconds since the
     run's start (None if no start time is known). ``eta_s`` is a *rough* linear
-    projection — ``elapsed / completed * (total - completed)`` — computed only
+    projection (``elapsed / completed * (total - completed)``) computed only
     during the ingest phase, which is ~80% of wall-clock and the only stage driven
     by source count. Once ingestion is done the tail (dedup -> EDA -> normalize) is
     not source-count driven, so ``eta_s`` is None and ``basis`` says ``finalizing``
@@ -487,19 +795,27 @@ def _ingest_ledger_stats() -> dict:
 
 
 def data_funnel() -> dict:
-    """Calculates aggregate metrics across the Raw -> Cleaned -> Final funnel."""
+    """Aggregate Raw -> Cleaned -> Final metrics for the Overview funnel.
+
+    Source counts and sizes come from what is physically on disk under the data
+    root (the honest per-machine state); raw line/size totals come from the
+    catalog, which is authoritative and fast (a live count of the raw tree would
+    read 100+ GB). Cleaned and final counts are read directly since those trees
+    are small.
+    """
     man = manifest()
     rc = clean_report()
     nr = normalize_report()
+    cat = catalog_totals()
 
-    raw_stats = _ingest_ledger_stats()
+    # Raw: count the source folders present (cumulative across runs); take the
+    # line/size totals from the catalog, but only claim them once raw exists.
     raw_root = os.path.join(_root(), "data", "raw")
-    raw_size_mb = raw_stats["size_mb"] if raw_stats["sources"] else _dir_size_mb(raw_root)
-    raw_sources = raw_stats["sources"] if raw_stats["sources"] else _count_source_dirs(raw_root)
-    raw_lines = raw_stats["lines"] or (
-        int(rc.get("total", {}).get("in", 0)) if rc.get("total") else 0)
+    raw_sources = _count_source_dirs(raw_root)
+    raw_lines = cat["raw_lines"] if raw_sources else 0
+    raw_size_mb = cat["raw_size_mb"] if raw_sources else 0.0
 
-    # Cleaned: prefer the clean report totals when available, otherwise count the
+    # Cleaned: prefer the clean report total when available, otherwise count the
     # actual JSONL records present under data/clean/ so the UI remains informative.
     clean_root = os.path.join(_root(), "data", "clean")
     cleaned_size_mb = _dir_size_mb(clean_root)
@@ -557,7 +873,7 @@ _CLEAN_DROP_COLS = [
 
 
 def loss_breakdown() -> dict:
-    """Where records are dropped across the pipeline — the 'where did my data go' view.
+    """Where records are dropped across the pipeline (the 'where did my data go' view).
 
     Reads only what the pipeline already writes (clean report, normalize report,
     latest EDA report); no new pipeline outputs. Returns::
@@ -590,7 +906,7 @@ def loss_breakdown() -> dict:
          "dropped": _to_int(total, "behavioral_flagged"), "kind": "quality"},
     ]
 
-    # EDA auto-rebalance (random downsample) — only when it actually ran.
+    # EDA auto-rebalance (random downsample), only when it actually ran.
     if eda.get("rebalanced"):
         before = _to_int(eda.get("metrics", {}) or {}, "total")
         after = _to_int(eda.get("metrics_after_rebalance", {}) or {}, "total")

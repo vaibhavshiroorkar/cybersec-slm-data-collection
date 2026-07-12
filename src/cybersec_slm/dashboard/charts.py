@@ -16,6 +16,31 @@ def fmt_int(n) -> str:
         return "-"
 
 
+def fmt_compact(n) -> str:
+    """Compact human count for big display numbers (22,101,118 -> '22.1M')."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "-"
+    for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(n) >= div:
+            return f"{n / div:.1f}{suf}".replace(".0" + suf, suf)
+    return f"{int(n)}"
+
+
+def fmt_size(mb) -> str:
+    """Human size from a megabyte figure (MB up to 1 GB, then GB / TB)."""
+    try:
+        mb = float(mb)
+    except (TypeError, ValueError):
+        return "-"
+    if mb >= 1_048_576:
+        return f"{mb / 1_048_576:.1f} TB"
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} GB"
+    return f"{mb:.1f} MB"
+
+
 def fmt_pct(x, digits: int = 1) -> str:
     try:
         return f"{float(x) * 100:.{digits}f}%"

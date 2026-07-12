@@ -22,7 +22,7 @@ def status_pill(state: str) -> str:
 
 
 def inject_css() -> None:
-    """Inject the dashboard stylesheet once per session (stable, premium spacing)."""
+    """Inject the dashboard stylesheet once per session (stable, quiet spacing)."""
     import streamlit as st
 
     if st.session_state.get("_ui_css"):
@@ -51,6 +51,29 @@ def log_box(lines, height: int = 320) -> None:
     text = "\n".join(lines) if lines else "(no pipeline log yet)"
     with st.container(height=height):
         st.code(text, language="log")
+
+
+def table(rows, height: int | None = None) -> None:
+    """Render rows as a dataframe with an Excel-style 1-based ``#`` row number.
+
+    Streamlit hides the frame index by default; here it is shown and renumbered
+    from 1 so every table reads like a spreadsheet. ``height`` is passed to the
+    dataframe itself (not a wrapping container) so Streamlit's search / download /
+    fullscreen toolbar stays visible instead of being clipped. Empty input renders
+    a small caption.
+    """
+    import pandas as pd
+    import streamlit as st
+
+    rows = list(rows)
+    if not rows:
+        st.caption("(nothing to show)")
+        return
+    df = pd.DataFrame(rows)
+    df.index = range(1, len(df) + 1)
+    df.index.name = "#"
+    kwargs = {"height": height} if height else {}
+    st.dataframe(df, use_container_width=True, hide_index=False, **kwargs)
 
 
 def stat_grid(pairs, cols: int = 4) -> None:
@@ -94,14 +117,11 @@ def stage_run_control(stage: str, *, run_label: str = "Run this stage") -> None:
 
 
 def stage_header(key: str, states: dict) -> None:
-    """Render a stage page header: the stage label + its status pill."""
+    """Render a stage page header: just the stage label (no stage numbering)."""
     import streamlit as st
 
     stage = stages.get_stage(key)
-    state = (states.get(key) or {}).get("state", "idle")
     st.title(f"{stage.label}")
-    st.caption(f"Stage {stages.stage_keys().index(key) + 1} of 5  ·  "
-               f"{status_pill(state)}")
 
 
 def stage_position(key: str) -> str:
@@ -135,18 +155,29 @@ def advanced_settings(stage: str) -> dict:
                                       10_000_000, value=0, key=f"{stage}_limit"))
             if lim:
                 s["limit"] = lim
+        if "max_source_gb" in allowed:
+            gb = float(st.number_input("max source size in GB (0 = no cap)", 0.0,
+                                       1000.0, value=0.0, step=1.0,
+                                       key=f"{stage}_maxgb"))
+            if gb > 0:
+                s["max_source_gb"] = gb
         if "sources" in allowed:
             src = st.text_input("sources CSV path (blank = default catalog)",
                                 key=f"{stage}_sources")
             if src.strip():
                 s["sources"] = src.strip()
+        if "drop_non_english" in allowed:
+            s["drop_non_english"] = st.checkbox(
+                "drop non-English records instead of translating them",
+                key=f"{stage}_dropnonen")
         if "purge_raw" in allowed:
             s["purge_raw"] = st.checkbox(
-                "delete data/raw/ after cleaning (default: keep it)",
-                key=f"{stage}_purgeraw")
+                "delete data/raw/ after cleaning", key=f"{stage}_purgeraw")
         if "no_auto_rebalance" in allowed:
-            s["no_auto_rebalance"] = st.checkbox(
-                "disable auto-rebalance", key=f"{stage}_norebal")
+            # Auto-rebalance is off by default; the flag is passed unless enabled.
+            enable = st.checkbox("enable auto-rebalance", value=False,
+                                 key=f"{stage}_rebal")
+            s["no_auto_rebalance"] = not enable
         if "no_enforce" in allowed:
             s["no_enforce"] = st.checkbox(
                 "report only (do not fail on blockers)", key=f"{stage}_noenforce")

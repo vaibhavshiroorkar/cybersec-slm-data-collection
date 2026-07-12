@@ -34,7 +34,7 @@ def _wire(monkeypatch, tmp_path):
     descriptors = [{"kind": "url", "url": u, "domain": "D", "license": "",
                     "description": ""} for u in ("http://a", "http://b")]
     monkeypatch.setattr(parallel.sources, "load_descriptors",
-                        lambda spec=None: descriptors)
+                        lambda spec=None, **kw: descriptors)
 
     class _Log:
         def record_many(self, rows):
