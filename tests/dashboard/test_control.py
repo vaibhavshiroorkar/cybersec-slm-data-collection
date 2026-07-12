@@ -96,10 +96,10 @@ def test_build_command_eda_boolean_flag():
 
 
 def test_build_command_drops_flags_a_stage_does_not_accept():
-    cmd = control.build_command("clean", settings={"workers": 8, "keep_raw": True})
+    cmd = control.build_command("clean", settings={"workers": 8, "purge_raw": True})
     s = _joined(cmd)
     assert "--workers" not in s        # workers is not a clean-stage flag
-    assert "--keep-raw" in s
+    assert "--purge-raw" in s
 
 
 def test_build_command_resume_from_param():

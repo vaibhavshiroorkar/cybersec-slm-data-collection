@@ -29,11 +29,11 @@ CONTROL_NAME = "pipeline_run.json"
 # Which advanced-settings keys each stage accepts. The dashboard offers only a
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
 _STAGE_FLAGS: dict[str, set[str]] = {
-    "all": {"workers", "sources", "source_timeout", "limit", "keep_raw",
+    "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
             "resume", "no_auto_rebalance"},
     "source": set(),
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume"},
-    "clean": {"keep_raw", "limit", "resume"},
+    "clean": {"purge_raw", "limit", "resume"},
     "eda": {"no_auto_rebalance", "no_enforce"},
     "schema": {"fresh", "limit"},
 }
@@ -46,7 +46,7 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("sources", "--sources", "value"),
     ("source_timeout", "--source-timeout", "value"),
     ("limit", "--limit", "value"),
-    ("keep_raw", "--keep-raw", "bool"),
+    ("purge_raw", "--purge-raw", "bool"),
     ("no_auto_rebalance", "--no-auto-rebalance", "bool"),
     ("no_enforce", "--no-enforce", "bool"),
     ("fresh", "--fresh", "bool"),
@@ -143,7 +143,7 @@ def start(stage: str = "all", *, resume: bool = False,
 
     Refuses when a run is already live. ``stage`` is one of ``all``, ``source``,
     ``ingest``, ``clean``, ``eda``, ``schema``; ``settings`` carries the advanced
-    flags (worker count, source-timeout, keep-raw, ...) that ``build_command``
+    flags (worker count, source-timeout, purge-raw, ...) that ``build_command``
     filters to the ones that stage accepts. ``resume`` adds ``--resume`` where
     supported. ``_command`` overrides the launched command (a test seam). The child
     runs with the dashboard's data root so its output lands where the dashboard

@@ -12,8 +12,8 @@ Stage 2 - Ingest (``run_ingest``):
 Stage 3 - Clean (``run_clean``):
     The whole ``data/raw/`` tree is cleaned into ``data/clean/`` (per-source
     transforms, per-source dedup disabled), then one deterministic cross-source
-    dedup pass (``final_global_dedup``) runs. ``data/raw/`` is deleted unless
-    ``keep_raw``.
+    dedup pass (``final_global_dedup``) runs. ``data/raw/`` is retained by default
+    (pass ``keep_raw=False`` to delete it).
 
 Then (``run_v2_pipeline``):
     * deep global EDA with topic-balance analysis (blockers stop the pipeline)
@@ -310,16 +310,17 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 
 # ── Stage 3: Clean (whole tree + cross-source dedup) ──────────────────────────
 
-def run_clean(*, keep_raw: bool = False, limit: int | None = None,
+def run_clean(*, keep_raw: bool = True, limit: int | None = None,
               resume: bool = False) -> dict:
     """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
 
     The clean stage of the five-stage pipeline. Cleans every fetched source in one
     pass (per-source transforms, per-source dedup disabled), writes
     ``logs/clean_report.csv``, then runs the single deterministic cross-source
-    dedup pass (:func:`cleaning.pipeline.final_global_dedup`). Deletes ``data/raw/``
-    afterward unless ``keep_raw``. Fresh (non-resume) wipes ``data/clean/`` and the
-    dedup + report state first; ``resume`` continues a partial dedup pass.
+    dedup pass (:func:`cleaning.pipeline.final_global_dedup`). ``data/raw/`` is
+    **retained** after cleaning by default; pass ``keep_raw=False`` to delete it.
+    Fresh (non-resume) wipes ``data/clean/`` and the dedup + report state first;
+    ``resume`` continues a partial dedup pass.
 
     Cross-source dedup folds into this stage (there is no separate "dedup" stage).
     """
@@ -418,7 +419,7 @@ def run_normalize(*, resume: bool = True) -> dict:
 def run_v2_pipeline(spec: str | None = None, *,
                     workers: int | None = None,
                     resume: bool = False,
-                    keep_raw: bool = False,
+                    keep_raw: bool = True,
                     limit: int | None = None,
                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
                     enforce_eda: bool = True,
@@ -427,8 +428,8 @@ def run_v2_pipeline(spec: str | None = None, *,
 
     Physically separate stages (no ingest/clean overlap): ingest fetches every
     source to data/raw/, clean cleans the whole tree and cross-source dedups into
-    data/clean/ (deleting data/raw/ unless keep_raw), then the deep EDA gate and
-    schema normalization run.
+    data/clean/ (data/raw/ is retained by default; pass keep_raw=False to delete
+    it), then the deep EDA gate and schema normalization run.
 
     Parameters
     ----------
@@ -440,7 +441,7 @@ def run_v2_pipeline(spec: str | None = None, *,
         Skip sources already fetched in a prior run (ingest) and continue a partial
         dedup pass (clean).
     keep_raw : bool
-        Keep data/raw/ after cleaning instead of deleting it.
+        Keep data/raw/ after cleaning (default True); pass False to delete it.
     limit : int | None
         Cap records per file (for smoke tests).
     source_timeout : float

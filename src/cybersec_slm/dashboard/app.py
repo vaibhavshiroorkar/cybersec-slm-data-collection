@@ -22,6 +22,8 @@ ui.inject_css()
 st.title("cybersec-slm-data-collection")
 st.caption(f"Reading data root: `{data.data_root()}`  ·  five-stage pipeline: "
            "source → ingest → clean → eda → schema")
+st.caption("This is the control center: run the whole pipeline end to end here and "
+           "see everything at a glance. Open a stage page in the sidebar for detail.")
 
 
 # ---------------------------------------------------------------- live strip ---
@@ -57,6 +59,52 @@ def _live() -> None:
 
 
 _live()
+st.divider()
+
+# ------------------------------------------------------------------ launcher ---
+# The control center sits at the top: start the whole pipeline end to end.
+st.subheader("Run the full pipeline")
+cstat = control.status()
+running = cstat["running"]
+settings = ui.advanced_settings("all")
+b = st.columns(4)
+if b[0].button("▶ Start", disabled=running, use_container_width=True,
+               help="Run all five stages: ingest → clean → EDA → schema"):
+    res = control.start("all", settings=settings)
+    st.rerun() if res.get("ok") else st.error(res["error"])
+if b[1].button("⏵ Resume", disabled=running, use_container_width=True,
+               help="Continue a prior run, skipping sources already fetched"):
+    res = control.start("all", resume=True, settings=settings)
+    st.rerun() if res.get("ok") else st.error(res["error"])
+if b[2].button("⏹ Stop", disabled=not running, use_container_width=True):
+    control.stop()
+    st.rerun()
+if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
+               help="Delete ALL pipeline data and logs (clean slate)"):
+    st.session_state["confirm_reset"] = True
+
+if running:
+    st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  pid {cstat['pid']}"
+               f"  ·  started {cstat.get('started_at')}")
+elif cstat.get("stale"):
+    st.caption("Previous run ended without a clean stop.")
+
+if st.session_state.get("confirm_reset") and not running:
+    st.warning("Delete ALL pipeline data (`data/` and `logs/`)? This cannot be undone.")
+    r = st.columns(2)
+    if r[0].button("Yes, delete everything", type="primary", use_container_width=True):
+        res = control.reset()
+        st.session_state["confirm_reset"] = False
+        if not res.get("ok"):
+            st.error(res["error"])
+        st.rerun()
+    if r[1].button("Cancel", use_container_width=True):
+        st.session_state["confirm_reset"] = False
+        st.rerun()
+
+st.caption("Advanced settings above cover the whole run (workers, source timeout, "
+           "record limit, purge raw, disable rebalance). Raw files are kept after "
+           "cleaning by default. Controls act on this machine (local-first).")
 st.divider()
 
 
@@ -105,45 +153,13 @@ else:
 
 st.divider()
 
-# ------------------------------------------------------------------ launcher ---
-st.subheader("Run the full pipeline")
-cstat = control.status()
-running = cstat["running"]
-settings = ui.advanced_settings("all")
-b = st.columns(4)
-if b[0].button("▶ Start", disabled=running, use_container_width=True,
-               help="Run all five stages: ingest → clean → EDA → schema"):
-    res = control.start("all", settings=settings)
-    st.rerun() if res.get("ok") else st.error(res["error"])
-if b[1].button("⏵ Resume", disabled=running, use_container_width=True,
-               help="Continue a prior run, skipping sources already fetched"):
-    res = control.start("all", resume=True, settings=settings)
-    st.rerun() if res.get("ok") else st.error(res["error"])
-if b[2].button("⏹ Stop", disabled=not running, use_container_width=True):
-    control.stop()
-    st.rerun()
-if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
-               help="Delete ALL pipeline data and logs (clean slate)"):
-    st.session_state["confirm_reset"] = True
-
-if running:
-    st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  pid {cstat['pid']}"
-               f"  ·  started {cstat.get('started_at')}")
-elif cstat.get("stale"):
-    st.caption("Previous run ended without a clean stop.")
-
-if st.session_state.get("confirm_reset") and not running:
-    st.warning("Delete ALL pipeline data (`data/` and `logs/`)? This cannot be undone.")
-    r = st.columns(2)
-    if r[0].button("Yes, delete everything", type="primary", use_container_width=True):
-        res = control.reset()
-        st.session_state["confirm_reset"] = False
-        if not res.get("ok"):
-            st.error(res["error"])
-        st.rerun()
-    if r[1].button("Cancel", use_container_width=True):
-        st.session_state["confirm_reset"] = False
-        st.rerun()
-
-st.caption("Controls act on the pipeline on this machine (local-first dashboard). "
-           "Open a stage page in the sidebar to run or inspect a single stage.")
+# --------------------------------------------------------------- detail nav ----
+st.subheader("Detailed sections")
+st.markdown(
+    "Open a stage page in the sidebar to run or inspect a single part in depth:\n\n"
+    "1. **Sourcing** - the source catalog + discover control\n"
+    "2. **Ingest** - fetch to `data/raw/`, the per-source ledger\n"
+    "3. **Clean** - clean + cross-source dedup, the loss breakdown\n"
+    "4. **EDA** - the sufficiency gate, metrics, and trends\n"
+    "5. **Schema** - normalize to the release dataset + manifest\n\n"
+    "Then **Dataset** to explore the corpus and **Agent** to ask questions.")
