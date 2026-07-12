@@ -49,7 +49,8 @@ def _seed_minimal(root: str) -> None:
 
 
 @pytest.mark.parametrize("script", ["app.py", "pages/1_Sourcing.py", "pages/2_Ingest.py",
-                                    "pages/1_Pipeline.py", "pages/2_Dataset.py"])
+                                    "pages/3_Clean.py", "pages/4_EDA.py", "pages/5_Schema.py",
+                                    "pages/2_Dataset.py"])
 def test_page_renders_without_error(script, tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
