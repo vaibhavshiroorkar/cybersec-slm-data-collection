@@ -48,7 +48,8 @@ def _seed_minimal(root: str) -> None:
                                 "text": f"vulnerability record number {i}"}) + "\n")
 
 
-@pytest.mark.parametrize("script", ["app.py", "pages/1_Pipeline.py", "pages/2_Dataset.py"])
+@pytest.mark.parametrize("script", ["app.py", "pages/1_Sourcing.py", "pages/2_Ingest.py",
+                                    "pages/1_Pipeline.py", "pages/2_Dataset.py"])
 def test_page_renders_without_error(script, tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
