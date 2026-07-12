@@ -29,13 +29,15 @@ directory):
 - resume    → `logs/completed_sources.txt` (sources finished this build; read by `--resume`)
 
 ## Usage
-Ingestion is not a standalone command, it runs fused with cleaning, one process
-per source, via the streaming path:
+Ingest is stage 2 of the five-stage pipeline (source -> ingest -> clean -> eda ->
+schema). It is a standalone, fetch-only command: it fetches every source to
+`data/raw/` and stops; the separate clean stage cleans that tree.
 
 ```bash
-cybersec-slm run             # parallel per-source fetch + clean -> data/clean/
-cybersec-slm run --resume    # skip sources already fetched+cleaned; resume the dedup
-cybersec-slm all             # run + EDA gate + normalize (full pipeline)
+cybersec-slm ingest          # parallel fetch of all sources -> data/raw/
+cybersec-slm ingest --resume # skip sources already fetched (logs/completed_sources.txt)
+cybersec-slm clean           # stage 3: clean data/raw/ + cross-source dedup -> data/clean/
+cybersec-slm all             # full pipeline (all five stages)
 ```
 
 Sources come from `sources/Sources.csv` (see `sources.py`); a source is fetched

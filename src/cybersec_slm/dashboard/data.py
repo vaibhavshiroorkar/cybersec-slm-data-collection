@@ -22,7 +22,7 @@ import re
 import sqlite3
 import time
 
-from .. import core
+from .. import core, stages
 
 # A per-PID pipeline log touched within this window means a run is in progress.
 # Heuristic (a long download can be quiet): the UI labels it "recent activity".
@@ -102,27 +102,7 @@ def _pipeline_logs() -> list[str]:
     return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
 
 
-# Ordered pipeline phases (the run's spine). ``run_phase`` reports which one the
-# newest log has reached, so the UI can say "Cross-source dedup" instead of a bare
-# "running". Each entry: (key, human label, marker substrings that, when present
-# in the log, mean the run has reached that phase). Order = progression order.
-_PHASE_DEFS: list[tuple[str, str, tuple[str, ...]]] = [
-    ("ingest_clean", "Ingesting & cleaning sources",
-     ("ingest+clean:", "run_ingest_clean", "cleaned ", "reloading", "TIMEOUT")),
-    ("dedup", "Cross-source dedup",
-     ("final global dedup", "dedup: saved", "final dedup:")),
-    ("eda", "EDA sufficiency gate",
-     ("deep global EDA", "eda: scanning", "eda: total=", "auto-rebalanc",
-      "apply_cap", "source-cap", "eda FEEDBACK", "apply_source_cap")),
-    ("normalize", "Normalizing → final dataset",
-     ("schema normalization", "phase 4", "normalize:", "provenance manifest")),
-    ("done", "Completed",
-     ("provenance manifest ->", "handoff-ready corpus")),
-]
-_PHASE_LABELS = {k: lbl for k, lbl, _ in _PHASE_DEFS}
-_PHASE_LABELS["gate_failed"] = "EDA gate failed — needs more / rebalanced data"
-_PHASE_LABELS["starting"] = "Starting…"
-_PHASE_LABELS["unknown"] = "No pipeline activity yet"
+_GATE_FAILED_LABEL = "EDA gate failed - needs more / rebalanced data"
 
 
 def _strip_log_prefix(line: str) -> str:
@@ -131,15 +111,17 @@ def _strip_log_prefix(line: str) -> str:
 
 
 def run_phase(lookback: int = 500) -> dict:
-    """Best-effort current (or last-reached) pipeline phase from the newest log.
+    """Best-effort current (or last-reached) pipeline stage from the newest log.
 
-    Returns ``{"phase", "label", "detail", "index", "total", "terminal"}``.
-    ``phase`` is one of the ``_PHASE_DEFS`` keys plus ``gate_failed`` (the EDA gate
-    stopped the run and looped back), ``starting`` and ``unknown``. When idle this
-    reflects the *last* run's furthest-reached phase / outcome, so the UI shows
-    "EDA gate failed" or "Completed" rather than a bare "idle".
+    Reads the canonical five-stage model from :mod:`cybersec_slm.stages`. Returns
+    ``{"phase", "label", "detail", "index", "total", "terminal"}``. ``phase`` is a
+    stage key (``source``/``ingest``/``clean``/``eda``/``schema``) plus
+    ``gate_failed`` (the EDA gate stopped the run and looped back), ``starting`` and
+    ``unknown``. When idle this reflects the *last* run's furthest-reached stage /
+    outcome, so the UI shows "EDA gate failed" or the final stage rather than a bare
+    "idle".
     """
-    total = len(_PHASE_DEFS)
+    total = len(stages.STAGES)
     logs = _pipeline_logs()
     newest = logs[-1] if logs else None
     lines: list[str] = []
@@ -150,42 +132,43 @@ def run_phase(lookback: int = 500) -> dict:
         except OSError:
             lines = []
     if not lines:
-        return {"phase": "unknown", "label": _PHASE_LABELS["unknown"], "detail": "",
+        return {"phase": "unknown", "label": "No pipeline activity yet", "detail": "",
                 "index": 0, "total": total, "terminal": False}
 
     # Terminal off-ramp: the gate can fail and loop back to ingestion. It only
-    # counts if it is the LAST gate verdict (a later phase marker supersedes it,
-    # e.g. a subsequent resume that got further).
+    # counts if it is the LAST gate verdict (a later stage marker supersedes it).
     gate_failed_at = next((i for i, ln in enumerate(lines)
                            if "EDA sufficiency gate FAILED" in ln), None)
 
-    # Furthest-along phase whose marker appears anywhere in the window.
-    best_idx = -1
-    for idx, (_key, _lbl, markers) in enumerate(_PHASE_DEFS):
-        if any(any(m in ln for m in markers) for ln in lines):
-            best_idx = idx
-
-    if best_idx < 0:
-        return {"phase": "starting", "label": _PHASE_LABELS["starting"], "detail": "",
+    key = stages.phase_from_log(lines)
+    if key == "starting":
+        return {"phase": "starting", "label": "Starting...", "detail": "",
+                "index": 0, "total": total, "terminal": False}
+    if key == "unknown":
+        return {"phase": "unknown", "label": "No pipeline activity yet", "detail": "",
                 "index": 0, "total": total, "terminal": False}
 
-    key, label, markers = _PHASE_DEFS[best_idx]
-    # A gate failure that came after the furthest phase marker is the real state.
-    if gate_failed_at is not None and best_idx <= 2:
+    keys = stages.stage_keys()
+    idx = keys.index(key)                 # 0-based position in the spine
+    stage = stages.get_stage(key)
+    eda_idx = keys.index("eda")
+
+    # A gate failure that came after the furthest stage marker is the real state.
+    if gate_failed_at is not None and idx <= eda_idx:
         last_marker_at = max((i for i, ln in enumerate(lines)
-                              if any(m in ln for m in markers)), default=-1)
+                              if any(m in ln for m in stage.markers)), default=-1)
         if gate_failed_at >= last_marker_at:
-            return {"phase": "gate_failed", "label": _PHASE_LABELS["gate_failed"],
+            return {"phase": "gate_failed", "label": _GATE_FAILED_LABEL,
                     "detail": _strip_log_prefix(lines[gate_failed_at]),
-                    "index": 3, "total": total, "terminal": True}
+                    "index": eda_idx + 1, "total": total, "terminal": True}
 
     detail = ""
     for ln in reversed(lines):
-        if any(m in ln for m in markers):
+        if any(m in ln for m in stage.markers):
             detail = _strip_log_prefix(ln)
             break
-    return {"phase": key, "label": label, "detail": detail,
-            "index": best_idx + 1, "total": total, "terminal": key == "done"}
+    return {"phase": key, "label": stage.label, "detail": detail,
+            "index": idx + 1, "total": total, "terminal": key == "schema"}
 
 
 def run_status() -> dict:
@@ -326,12 +309,12 @@ def run_timing() -> dict:
     eta_s: float | None = None
     if elapsed_s is None:
         basis = "no-start"
-    elif pkey in ("done", "gate_failed"):
+    elif pkey == "gate_failed":
         basis = "finished"
-    elif pkey == "ingest_clean" and total and completed:
+    elif pkey == "ingest" and total and completed:
         eta_s = max(elapsed_s / completed * (total - completed), 0.0)
         basis = "ingest-linear"
-    elif pkey in ("dedup", "eda", "normalize"):
+    elif pkey in ("clean", "eda", "schema"):
         basis = "finalizing"
     else:
         basis = "starting"
