@@ -258,6 +258,11 @@ def _catalog_path() -> str:
     return os.path.join(_repo_root(), "sources", "Sources.csv")
 
 
+def catalog_path() -> str:
+    """Path to the source catalog CSV the dashboard reads and edits."""
+    return _catalog_path()
+
+
 def catalog_rows() -> list[dict]:
     """Every row of the source catalog (``sources/Sources.csv``), as read."""
     return _read_csv(_catalog_path())

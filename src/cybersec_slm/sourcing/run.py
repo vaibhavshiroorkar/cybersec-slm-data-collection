@@ -58,7 +58,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
              per_keyword: int = 5, max_per_domain: int | None = None,
              max_total: int | None = None, mode: str = "datasets",
              dry_run: bool = False, out_csv: str | None = None,
-             base_url: str | None = None, client=None) -> dict:
+             base_url: str | None = None, language: str = "en", client=None) -> dict:
     """Run sourcing and return a summary dict.
 
     ``mode`` selects the keyword catalog: ``datasets`` (corpora/repos), ``text``
@@ -105,7 +105,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                 query = f"{keyword} {qualifier}".strip()
                 try:
                     results = searxng_search(query, url=base_url,
-                                             num=per_keyword, client=client)
+                                             num=per_keyword, language=language,
+                                             client=client)
                 except SearchError as e:
                     logger.error(f"source: search failed for {query!r}: {e}")
                     raise

@@ -28,3 +28,23 @@ def raw_table(root: str) -> list[dict]:
 def raw_size_mb(root: str) -> float:
     """Total on-disk size of ``data/raw/`` in MB, from the cached folder walk."""
     return sum(r["size_mb"] for r in raw_table(root))
+
+
+# The corpus funnel scans data/ (records + sizes) on every full rerun, which made
+# the Overview flash and recompute on each interaction. Cache it on a short TTL so
+# it renders from a stable snapshot; a run or the manual Refresh button clears it.
+_STATS_TTL_S = 90
+
+
+@st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
+def funnel(root: str) -> dict:
+    """Cached corpus-funnel snapshot: ``{funnel, progress}`` (see :mod:`data`)."""
+    f = data.data_funnel()
+    f["raw"]["size_mb"] = raw_size_mb(root)
+    return {"funnel": f, "progress": data.ingest_progress()}
+
+
+def clear_stats() -> None:
+    """Drop the cached funnel + raw-size snapshots so the next read remeasures."""
+    funnel.clear()
+    raw_table.clear()

@@ -4,7 +4,12 @@ from cybersec_slm.sourcing import keywords as kw
 from cybersec_slm.sourcing.classify import infer_category_and_format, refine_domain
 from cybersec_slm.sourcing.row import SHEET_COLUMNS, build_row, row_to_list
 from cybersec_slm.sourcing.search import Result, _parse_items
-from cybersec_slm.sourcing.sheet import append_rows, existing_links, normalize_url
+from cybersec_slm.sourcing.sheet import (
+    append_rows,
+    delete_rows,
+    existing_links,
+    normalize_url,
+)
 
 # ----------------------------------------------------------------- keywords ---
 
@@ -108,6 +113,33 @@ def test_append_rows_and_existing_links_round_trip(tmp_path):
     # A second append with the same link still writes (dedup is the caller's job),
     # and existing_links on a missing file is just empty.
     assert existing_links(str(tmp_path / "nope.csv")) == set()
+
+
+def test_delete_rows_by_subdomain_and_link(tmp_path):
+    csv_path = str(tmp_path / "Sources.csv")
+    rows = [
+        build_row(Result(title="A", link="https://huggingface.co/datasets/a/x",
+                         snippet="s"), "Cloud Security", today="01/01/2026"),
+        build_row(Result(title="B", link="https://github.com/b/y", snippet="s"),
+                  "Network Security", today="01/01/2026"),
+        build_row(Result(title="C", link="https://example.com/c", snippet="s"),
+                  "Network Security", today="01/01/2026"),
+    ]
+    append_rows(csv_path, rows)
+
+    # delete every Network Security row (group delete)
+    assert delete_rows(csv_path, subdomains=["Network Security"]) == 2
+    links = existing_links(csv_path)
+    assert normalize_url("https://huggingface.co/datasets/a/x") in links
+    assert len(links) == 1
+
+    # delete a single row by link (normalized match: www/scheme differences ok)
+    assert delete_rows(csv_path, links=["http://www.huggingface.co/datasets/a/x/"]) == 1
+    assert existing_links(csv_path) == set()
+
+    # no-op cases
+    assert delete_rows(csv_path, subdomains=["Nope"]) == 0
+    assert delete_rows(str(tmp_path / "missing.csv"), links=["x"]) == 0
 
 
 # ----------------------------------------------------------- search parsing ---
