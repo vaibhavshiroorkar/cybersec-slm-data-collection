@@ -22,6 +22,11 @@ st.caption("Cleaned records mapped onto the canonical schema in "
            "the result below.")
 st.divider()
 
+# ------------------------------------------------------------------ run --------
+st.subheader("Run this stage")
+ui.stage_run_control("schema", run_label="Run schema")
+st.divider()
+
 # ---------------------------------------------------------- normalize report ---
 st.subheader("Normalization")
 funnel = data.data_funnel()

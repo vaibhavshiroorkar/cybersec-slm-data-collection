@@ -166,6 +166,27 @@ def advanced_settings(stage: str) -> dict:
                                 key=f"{stage}_sources")
             if src.strip():
                 s["sources"] = src.strip()
+        if "per_keyword" in allowed:
+            s["per_keyword"] = int(st.number_input(
+                "results per keyword", 1, 50, value=5, key=f"{stage}_perkw"))
+        if "max_per_domain" in allowed:
+            m = int(st.number_input("max new sources per sub-domain (0 = no cap)",
+                                    0, 100_000, value=0, key=f"{stage}_maxdom"))
+            if m:
+                s["max_per_domain"] = m
+        if "max_total" in allowed:
+            t = int(st.number_input("stop after N new sources total (0 = no cap)",
+                                    0, 1_000_000, value=0, key=f"{stage}_maxtot"))
+            if t:
+                s["max_total"] = t
+        if "dry_run" in allowed:
+            s["dry_run"] = st.checkbox(
+                "dry run (write candidate CSV, do not append to the catalog)",
+                key=f"{stage}_dry")
+        if "no_crawler" in allowed:
+            enable = st.checkbox("crawl website sources this run", value=True,
+                                 key=f"{stage}_crawler")
+            s["no_crawler"] = not enable
         if "drop_non_english" in allowed:
             s["drop_non_english"] = st.checkbox(
                 "drop non-English records instead of translating them",

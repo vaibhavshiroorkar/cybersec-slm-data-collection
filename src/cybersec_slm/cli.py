@@ -15,13 +15,13 @@ Individual stages:
     cybersec-slm dashboard [--port N]                        # Streamlit monitor + explorer
 
 Ingestion reads sources/Sources.csv. NVD needs no flag — set NVD_API_KEY (env) to
-raise its rate limit.
+raise its rate limit. Source discovery uses a self-hosted SearXNG instance — set
+SEARXNG_URL (env; default http://localhost:8080).
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,10 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
     ig.add_argument("--source-timeout", type=float, default=1800.0,
                     help="per-source wall-clock timeout in seconds "
                          "(abandon a hung source; default 1800)")
+    ig.add_argument("--no-crawler", action="store_true",
+                    help="skip website (crawl) sources for this run")
 
-    # ── source (search-engine source discovery) ─────────────────────────────
+    # ── source (SearXNG source discovery) ────────────────────────────────────
     d = sub.add_parser("source",
-                       help="search engines by keyword -> append new rows to Sources.csv")
+                       help="search SearXNG by keyword -> append new rows to Sources.csv")
     d.add_argument("--sources", default=None,
                    help="catalog CSV to append to (default: sources/Sources.csv)")
     d.add_argument("--domains", nargs="*", default=None,
@@ -113,17 +115,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="keyword catalog: datasets (corpora/repos), text "
                         "(articles/docs), or both (default: datasets)")
     d.add_argument("--per-keyword", type=int, default=5,
-                   help="results to request per keyword (<=10, default 5)")
+                   help="results to request per keyword (default 5)")
     d.add_argument("--max-per-domain", type=int, default=None,
                    help="cap new rows kept per Sub-Domain")
+    d.add_argument("--max-total", type=int, default=None,
+                   help="stop the whole run after this many new rows (all domains)")
     d.add_argument("--dry-run", action="store_true",
                    help="discover + write CSV but do not append to Sources.csv")
     d.add_argument("--out", default=None,
                    help="path for the candidate CSV (default: logs/discovered/)")
-    d.add_argument("--api-key", default=None,
-                   help="Google API key (env: GOOGLE_SEARCH_API_KEY)")
-    d.add_argument("--cse-id", default=None,
-                   help="Programmable Search id (env: GOOGLE_SEARCH_ENGINE_ID)")
+    d.add_argument("--searxng-url", default=None,
+                   help="SearXNG base URL (env: SEARXNG_URL; default http://localhost:8080)")
 
     # ── synthetic-scan (curation aid) ─────────────────────────────────────────
     ss = sub.add_parser("synthetic-scan",
@@ -176,6 +178,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--source-timeout", type=float, default=1800.0,
                    help="per-source wall-clock timeout in seconds "
                         "(abandon a hung source; default 1800)")
+    a.add_argument("--no-crawler", action="store_true",
+                   help="skip website (crawl) sources during ingest for this run")
     return p
 
 
@@ -208,7 +212,8 @@ def main(argv: list[str] | None = None) -> None:
                             resume=args.resume,
                             limit=args.limit,
                             source_timeout=args.source_timeout,
-                            max_source_gb=args.max_source_gb)
+                            max_source_gb=args.max_source_gb,
+                            crawl=not args.no_crawler)
 
     elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
@@ -244,11 +249,8 @@ def main(argv: list[str] | None = None) -> None:
         summary = sourcing.discover(
             args.sources, domains=args.domains,
             per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
-            mode=args.mode, dry_run=args.dry_run, out_csv=args.out,
-            api_key=(args.api_key or os.environ.get("GOOGLE_SEARCH_API_KEY")
-                     or os.environ.get("GOOGLE_API_KEY")),
-            cse_id=(args.cse_id or os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
-                    or os.environ.get("GOOGLE_CSE_ID")))
+            max_total=args.max_total, mode=args.mode, dry_run=args.dry_run,
+            out_csv=args.out, base_url=args.searxng_url)
         print(f"source: {summary['found']} hits, {summary['new']} new, "
               f"{summary['appended']} appended -> {summary['csv']}")
 
@@ -267,6 +269,7 @@ def main(argv: list[str] | None = None) -> None:
             source_timeout=args.source_timeout,
             max_source_gb=args.max_source_gb,
             drop_non_english=args.drop_non_english,
+            crawl=not args.no_crawler,
         )
 
 

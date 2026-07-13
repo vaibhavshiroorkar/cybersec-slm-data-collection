@@ -17,6 +17,11 @@ st.caption("The cleaned corpus checked against the sufficiency gate. A blocker "
            "halts the full pipeline until data is added or rebalanced.")
 st.divider()
 
+# ------------------------------------------------------------------ run --------
+st.subheader("Run this stage")
+ui.stage_run_control("eda", run_label="Run EDA")
+st.divider()
+
 # --------------------------------------------------------------- gate ----------
 st.subheader("Sufficiency gate")
 eda = data.latest_eda()

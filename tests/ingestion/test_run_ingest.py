@@ -43,7 +43,7 @@ def _wire(monkeypatch, tmp_path):
 
     seen_clean: list = []
 
-    def _proc(descriptor, *, data_root=None, limit=None, clean=True):
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
         seen_clean.append(clean)
         # fetch-only: create the raw folder and leave it in place.
         folder = tmp_path / "raw" / descriptor["url"].replace("://", "_")

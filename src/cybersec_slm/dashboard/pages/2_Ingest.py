@@ -17,6 +17,11 @@ st.caption("Sources fetched to `data/raw/`. The table below maps the folder tree
            "on disk, one row per source.")
 st.divider()
 
+# ------------------------------------------------------------------ run --------
+st.subheader("Run this stage")
+ui.stage_run_control("ingest", run_label="Run ingest")
+st.divider()
+
 # ------------------------------------------------------------------ stats ------
 st.subheader("Ingested (raw)")
 raw = data.data_funnel()["raw"]

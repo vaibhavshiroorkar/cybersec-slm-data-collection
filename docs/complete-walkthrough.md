@@ -192,11 +192,14 @@ anything, and nothing it finds reaches ingestion directly. It lives in
 The flow, driven by `run.py::discover`:
 
 1. For each cybersecurity sub-domain, it runs a set of keyword searches through
-   the Google Programmable Search API. The keywords live in `keywords.py`, one
-   list per sub-domain, in two flavors: a `datasets` catalog (biased toward
-   corpora and repositories) and a `text` catalog (biased toward articles,
-   guides, and writeups). A query qualifier is appended to each keyword to push
-   results toward the kind of page you want.
+   a self-hosted SearXNG instance. The keywords live in `sources/keywords.yaml`
+   (an editable catalog, loaded by `catalog.py`, falling back to the built-in
+   lists in `keywords.py` when the file is absent), one list per sub-domain, in
+   two flavors: a `datasets` catalog (biased toward corpora and repositories) and
+   a `text` catalog (biased toward articles, guides, and writeups). A query
+   qualifier is appended to each keyword to push results toward the kind of page
+   you want. Two independent caps bound a run: `--max-per-domain` (new rows per
+   sub-domain) and `--max-total` (new rows across the whole run).
 2. Each search hit becomes a candidate catalog row (`row.py` builds it, assigning
    the sub-domain and inferring the other fields). `classify.py` and the
    `DOMAIN_VOCAB` term lists help break ties on ambiguous results.
@@ -206,10 +209,11 @@ The flow, driven by `run.py::discover`:
    even a live run leaves a record of exactly what was added. Unless you pass
    `--dry-run`, they are also appended to `sources/Sources.csv`.
 
-The `search.py` module wraps the Google API and raises a clear `SearchError` when
-credentials are missing or the request fails. Credentials come from
-`--api-key` / `--cse-id` or the `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_ENGINE_ID`
-environment variables.
+The `search.py` module queries the SearXNG JSON API and raises a clear
+`SearchError` when the instance is unreachable or has the JSON format disabled.
+The base URL comes from `--searxng-url` or the `SEARXNG_URL` environment variable
+(default `http://localhost:8080`); the instance must enable the JSON format
+(`search: formats: [html, json]` in its `settings.yml`).
 
 There is also a curation aid, `synthetic_scan.py`, exposed as
 `cybersec-slm synthetic-scan`. It reads each catalog row's name, description,
@@ -849,7 +853,7 @@ Every API key is optional for a basic local run and is read from `.env`
 |---|---|---|
 | `NVD_API_KEY` | NVD CVE feed (higher rate limit) | optional |
 | `KAGGLE_API_TOKEN` | Kaggle sources | only for Kaggle sources |
-| `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID` | the `source` stage | only for sourcing |
+| `SEARXNG_URL` | the `source` stage (SearXNG discovery) | optional (default `http://localhost:8080`) |
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` go) | optional |
 | `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` | the ingestion license gate (on by default; `0` disables) | optional |
 | `CYBERSEC_SLM_TRANSLATE` | the cleaning translate step (`off` skips online translation) | optional |

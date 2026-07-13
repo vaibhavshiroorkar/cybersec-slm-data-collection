@@ -84,7 +84,7 @@ def _get_synthetic_ids() -> frozenset[str]:
 
 def process_source(
     descriptor: dict, *, data_root: str | None = None, limit: int | None = None,
-    clean: bool = True,
+    clean: bool = True, crawl: bool = True,
 ) -> dict:
     """Fetch one source, run the light EDA gate, and (optionally) clean it.
 
@@ -92,7 +92,8 @@ def process_source(
     light_eda_report, flags, clean_rows}``.  ``ingest_rows`` are replayed into the
     real ingest log by the parent. With ``clean=False`` (the ingest stage) the
     worker stops after the gate and leaves the raw folder in place; the separate
-    clean stage cleans the whole raw tree later.
+    clean stage cleans the whole raw tree later. With ``crawl=False`` a website
+    (crawl) source is recorded as skipped and never fetched.
     """
     collector = _Collector()
     result = {"descriptor": descriptor, "status": "ok", "error": None,
@@ -101,6 +102,20 @@ def process_source(
               "flags": {"synthetic": False, "license_risk": None,
                         "security_hazards": []}}
     label = descriptor.get("ref") or descriptor.get("slug") or descriptor.get("kind")
+
+    # Crawler gate: with the crawler disabled for this run, website sources are
+    # recorded as skipped (never fetched) so the rest of the run is unaffected.
+    if not crawl and descriptor.get("kind") == "website":
+        result["status"] = "skipped"
+        result["error"] = "crawler disabled for this run"
+        logger.info(f"  SKIPPED (crawler off) {descriptor_key(descriptor)}")
+        collector.record(kind=descriptor.get("kind"), name=label,
+                         domain=descriptor.get("domain"),
+                         source_url=descriptor.get("start_url") or descriptor.get("url"),
+                         license=descriptor.get("license"),
+                         status="skipped:crawler-off")
+        result["ingest_rows"] = collector.rows
+        return result
 
     # License gate (commercial-only): never fetch a source we can't train on
     # commercially. Skipped sources are logged + recorded, not fetched.

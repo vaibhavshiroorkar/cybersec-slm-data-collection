@@ -278,6 +278,16 @@ def catalog_summary() -> dict:
     return {"total": len(rows), "by_domain": by_domain}
 
 
+def latest_source_summary() -> dict | None:
+    """Newest sourcing-run summary (``logs/discovered/summary-*.json``), or None.
+
+    Written by :func:`cybersec_slm.sourcing.run.discover`; carries the per-keyword
+    hit/new counts so the Sourcing page can show which keywords ran.
+    """
+    paths = sorted(glob.glob(os.path.join(_logs(), "discovered", "summary-*.json")))
+    return _read_json(paths[-1]) if paths else None
+
+
 def _cat_num(v) -> float:
     """Parse a catalog numeric cell (tolerates commas / blanks) to a float."""
     try:
