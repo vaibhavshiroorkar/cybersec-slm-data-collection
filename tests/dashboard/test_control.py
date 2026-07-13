@@ -60,8 +60,31 @@ def test_reset_deletes_data_and_logs(tmp_path, monkeypatch):
     res = control.reset()
     assert res["ok"] is True
     assert set(res["removed"]) == {"data", "logs"}
+    assert res["skipped"] == []
     assert not (tmp_path / "data").exists()
     assert not (tmp_path / "logs").exists()
+
+
+def test_reset_removes_readonly_files(tmp_path, monkeypatch):
+    # Regression: rmtree(ignore_errors=True) silently left read-only files behind
+    # on Windows, so a reset only half-cleared data/. It must be fully removed now.
+    import os
+    import stat
+
+    _use_root(tmp_path, monkeypatch)
+    (tmp_path / "data" / "raw").mkdir(parents=True)
+    ro = tmp_path / "data" / "raw" / "locked.jsonl"
+    ro.write_text("{}", encoding="utf-8")
+    os.chmod(ro, stat.S_IREAD)           # read-only: the case that used to leak
+    try:
+        res = control.reset()
+        assert res["ok"] is True
+        assert "data" in res["removed"]
+        assert res["skipped"] == []
+        assert not (tmp_path / "data").exists()
+    finally:
+        if ro.exists():
+            os.chmod(ro, stat.S_IWRITE)
 
 
 def test_reset_refused_while_running(tmp_path, monkeypatch):

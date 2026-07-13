@@ -65,8 +65,18 @@ if b[2].button("⏹ Stop", disabled=not running, use_container_width=True):
     control.stop()
     st.rerun()
 if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
-               help="Delete all pipeline data and logs (clean slate)"):
-    st.session_state["confirm_reset"] = True
+               help="Instantly delete the entire data/ folder and logs (clean slate)"):
+    res = control.reset()
+    if not res.get("ok"):
+        st.error(res["error"])
+    else:
+        removed = ", ".join(res.get("removed") or []) or "nothing"
+        skipped = res.get("skipped") or []
+        msg = f"Reset: cleared {removed}."
+        if skipped:
+            msg += f" {len(skipped)} file(s) in use kept (e.g. the active log)."
+        st.toast(msg, icon="🗑")
+    st.rerun()
 
 if running:
     st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  session (pid) "
@@ -74,21 +84,9 @@ if running:
 elif cstat.get("stale"):
     st.caption("Previous run ended without a clean stop.")
 else:
-    st.caption("Auto-rebalance is off by default (enable it in Advanced settings). "
-               "Raw files are kept after cleaning. Controls act on this machine.")
-
-if st.session_state.get("confirm_reset") and not running:
-    st.warning("Delete all pipeline data (`data/` and `logs/`)? This cannot be undone.")
-    r = st.columns(2)
-    if r[0].button("Yes, delete everything", type="primary", use_container_width=True):
-        res = control.reset()
-        st.session_state["confirm_reset"] = False
-        if not res.get("ok"):
-            st.error(res["error"])
-        st.rerun()
-    if r[1].button("Cancel", use_container_width=True):
-        st.session_state["confirm_reset"] = False
-        st.rerun()
+    st.caption("Reset instantly deletes the data/ folder (no confirmation). "
+               "Auto-rebalance is off by default; raw files are kept after cleaning. "
+               "Controls act on this machine.")
 
 st.divider()
 
