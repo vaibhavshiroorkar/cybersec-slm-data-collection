@@ -16,8 +16,7 @@ import streamlit as st
 
 from cybersec_slm.dashboard import cached, charts, control, data, settings_store, ui
 
-st.set_page_config(page_title="cybersec-slm dashboard", page_icon="🛡️",
-                   layout="wide")
+st.set_page_config(page_title="cybersec-slm dashboard", layout="wide")
 ui.inject_css()
 
 st.title("cybersec-slm-data-collection")
@@ -36,7 +35,7 @@ def _live() -> None:
     t = data.run_timing()
 
     top = st.columns(3)
-    top[0].metric("Pipeline", "● running" if running else "○ idle")
+    top[0].metric("Pipeline", "running" if running else "idle")
     top[1].metric("Stage", phase.get("label", "n/a"))
     if running and t.get("elapsed_s") is not None:
         top[2].metric("Elapsed", charts.fmt_duration(t["elapsed_s"]))
@@ -58,18 +57,18 @@ _saved_all = settings_store.merged_all()
 settings = ui.advanced_settings("all", defaults=_saved_all)
 run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
 b = st.columns(4)
-if b[0].button("▶ Start", disabled=running, use_container_width=True,
+if b[0].button("Start", disabled=running, use_container_width=True,
                help="Run all stages: ingest, clean, EDA, schema"):
     res = control.start("all", settings=run_settings)
     st.rerun() if res.get("ok") else st.error(res["error"])
-if b[1].button("⏵ Resume", disabled=running, use_container_width=True,
+if b[1].button("Resume", disabled=running, use_container_width=True,
                help="Continue a prior run, skipping sources already fetched"):
     res = control.start("all", resume=True, settings=run_settings)
     st.rerun() if res.get("ok") else st.error(res["error"])
-if b[2].button("⏹ Stop", disabled=not running, use_container_width=True):
+if b[2].button("Stop", disabled=not running, use_container_width=True):
     control.stop()
     st.rerun()
-if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
+if b[3].button("Reset", disabled=running, use_container_width=True,
                help="Instantly delete the entire data/ folder and logs (clean slate)"):
     res = control.reset()
     if not res.get("ok"):
@@ -80,11 +79,8 @@ if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
         msg = f"Reset: cleared {removed}."
         if skipped:
             msg += f" {len(skipped)} file(s) in use kept (e.g. the active log)."
-        st.toast(msg, icon="🗑")
+        st.toast(msg)
     st.rerun()
-
-ui.save_settings_button("all", settings, key="all_save",
-                        label="💾 Save these settings for the full run")
 
 if running:
     st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  session (pid) "
@@ -104,7 +100,7 @@ st.divider()
 # stable placeholder; the Refresh button (or a run) clears the cache.
 _fh = st.columns([4, 1])
 _fh[0].subheader("Corpus funnel")
-if _fh[1].button("↻ Refresh", key="funnel_refresh", use_container_width=True,
+if _fh[1].button("Refresh", key="funnel_refresh", use_container_width=True,
                  help="Remeasure data/ now (otherwise cached for ~90s)"):
     cached.clear_stats()
     st.rerun()
@@ -159,7 +155,7 @@ with st.expander("Session history"):
                    "started": h["started"],
                    "last activity": charts.fmt_age(h["age_s"]),
                    "size": charts.fmt_size(h["size_kb"] / 1024),
-                   "current": "●" if h["current"] else ""} for h in hist])
+                   "current": "yes" if h["current"] else ""} for h in hist])
     else:
         st.caption("No pipeline sessions yet.")
 

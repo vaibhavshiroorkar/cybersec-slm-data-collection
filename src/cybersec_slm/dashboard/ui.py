@@ -13,12 +13,13 @@ from __future__ import annotations
 from .. import stages
 
 # Status vocabulary shared by the Overview strip and the stage-page headers.
-PILL = {"done": "✅", "running": "🟢", "pending": "○", "failed": "⛔", "idle": "○"}
+PILL = {"done": "done", "running": "running", "pending": "pending",
+        "failed": "failed", "idle": "idle"}
 
 
 def status_pill(state: str) -> str:
-    """A compact ``<emoji> <state>`` label for a stage/run state (never raises)."""
-    return f"{PILL.get(state, '○')} {state}"
+    """A plain-text label for a stage/run state (never raises; no emoji)."""
+    return PILL.get(state, state)
 
 
 def inject_css() -> None:
@@ -100,20 +101,19 @@ def stage_run_control(stage: str, *, run_label: str = "Run this stage") -> None:
     running = cstat["running"]
     settings = advanced_settings(stage)
     c1, c2 = st.columns(2)
-    if c1.button(f"▶ {run_label}", disabled=running, use_container_width=True,
+    if c1.button(run_label, disabled=running, use_container_width=True,
                  key=f"{stage}_run"):
         res = control.start(stage, settings=settings)
         if res.get("ok"):
             st.rerun()
         else:
             st.error(res["error"])
-    if c2.button("⏹ Stop", disabled=not running, use_container_width=True,
+    if c2.button("Stop", disabled=not running, use_container_width=True,
                  key=f"{stage}_stop"):
         control.stop()
         st.rerun()
-    save_settings_button(stage, settings, key=f"{stage}_save")
     if running:
-        st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  "
+        st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
                    f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
 
 
@@ -130,14 +130,17 @@ def stage_position(key: str) -> str:
     return f"Stage {stages.stage_keys().index(key) + 1} of {len(stages.STAGES)}"
 
 
-def advanced_settings(stage: str, defaults: dict | None = None) -> dict:
+def advanced_settings(stage: str, defaults: dict | None = None,
+                      save_extra: dict | None = None) -> dict:
     """Render an expander of the advanced flags ``stage`` accepts; return settings.
 
     Only shows the widgets for flags that stage supports (mirrors the CLI via
     ``control._STAGE_FLAGS``), so every page reuses one consistent panel. Widgets
     are seeded from ``defaults`` when given, otherwise from the stage's saved
     settings (:mod:`settings_store`), so previously-saved values are the starting
-    point and survive a restart.
+    point and survive a restart. A "Save as defaults" button lives inside the
+    panel; it persists the current settings merged with ``save_extra`` (used by the
+    Sourcing page to also save its sub-domain / mode selection).
     """
     import streamlit as st
 
@@ -259,11 +262,13 @@ def advanced_settings(stage: str, defaults: dict | None = None) -> dict:
             s["fresh"] = st.checkbox("fresh (ignore existing dataset)",
                                      value=bool(base.get("fresh", False)),
                                      key=f"{stage}_fresh")
+        save_settings_button(stage, {**s, **(save_extra or {})},
+                             key=f"{stage}_save")
     return s
 
 
 def save_settings_button(stage: str, settings: dict, *, key: str,
-                         label: str = "💾 Save as defaults") -> None:
+                         label: str = "Save as defaults") -> None:
     """Render a button that persists ``settings`` as the saved defaults for ``stage``.
 
     Saved settings seed this stage's panel on the next load and feed the full
@@ -277,4 +282,4 @@ def save_settings_button(stage: str, settings: dict, *, key: str,
                  help="Persist these settings; reused for this stage's own runs "
                       "and for the full pipeline run on the Overview page."):
         settings_store.save_stage(stage, settings)
-        st.toast(f"Saved {stage} settings", icon="💾")
+        st.toast(f"Saved {stage} settings")

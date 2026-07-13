@@ -54,26 +54,25 @@ with st.expander(f"Keywords that will run ({len(kw_rows)})",
     else:
         st.caption("Select at least one sub-domain to see its keywords.")
 
-adv = ui.advanced_settings("source")
+adv = ui.advanced_settings("source", save_extra={"domains": selected, "mode": mode})
 settings = {**adv, "domains": selected, "mode": mode}
 
 cstat = control.status()
 running = cstat["running"]
 c1, c2 = st.columns(2)
-if c1.button("▶ Run discovery", disabled=running or not selected,
+if c1.button("Run discovery", disabled=running or not selected,
              use_container_width=True, key="src_run"):
     res = control.start("source", settings=settings)
     if res.get("ok"):
         st.rerun()
     else:
         st.error(res["error"])
-if c2.button("⏹ Stop", disabled=not running, use_container_width=True,
+if c2.button("Stop", disabled=not running, use_container_width=True,
              key="src_stop"):
     control.stop()
     st.rerun()
-ui.save_settings_button("source", settings, key="source_save")
 if running:
-    st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  "
+    st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
                f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
 else:
     st.caption("Discovery runs as a background process; watch its log on the "
