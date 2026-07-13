@@ -82,3 +82,44 @@ def test_ingest_resume_skips_already_fetched(tmp_path, monkeypatch):
 
     result = parallel.run_ingest(resume=True)
     assert result["ok"] == 1        # only http://b is fetched
+
+
+def test_ingest_selective_fetches_only_chosen_domains(tmp_path, monkeypatch):
+    monkeypatch.setattr(parallel, "COMPLETED_LEDGER", str(tmp_path / "led.txt"))
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
+
+    # two sources in different Sub-Domains
+    descriptors = [{"kind": "url", "url": "http://a", "domain": "Crypto",
+                    "license": "", "description": ""},
+                   {"kind": "url", "url": "http://b", "domain": "Cloud",
+                    "license": "", "description": ""}]
+    monkeypatch.setattr(parallel.sources, "load_descriptors",
+                        lambda spec=None, **kw: descriptors)
+
+    class _Log:
+        def record_many(self, rows):
+            pass
+    monkeypatch.setattr(parallel, "IngestLog", _Log)
+
+    # selective fresh run wipes only the chosen Sub-Domain's raw folder
+    wiped: list = []
+    monkeypatch.setattr(parallel, "_wipe_dir", lambda p: wiped.append(p))
+
+    fetched: list = []
+
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
+        fetched.append(descriptor["domain"])
+        return {"status": "ok", "folder": None, "ingest_rows": [],
+                "light_eda_report": {}, "flags": {}, "clean_rows": []}
+    monkeypatch.setattr(parallel.worker, "process_source", _proc)
+
+    result = parallel.run_ingest(resume=False, domains=["Crypto"])
+
+    import os
+
+    from cybersec_slm import core
+    assert result["ok"] == 1
+    assert fetched == ["Crypto"]                       # Cloud was filtered out
+    # only Crypto's raw folder is wiped (not the whole tree, not the ledger)
+    assert wiped == [os.path.join(core.RAW_DATA, "Crypto")]

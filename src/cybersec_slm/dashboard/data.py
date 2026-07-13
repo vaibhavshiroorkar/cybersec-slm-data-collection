@@ -278,6 +278,22 @@ def catalog_summary() -> dict:
     return {"total": len(rows), "by_domain": by_domain}
 
 
+def catalog_subdomains() -> list[str]:
+    """Sorted Sub-Domains present in the source catalog (for selective ingest)."""
+    return sorted(catalog_summary()["by_domain"].keys())
+
+
+def raw_subdomains() -> list[str]:
+    """Sorted Sub-Domains that have fetched data under ``data/raw/`` (for clean)."""
+    raw = os.path.join(_root(), "data", "raw")
+    if not os.path.isdir(raw):
+        return []
+    try:
+        return sorted(d.name for d in os.scandir(raw) if d.is_dir())
+    except OSError:
+        return []
+
+
 def latest_source_summary() -> dict | None:
     """Newest sourcing-run summary (``logs/discovered/summary-*.json``), or None.
 

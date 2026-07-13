@@ -134,3 +134,15 @@ def test_build_command_source_drops_unrelated_flags():
     s = _joined(cmd)
     assert "--workers" not in s        # not a source-stage flag
     assert "--dry-run" in s
+
+
+def test_build_command_selective_ingest_domains():
+    cmd = control.build_command("ingest", settings={
+        "domains": ["Cryptography", "Cloud Security"]})
+    s = _joined(cmd)
+    assert s.endswith("--domains Cryptography Cloud Security")
+
+
+def test_build_command_selective_clean_domains():
+    cmd = control.build_command("clean", settings={"domains": ["Cryptography"]})
+    assert "clean --domains Cryptography" in _joined(cmd)

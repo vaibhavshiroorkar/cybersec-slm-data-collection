@@ -49,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="drop non-English records instead of translating them")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
+    c.add_argument("--domains", nargs="*", default=None,
+                   help="clean only these Sub-Domains (selective clean; a fresh run "
+                        "wipes only their data/clean/<domain>/ folders)")
     c.add_argument("--cap", type=int, default=None,
                    help="max records per domain (balance action)")
     c.add_argument("--source-share", type=float, default=None, metavar="SHARE",
@@ -103,6 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "(abandon a hung source; default 1800)")
     ig.add_argument("--no-crawler", action="store_true",
                     help="skip website (crawl) sources for this run")
+    ig.add_argument("--domains", nargs="*", default=None,
+                    help="fetch only these Sub-Domains (selective ingest; a fresh "
+                         "run wipes only their data/raw/<domain>/ folders)")
 
     # ── source (SearXNG source discovery) ────────────────────────────────────
     d = sub.add_parser("source",
@@ -192,7 +198,8 @@ def main(argv: list[str] | None = None) -> None:
             from .ingestion import parallel
             parallel.run_clean(keep_raw=not args.purge_raw, limit=args.limit,
                                resume=args.resume,
-                               drop_non_english=args.drop_non_english)
+                               drop_non_english=args.drop_non_english,
+                               domains=args.domains)
         elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
@@ -213,7 +220,8 @@ def main(argv: list[str] | None = None) -> None:
                             limit=args.limit,
                             source_timeout=args.source_timeout,
                             max_source_gb=args.max_source_gb,
-                            crawl=not args.no_crawler)
+                            crawl=not args.no_crawler,
+                            domains=args.domains)
 
     elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
