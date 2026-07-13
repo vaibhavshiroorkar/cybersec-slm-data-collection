@@ -114,12 +114,15 @@ def test_append_rows_and_existing_links_round_trip(tmp_path):
 
 
 def test_parse_items_tolerates_missing_fields_and_no_items():
+    # SearXNG JSON shape: {"results": [{url, title, content}, ...]}
     assert _parse_items({}) == []
-    payload = {"items": [
-        {"title": "T", "link": "https://x.com/a", "snippet": "line1\nline2"},
-        {"title": "no link"},                       # dropped (no link)
+    payload = {"results": [
+        {"title": "T", "url": "https://x.com/a", "content": "line1\nline2"},
+        {"title": "no link"},                       # dropped (no url)
     ]}
     items = _parse_items(payload)
     assert len(items) == 1
     assert items[0].link == "https://x.com/a"
     assert "\n" not in items[0].snippet
+    # display_link falls back to the host when absent.
+    assert items[0].display_link == "x.com"

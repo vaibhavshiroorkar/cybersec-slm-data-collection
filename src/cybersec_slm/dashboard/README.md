@@ -36,7 +36,10 @@ location is all it takes to serve a hosted deploy later, no code change.
 - **Sourcing / Ingest / Clean / EDA / Schema** - one page per stage. Each has a
   `Run this stage` control with only that stage's advanced flags, a fixed-height
   scrollable stage log, and the stage's inputs/outputs (catalog, raw ledger, clean
-  + loss breakdown, sufficiency gate + trends, normalize report + manifest).
+  + loss breakdown, sufficiency gate + trends, normalize report + manifest). The
+  Sourcing page also runs SearXNG discovery on its own: pick sub-domains, preview
+  every keyword that will run, set per-domain and total caps, and add or remove
+  sub-domains and keywords (persisted to `sources/keywords.yaml`).
 - **Dataset** - filter by domain/subdomain/source/type/lang (facets from the
   manifest), full-text substring search, a paginated results table with a full
   record detail, and previews of what was rejected or de-duplicated.

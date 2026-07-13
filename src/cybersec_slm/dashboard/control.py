@@ -30,30 +30,41 @@ CONTROL_NAME = "pipeline_run.json"
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
 _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
-            "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english"},
-    "source": set(),
+            "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english",
+            "no_crawler"},
+    "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
+               "dry_run"},
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
-               "max_source_gb"},
+               "max_source_gb", "no_crawler"},
     "clean": {"purge_raw", "limit", "resume", "drop_non_english"},
     "eda": {"no_auto_rebalance", "no_enforce"},
     "schema": {"fresh", "limit"},
 }
 
 # setting key -> (cli flag, kind). "value" flags take an argument; "bool" flags
-# are bare switches emitted only when truthy. Ordered so build_command output is
-# deterministic (tests match exact substrings).
+# are bare switches emitted only when truthy; "list" flags emit the flag followed
+# by each value (for nargs="*" args). Ordered so build_command output is
+# deterministic (tests match exact substrings); "list" flags come last so their
+# greedy nargs="*" never swallows a following flag's value.
 _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("workers", "--workers", "value"),
     ("sources", "--sources", "value"),
     ("source_timeout", "--source-timeout", "value"),
     ("limit", "--limit", "value"),
     ("max_source_gb", "--max-source-gb", "value"),
+    ("mode", "--mode", "value"),
+    ("per_keyword", "--per-keyword", "value"),
+    ("max_per_domain", "--max-per-domain", "value"),
+    ("max_total", "--max-total", "value"),
     ("purge_raw", "--purge-raw", "bool"),
     ("drop_non_english", "--drop-non-english", "bool"),
     ("no_auto_rebalance", "--no-auto-rebalance", "bool"),
     ("no_enforce", "--no-enforce", "bool"),
+    ("no_crawler", "--no-crawler", "bool"),
+    ("dry_run", "--dry-run", "bool"),
     ("fresh", "--fresh", "bool"),
     ("resume", "--resume", "bool"),
+    ("domains", "--domains", "list"),
 ]
 
 
@@ -77,6 +88,10 @@ def build_command(stage: str = "all", *, resume: bool = False,
         if kind == "bool":
             if val:
                 cmd.append(flag)
+        elif kind == "list":
+            vals = [str(v) for v in (val or []) if str(v) != ""]
+            if vals:
+                cmd += [flag, *vals]
         elif val is not None and val != "":
             cmd += [flag, str(val)]
     return cmd

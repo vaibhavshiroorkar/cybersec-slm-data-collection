@@ -21,7 +21,7 @@ or quarantined instead of slipping downstream unnoticed.
 
 | Stage | In plain terms | Output |
 |---|---|---|
-| **Sourcing** *(optional)* | Goes looking for new sources by searching the web and adds the candidates to a tracking catalog for a human to review. Nothing here is trusted automatically. | `sources/Sources.csv` |
+| **Sourcing** *(optional)* | Goes looking for new sources by searching the web through a self-hosted [SearXNG](https://docs.searxng.org/) instance, and adds the candidates to a tracking catalog for a human to review. The sub-domains and their search keywords are editable and generalize to any topic. Nothing here is trusted automatically. | `sources/Sources.csv` |
 | **Ingestion** | Downloads each *approved* source (datasets, PDFs, feeds, crawlable sites) and converts everything to one simple line-per-record format. | `data/raw/` |
 | **Cleaning** | Tidies the text, flags suspicious records, removes duplicates, redacts personal data, and translates non-English text into English. | `data/clean/` (plus `flagged/`, `dropped/`) |
 | **EDA gate** | Checks whether the corpus is actually good enough: enough volume, balanced across topics, not dominated by any single source. If it isn't, the run stops here. | `logs/eda/` |
@@ -55,8 +55,9 @@ uv run cybersec-slm all                 # ingest → clean → EDA gate → norm
 uv run cybersec-slm all --resume        # re-run without re-downloading finished sources
 ```
 
-That writes the finished corpus to `data/final/dataset.jsonl`. To watch a run live,
-browse the result, and ask a built-in Q&A agent about the corpus — all in the browser:
+That writes the finished corpus to `data/final/dataset.jsonl`. To run the pipeline,
+watch it live, browse the result, and ask a built-in Q&A agent about the corpus, all in
+the browser:
 
 ```bash
 uv sync --extra dashboard               # installs Streamlit (opt-in extra)
@@ -75,13 +76,13 @@ To run the stages individually, tune them with flags, or deploy with Docker, see
 src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
   cli.py         the single entry point (source / run / clean / eda / normalize / flow / dashboard / all)
-  sourcing/      search-engine source discovery → Sources.csv catalog
+  sourcing/      SearXNG source discovery (editable keyword catalog) → Sources.csv
   ingestion/     fetch, scrape, crawl, allowlist + license gate, parallel worker
   cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
   orchestration/ Prefect build-corpus flow
-  dashboard/     read-only Streamlit monitor + dataset explorer + Q&A agent
+  dashboard/     Streamlit control center: run stages, monitor live, explore data, Q&A agent
 sources/         Sources.csv (the curated catalog) + allowlist.yaml + the research behind them
 tests/           pytest suite covering every stage
 docs/            architecture, commands, schema, deployment, and security notes
@@ -121,8 +122,9 @@ v1 pipeline. All five stages are built, wired end to end, and covered by the tes
 and the operational layer around them is in place: ingestion sits behind two gates (the
 source allowlist and a default-deny commercial-license gate), releases are
 content-hashed into a provenance manifest and can be versioned and shipped through
-Prefect + DVC on AWS, and a read-only Streamlit dashboard adds live run monitoring, a
-dataset explorer, and a natural-language Q&A agent over the corpus.
+Prefect + DVC on AWS, and a Streamlit dashboard drives the pipeline from the browser
+with per-stage run controls, live monitoring, a dataset explorer, and a
+natural-language Q&A agent over the corpus.
 
 From here the work is incremental: adding vetted sources, widening PII coverage, and
 tuning the sufficiency thresholds as the corpus grows.

@@ -1,0 +1,239 @@
+subdomains:
+  Application Security:
+    datasets:
+    - vulnerable source code dataset
+    - secure code review dataset
+    - SAST static analysis labeled dataset
+    - OWASP code vulnerability dataset
+    - CWE annotated source code dataset
+    - software vulnerability commit dataset
+    - web application attack payload dataset
+    - code security bug dataset github
+    text:
+    - OWASP top 10 explained
+    - secure coding best practices
+    - SQL injection prevention guide
+    - cross-site scripting XSS walkthrough
+    - threat modeling tutorial
+    - application security testing guide
+    - API security best practices
+    - common web vulnerabilities explained
+  Cloud Security:
+    datasets:
+    - cloud security misconfiguration dataset
+    - kubernetes security dataset
+    - cloud CSPM findings dataset
+    - AWS Azure GCP security best practices dataset
+    - container image vulnerability dataset
+    - cloud audit log dataset security
+    - terraform IaC misconfiguration dataset
+    - S3 bucket exposure dataset
+    text:
+    - AWS security best practices guide
+    - kubernetes security hardening tutorial
+    - cloud misconfiguration explained
+    - cloud IAM least privilege guide
+    - container security best practices
+    - cloud incident response guide
+    - securing S3 buckets tutorial
+    - cloud security posture management explained
+  Cryptography:
+    datasets:
+    - cryptography dataset
+    - cipher cryptanalysis dataset
+    - TLS certificate dataset security
+    - encryption algorithms labeled dataset
+    - side channel attack dataset
+    - post-quantum cryptography dataset
+    - NIST PQC standard dataset
+    - lattice-based cryptography dataset
+    - key exchange protocol dataset
+    - crypto CTF challenge dataset
+    text:
+    - cryptography explained
+    - how TLS works explained
+    - public key cryptography tutorial
+    - AES encryption explained
+    - digital signatures explained
+    - post-quantum cryptography explained
+    - NIST post-quantum standards guide
+    - migrating to quantum-safe cryptography guide
+    - common cryptographic attacks explained
+    - key management best practices
+  Data Security and Privacy:
+    datasets:
+    - PII detection dataset
+    - data loss prevention dataset
+    - data privacy compliance dataset
+    - sensitive data classification dataset
+    - GDPR data subject dataset
+    - de-identification anonymization dataset
+    - data breach records dataset
+    - credential leak dataset
+    text:
+    - data protection best practices
+    - GDPR compliance guide
+    - preventing data loss guide
+    - PII handling best practices
+    - data encryption at rest explained
+    - data classification tutorial
+    - privacy by design explained
+    - responding to a data breach guide
+  Governance, Risk and Compliance:
+    datasets:
+    - security compliance controls dataset
+    - GRC risk register dataset
+    - NIST CSF mapping dataset
+    - ISO 27001 controls dataset
+    - security policy document dataset
+    - audit findings dataset cybersecurity
+    - control framework mapping dataset
+    - regulatory compliance dataset security
+    text:
+    - cybersecurity risk management guide
+    - NIST cybersecurity framework explained
+    - ISO 27001 implementation guide
+    - security policy writing best practices
+    - governance risk compliance explained
+    - security audit checklist
+    - third party risk management guide
+    - compliance frameworks compared
+  Identity Access and Management:
+    datasets:
+    - identity access management dataset
+    - authentication logs dataset security
+    - privileged access abuse dataset
+    - IAM policy misconfiguration dataset
+    - account takeover dataset
+    - OAuth SAML token dataset
+    - insider threat access dataset
+    - RBAC permissions dataset
+    text:
+    - identity and access management explained
+    - multi-factor authentication guide
+    - OAuth 2.0 explained
+    - SAML single sign-on tutorial
+    - privileged access management best practices
+    - zero trust identity guide
+    - RBAC vs ABAC explained
+    - preventing account takeover guide
+  Incident Response and Forensics:
+    datasets:
+    - digital forensics dataset
+    - incident response playbook dataset
+    - memory forensics dataset
+    - DFIR investigation dataset
+    - disk image forensic dataset
+    - Windows event log forensic dataset
+    - timeline analysis artifact dataset
+    - malware incident case dataset
+    text:
+    - incident response process explained
+    - digital forensics tutorial
+    - memory forensics with volatility guide
+    - DFIR investigation walkthrough
+    - malware incident handling guide
+    - windows event log analysis tutorial
+    - forensic artifact analysis explained
+    - ransomware incident response playbook
+  Network Security:
+    datasets:
+    - network intrusion detection dataset
+    - network traffic pcap labeled dataset
+    - IDS flow dataset cybersecurity
+    - DDoS attack network dataset
+    - botnet traffic dataset
+    - NetFlow anomaly detection dataset
+    - packet capture malware traffic dataset
+    - firewall log dataset
+    text:
+    - network intrusion detection explained
+    - firewall configuration best practices
+    - DDoS mitigation guide
+    - network segmentation tutorial
+    - packet analysis with wireshark guide
+    - zero trust network architecture explained
+    - VPN security best practices
+    - network protocol attacks explained
+  Penetration Testing:
+    datasets:
+    - penetration testing dataset
+    - exploit proof of concept dataset
+    - exploit database github
+    - red team TTP dataset
+    - web pentest report dataset
+    - privilege escalation technique dataset
+    - attack payload dataset
+    - CTF exploit writeup dataset
+    text:
+    - penetration testing methodology guide
+    - exploit development tutorial
+    - red team operations guide
+    - web application pentest walkthrough
+    - privilege escalation techniques explained
+    - bug bounty writeup
+    - post-exploitation techniques explained
+    - lateral movement techniques guide
+  Security Operations:
+    datasets:
+    - SOC alert triage dataset
+    - SIEM log dataset
+    - security operations detection rules dataset
+    - threat hunting dataset
+    - Sigma rules dataset
+    - security alert labeled dataset
+    - log anomaly detection dataset
+    - EDR telemetry dataset
+    text:
+    - security operations center explained
+    - SIEM best practices guide
+    - threat hunting guide
+    - writing detection rules tutorial
+    - alert triage process explained
+    - MITRE ATT&CK for detection guide
+    - SOC analyst workflow explained
+    - incident escalation best practices
+  Threat Intelligence:
+    datasets:
+    - threat intelligence dataset
+    - IOC indicators of compromise dataset
+    - MITRE ATT&CK technique dataset
+    - phishing URL dataset
+    - APT report dataset
+    - malicious domain dataset
+    - malware family classification dataset
+    - YARA rules dataset
+    - malware API call sequence dataset
+    - threat actor TTP dataset
+    - CTI feed dataset
+    text:
+    - cyber threat intelligence explained
+    - MITRE ATT&CK explained
+    - indicators of compromise guide
+    - threat actor profiling explained
+    - phishing analysis writeup
+    - malware analysis tutorial
+    - reverse engineering malware tutorial
+    - YARA rule writing guide
+    - APT campaign analysis
+    - threat intelligence lifecycle explained
+    - OSINT for threat intelligence guide
+  Vulnerability Management:
+    datasets:
+    - CVE vulnerability dataset
+    - CVSS scoring dataset
+    - vulnerability scan results dataset
+    - CWE weakness enumeration dataset
+    - patch management dataset
+    - vulnerability disclosure dataset
+    - NVD CVE feed dataset
+    - software vulnerability advisory dataset
+    text:
+    - vulnerability management process explained
+    - CVSS scoring explained
+    - CVE and CWE explained
+    - patch management best practices
+    - vulnerability disclosure process explained
+    - risk-based vulnerability prioritization guide
+    - vulnerability scanning tools compared
+    - remediation SLA best practices

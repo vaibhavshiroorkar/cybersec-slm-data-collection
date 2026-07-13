@@ -230,14 +230,15 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
 def run_ingest(spec: str | None = None, *, workers: int | None = None,
                resume: bool = False, limit: int | None = None,
                source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
-               max_source_gb: float | None = None) -> dict:
+               max_source_gb: float | None = None, crawl: bool = True) -> dict:
     """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
 
     Each source is fetched and passed through the license + light-EDA gate by a
     fetch-only worker (``process_source(clean=False)``); its raw folder is left in
     place for the separate clean stage. Fresh (non-resume) wipes ``data/raw/`` and
-    the resume ledger first; ``resume`` skips sources already fetched. Cleaning,
-    cross-source dedup, and raw deletion all belong to :func:`run_clean`.
+    the resume ledger first; ``resume`` skips sources already fetched. With
+    ``crawl=False`` website (crawl) sources are recorded as skipped, not fetched.
+    Cleaning, cross-source dedup, and raw deletion all belong to :func:`run_clean`.
     """
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
     max_mb = max_source_gb * 1024 if max_source_gb else None
@@ -295,7 +296,7 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 
     def _submit(pool, d):
         return pool.submit(worker.process_source, d, data_root=core.DATA_ROOT,
-                           limit=limit, clean=False)
+                           limit=limit, clean=False, crawl=crawl)
 
     try:
         _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
@@ -428,6 +429,7 @@ def run_v2_pipeline(spec: str | None = None, *,
                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
                     max_source_gb: float | None = None,
                     drop_non_english: bool = False,
+                    crawl: bool = True,
                     enforce_eda: bool = True,
                     normalize: bool = True) -> dict:
     """Run the five stages in sequence: ingest -> clean -> EDA -> schema.
@@ -452,6 +454,9 @@ def run_v2_pipeline(spec: str | None = None, *,
         Cap records per file (for smoke tests).
     source_timeout : float
         Per-source wall-clock budget (seconds); a hung source is abandoned.
+    crawl : bool
+        Fetch website (crawl) sources during ingest (default True); False records
+        them as skipped without crawling.
     enforce_eda : bool
         Raise SufficiencyError on EDA blockers (default True).
     normalize : bool
@@ -462,7 +467,7 @@ def run_v2_pipeline(spec: str | None = None, *,
     # Stage 2: fetch every source to data/raw/ (no cleaning).
     ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
                                source_timeout=source_timeout,
-                               max_source_gb=max_source_gb)
+                               max_source_gb=max_source_gb, crawl=crawl)
 
     # Stage 3: clean the whole raw tree + cross-source dedup -> data/clean/.
     clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume,

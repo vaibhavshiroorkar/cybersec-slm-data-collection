@@ -109,3 +109,28 @@ def test_build_command_resume_from_param():
 
 def test_build_command_defaults_to_all():
     assert control.build_command()[3] == "all"
+
+
+def test_build_command_source_flags_and_domains_list():
+    cmd = control.build_command("source", settings={
+        "mode": "both", "per_keyword": 8, "max_total": 25,
+        "domains": ["Application Security", "Cloud Security"]})
+    s = _joined(cmd)
+    assert "source --mode both --per-keyword 8 --max-total 25" in s
+    # --domains comes last and lists every value.
+    assert s.endswith("--domains Application Security Cloud Security")
+
+
+def test_build_command_no_crawler_flag_when_disabled():
+    cmd = control.build_command("all", settings={"no_crawler": True})
+    assert "--no-crawler" in _joined(cmd)
+    # Crawler on (no_crawler False) emits nothing.
+    cmd2 = control.build_command("all", settings={"no_crawler": False})
+    assert "--no-crawler" not in _joined(cmd2)
+
+
+def test_build_command_source_drops_unrelated_flags():
+    cmd = control.build_command("source", settings={"workers": 4, "dry_run": True})
+    s = _joined(cmd)
+    assert "--workers" not in s        # not a source-stage flag
+    assert "--dry-run" in s

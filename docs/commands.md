@@ -89,17 +89,24 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
   `logs/completed_sources.txt`) and resume the final dedup pass, so a re-run won't
   re-download. A fresh run resets the ledger so nothing is silently skipped.
   (`all` accepts `--resume` too.)
+- `--no-crawler`: skip website (crawl) sources for this run (recorded as
+  `skipped:crawler-off`, never fetched). Accepted by `ingest` and `all`.
 
-**`source`** (search-engine source discovery)
+**`source`** (SearXNG source discovery)
 - `--sources PATH`: catalog CSV to append to (default: `sources/Sources.csv`).
 - `--domains ...`: limit to these Sub-Domains (default: all).
 - `--mode datasets|text|both`: keyword catalog (default: `datasets`).
-- `--per-keyword N`: results per keyword (≤10, default 5).
+- `--per-keyword N`: results per keyword (default 5).
 - `--max-per-domain N`: cap new rows kept per Sub-Domain.
+- `--max-total N`: stop the whole run after this many new rows (all domains).
 - `--dry-run`: discover and write the candidate CSV but don't append to the catalog (`sources/Sources.csv`).
 - `--out PATH`: path for the candidate CSV (default: `logs/discovered/`).
-- `--api-key`, `--cse-id`: Google Programmable Search credentials (or set
-  `GOOGLE_SEARCH_API_KEY` / `GOOGLE_SEARCH_ENGINE_ID`).
+- `--searxng-url URL`: SearXNG base URL (or set `SEARXNG_URL`; default
+  `http://localhost:8080`). The instance must enable the JSON format
+  (`search: formats: [html, json]`).
+
+Sub-domains and their keywords are read from `sources/keywords.yaml` (editable;
+falls back to the built-in lists when absent), shared with the dashboard.
 
 **`flow`** (Prefect orchestration, needs the `orchestration` extra)
 - `--sources PATH`: path/URL to a sources file.
@@ -167,7 +174,7 @@ environment variables take precedence. None are required for a basic local run.
 |---|---|---|
 | `NVD_API_KEY` | NVD CVE feed (higher rate limit) | optional |
 | `KAGGLE_API_TOKEN` | Kaggle sources | only for Kaggle sources |
-| `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID` | `source` | only for sourcing |
+| `SEARXNG_URL` | `source` (SearXNG discovery) | optional (default `http://localhost:8080`) |
 | `CYBERSEC_SLM_DATA_ROOT` | all stages (where `data/` and `logs/` are written) | optional |
 | `CYBERSEC_SLM_ENFORCE_ALLOWLIST` | ingestion allowlist gate | optional |
 | `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` | ingestion commercial-license gate (on by default; `0` disables) | optional |

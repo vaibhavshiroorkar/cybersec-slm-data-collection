@@ -16,6 +16,11 @@ ui.stage_header("clean", data.stage_states())
 st.caption("Cleaned and cross-source deduplicated records under `data/clean/`.")
 st.divider()
 
+# ------------------------------------------------------------------ run --------
+st.subheader("Run this stage")
+ui.stage_run_control("clean", run_label="Run clean")
+st.divider()
+
 # ------------------------------------------------------------------ stats ------
 st.subheader("Cleaned")
 funnel = data.data_funnel()
