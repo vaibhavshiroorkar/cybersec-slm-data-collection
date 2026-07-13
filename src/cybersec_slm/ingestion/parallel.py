@@ -230,7 +230,8 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
 def run_ingest(spec: str | None = None, *, workers: int | None = None,
                resume: bool = False, limit: int | None = None,
                source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
-               max_source_gb: float | None = None, crawl: bool = True) -> dict:
+               max_source_gb: float | None = None, crawl: bool = True,
+               domains: list[str] | None = None) -> dict:
     """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
 
     Each source is fetched and passed through the license + light-EDA gate by a
@@ -238,7 +239,12 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
     place for the separate clean stage. Fresh (non-resume) wipes ``data/raw/`` and
     the resume ledger first; ``resume`` skips sources already fetched. With
     ``crawl=False`` website (crawl) sources are recorded as skipped, not fetched.
-    Cleaning, cross-source dedup, and raw deletion all belong to :func:`run_clean`.
+
+    ``domains`` restricts the run to those Sub-Domains (a *selective* ingest):
+    only their sources are fetched, and a fresh run wipes only those Sub-Domains'
+    ``data/raw/<domain>/`` folders (leaving every other Sub-Domain and the resume
+    ledger untouched). Cleaning, cross-source dedup, and raw deletion all belong to
+    :func:`run_clean`.
     """
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
     max_mb = max_source_gb * 1024 if max_source_gb else None
@@ -247,6 +253,17 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
     if not descriptors:
         logger.warning("no sources to ingest")
         return _empty_summary()
+
+    selected = list(domains) if domains else None
+    if selected:
+        wanted = set(selected)
+        n_before = len(descriptors)
+        descriptors = [d for d in descriptors if d.get("domain") in wanted]
+        logger.info(f"ingest: selective - {len(descriptors)} of {n_before} sources "
+                    f"in {sorted(wanted)}")
+        if not descriptors:
+            logger.warning(f"ingest: no sources match sub-domain(s) {sorted(wanted)}")
+            return _empty_summary()
 
     if resume:
         done_keys = _load_completed(COMPLETED_LEDGER)
@@ -259,6 +276,11 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
         if not descriptors:
             logger.info("ingest: resume - all sources already fetched")
             return {**_empty_summary(), "all_done": True}
+    elif selected:
+        # Selective fresh run: wipe only the chosen Sub-Domains, keep the rest of
+        # data/raw/ and the resume ledger intact.
+        for dom in selected:
+            _wipe_dir(os.path.join(core.RAW_DATA, dom))
     else:
         _reset_completed(COMPLETED_LEDGER)
         _wipe_dir(core.RAW_DATA)
@@ -315,7 +337,8 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 # ── Stage 3: Clean (whole tree + cross-source dedup) ──────────────────────────
 
 def run_clean(*, keep_raw: bool = True, limit: int | None = None,
-              resume: bool = False, drop_non_english: bool = False) -> dict:
+              resume: bool = False, drop_non_english: bool = False,
+              domains: list[str] | None = None) -> dict:
     """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
 
     The clean stage of the five-stage pipeline. Cleans every fetched source in one
@@ -326,29 +349,56 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     Fresh (non-resume) wipes ``data/clean/`` and the dedup + report state first;
     ``resume`` continues a partial dedup pass.
 
+    ``domains`` restricts the run to those Sub-Domains (a *selective* clean): only
+    their ``data/raw/<domain>/`` subtrees are cleaned, a fresh run wipes only those
+    Sub-Domains' ``data/clean/<domain>/`` folders (every other Sub-Domain's cleaned
+    output is preserved), and ``keep_raw=False`` deletes only the selected raw
+    folders. The cross-source dedup pass still runs over the whole ``data/clean/``
+    tree so cross-domain duplicates are resolved.
+
     Cross-source dedup folds into this stage (there is no separate "dedup" stage).
     """
     raw_root = core.RAW_DATA
+    selected = list(domains) if domains else None
     if not resume:
         cleaning_pipeline.reset_dedup_state()
-        _wipe_dir(cleaning_pipeline.OUT_CLEAN_DATA)
-        try:
-            os.remove(os.path.join(cleaning_pipeline.REPORTS, "clean_report.csv"))
-        except OSError:
-            pass
+        if selected:
+            for dom in selected:
+                _wipe_dir(os.path.join(cleaning_pipeline.OUT_CLEAN_DATA, dom))
+        else:
+            _wipe_dir(cleaning_pipeline.OUT_CLEAN_DATA)
+            try:
+                os.remove(os.path.join(cleaning_pipeline.REPORTS, "clean_report.csv"))
+            except OSError:
+                pass
 
     if not os.path.isdir(raw_root):
         logger.warning("clean: no raw data to clean (run `cybersec-slm ingest` first)")
         return {"files": 0, "in": 0, "out": 0, "dedup": {}}
 
-    logger.info(f"clean: {raw_root} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
-    # clean_one_source scans find_input_files(raw_root) filtered to the given dir;
-    # passing the raw root itself cleans the whole tree in one pass with the
-    # process-cached transformers (deduper disabled). Cross-source dedup follows.
-    rows = cleaning_pipeline.clean_one_source(
-        raw_root, raw_root=raw_root,
-        clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
-        drop_non_english=drop_non_english)
+    # clean_one_source scans find_input_files under the given dir with the
+    # process-cached transformers (deduper disabled); passing the raw root cleans
+    # the whole tree, passing one Sub-Domain folder cleans just that Sub-Domain.
+    # Cross-source dedup follows, over the whole clean tree either way.
+    if selected:
+        logger.info(f"clean: selective {sorted(set(selected))} -> "
+                    f"{cleaning_pipeline.OUT_CLEAN_DATA}")
+        rows: list[dict] = []
+        for dom in selected:
+            dom_dir = os.path.join(raw_root, dom)
+            if os.path.isdir(dom_dir):
+                rows += cleaning_pipeline.clean_one_source(
+                    dom_dir, raw_root=raw_root,
+                    clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
+                    drop_non_english=drop_non_english)
+            else:
+                logger.warning(f"clean: no raw data for sub-domain {dom!r}")
+    else:
+        logger.info(f"clean: {raw_root} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
+        rows = cleaning_pipeline.clean_one_source(
+            raw_root, raw_root=raw_root,
+            clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
+            drop_non_english=drop_non_english)
     if rows:
         cleaning_pipeline._write_report(rows)
 
@@ -356,7 +406,11 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
         cleaning_pipeline.OUT_CLEAN_DATA, resume=resume)
 
     if not keep_raw:
-        _wipe_dir(raw_root)
+        if selected:
+            for dom in selected:
+                _wipe_dir(os.path.join(raw_root, dom))
+        else:
+            _wipe_dir(raw_root)
 
     total_in = sum(r.get("in", 0) for r in rows)
     total_out = sum(r.get("out", 0) for r in rows)

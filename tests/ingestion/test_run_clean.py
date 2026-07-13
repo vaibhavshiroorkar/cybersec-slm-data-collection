@@ -98,3 +98,51 @@ def test_run_clean_keep_raw_false_deletes_raw(tmp_path, monkeypatch):
     parallel.run_clean(keep_raw=False)   # explicit purge
     assert not raw.exists()
     pipeline.reset_cleaner_cache()
+
+
+def _wire_two_domains(monkeypatch, tmp_path):
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
+    monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean"))
+    monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
+    monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
+    monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+    monkeypatch.setattr(pipeline, "DEDUP_CKPT", str(tmp_path / "ckpt.json"))
+    monkeypatch.setattr(pipeline, "DEDUP_DONE", str(tmp_path / "done.json"))
+    monkeypatch.setattr(pipeline, "Redactor", _StubRedactor)
+    monkeypatch.setattr(pipeline, "LangFilter", _StubLang)
+    monkeypatch.setattr(pipeline, "Translator", _StubTranslator)
+    pipeline.reset_cleaner_cache()
+
+    rec_a = ("An application-security record with enough descriptive prose to pass "
+             "the anomaly gate and land in the cleaned corpus for sub-domain A.")
+    rec_b = ("A network-security record, also long enough to survive the cleaning "
+             "pipeline and remain in the corpus, belonging to sub-domain B.")
+    _write_jsonl(str(raw / "DomA" / "s1" / "a.jsonl"), [{"text": rec_a}])
+    _write_jsonl(str(raw / "DomB" / "s2" / "b.jsonl"), [{"text": rec_b}])
+    return raw
+
+
+def test_run_clean_selective_cleans_only_chosen_and_preserves_others(tmp_path, monkeypatch):
+    raw = _wire_two_domains(monkeypatch, tmp_path)
+    clean_dir = tmp_path / "clean"
+    # a pre-existing cleaned artifact for DomB that a selective clean of DomA must keep
+    preexisting = clean_dir / "DomB" / "s2" / "kept.jsonl"
+    os.makedirs(os.path.dirname(preexisting), exist_ok=True)
+    preexisting.write_text('{"kept": true}\n', encoding="utf-8")
+
+    result = parallel.run_clean(domains=["DomA"], keep_raw=True)
+
+    assert result["files"] == 1                      # only DomA cleaned
+    assert (clean_dir / "DomA").is_dir()             # DomA cleaned output written
+    assert preexisting.exists()                      # DomB cleaned output preserved
+    assert (raw / "DomB").is_dir()                   # DomB raw untouched
+    pipeline.reset_cleaner_cache()
+
+
+def test_run_clean_selective_purge_raw_deletes_only_chosen(tmp_path, monkeypatch):
+    raw = _wire_two_domains(monkeypatch, tmp_path)
+    parallel.run_clean(domains=["DomA"], keep_raw=False)
+    assert not (raw / "DomA").exists()               # chosen raw purged
+    assert (raw / "DomB").is_dir()                   # other raw preserved
+    pipeline.reset_cleaner_cache()

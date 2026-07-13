@@ -39,7 +39,9 @@ location is all it takes to serve a hosted deploy later, no code change.
   + loss breakdown, sufficiency gate + trends, normalize report + manifest). The
   Sourcing page also runs SearXNG discovery on its own: pick sub-domains, preview
   every keyword that will run, set per-domain and total caps, and add or remove
-  sub-domains and keywords (persisted to `sources/keywords.yaml`).
+  sub-domains and keywords (persisted to `sources/keywords.yaml`). Ingest and Clean
+  can run selectively: the advanced settings hold a sub-domain multiselect (empty =
+  all), so a run touches only the chosen sub-domains and leaves the rest in place.
 - **Dataset** - filter by domain/subdomain/source/type/lang (facets from the
   manifest), full-text substring search, a paginated results table with a full
   record detail, and previews of what was rejected or de-duplicated.

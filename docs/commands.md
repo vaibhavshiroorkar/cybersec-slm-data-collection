@@ -91,6 +91,10 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
   (`all` accepts `--resume` too.)
 - `--no-crawler`: skip website (crawl) sources for this run (recorded as
   `skipped:crawler-off`, never fetched). Accepted by `ingest` and `all`.
+- `--domains ...`: run only these Sub-Domains (selective `ingest` / `clean`). A
+  fresh selective run touches only those Sub-Domains' folders
+  (`data/raw/<domain>/` or `data/clean/<domain>/`) and leaves every other
+  Sub-Domain intact; clean still cross-source dedups over the whole corpus.
 
 **`source`** (SearXNG source discovery)
 - `--sources PATH`: catalog CSV to append to (default: `sources/Sources.csv`).

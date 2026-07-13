@@ -35,8 +35,8 @@ _STAGE_FLAGS: dict[str, set[str]] = {
     "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
                "dry_run"},
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
-               "max_source_gb", "no_crawler"},
-    "clean": {"purge_raw", "limit", "resume", "drop_non_english"},
+               "max_source_gb", "no_crawler", "domains"},
+    "clean": {"purge_raw", "limit", "resume", "drop_non_english", "domains"},
     "eda": {"no_auto_rebalance", "no_enforce"},
     "schema": {"fresh", "limit"},
 }

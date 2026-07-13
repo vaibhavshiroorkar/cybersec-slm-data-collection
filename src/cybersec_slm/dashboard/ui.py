@@ -144,6 +144,18 @@ def advanced_settings(stage: str) -> dict:
     if not allowed:
         return s
     with st.expander("Advanced settings"):
+        # Selective run by Sub-Domain (ingest/clean). The source stage renders its
+        # own domain picker on the Sourcing page, so it is excluded here.
+        if "domains" in allowed and stage != "source":
+            from . import data
+            opts = (data.raw_subdomains() if stage == "clean"
+                    else data.catalog_subdomains())
+            picked = st.multiselect(
+                "sub-domains to run (empty = all)", opts, key=f"{stage}_domains",
+                help="Selective run: only these Sub-Domains are processed; "
+                     "everything else is left untouched.")
+            if picked:
+                s["domains"] = picked
         if "workers" in allowed:
             s["workers"] = int(st.number_input(
                 "workers", 1, 32, value=4, key=f"{stage}_workers"))
