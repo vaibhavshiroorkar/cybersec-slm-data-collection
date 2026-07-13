@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -239,21 +240,55 @@ def stop() -> dict:
     return {"ok": True, "stopped": stopped}
 
 
+def _force_rmtree(path: str) -> list[str]:
+    """Delete a directory tree, clearing read-only bits; never raise.
+
+    Returns the paths that could not be removed. ``shutil.rmtree(ignore_errors=
+    True)`` silently leaves read-only files behind on Windows (so a "reset" only
+    half-clears ``data/``); this clears the read-only bit and retries each failed
+    entry. A file another process still holds open (e.g. the dashboard's own live
+    log) genuinely cannot be deleted on Windows and is reported, not swallowed.
+    """
+    failed: list[str] = []
+
+    def _onexc(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)                       # retry the delete now that it's writable
+        except OSError:
+            failed.append(p)
+
+    try:
+        shutil.rmtree(path, onexc=_onexc)
+    except TypeError:                     # Python < 3.12: onexc unsupported
+        shutil.rmtree(path, onerror=lambda f, p, _e: _onexc(f, p, None))
+    except OSError:
+        failed.append(path)
+    return failed
+
+
 def reset() -> dict:
     """Delete ALL pipeline output (``data/`` and ``logs/``) under the data root.
 
-    Refuses while a run is active (stop it first). Returns the removed subtrees.
-    This is a clean slate: raw, cleaned, final, dropped data and every run log,
-    report, and the resume ledger are removed.
+    Refuses while a run is active (stop it first). The ``data/`` folder is cleared
+    completely (read-only files included); ``logs/`` is cleared too, except a log
+    file the current process still holds open, which is reported in ``skipped``
+    rather than silently left behind. The curated catalog under ``sources/`` is
+    never touched. Returns ``{ok, removed, skipped}``.
     """
     if status()["running"]:
         return {"ok": False, "error": "stop the running pipeline before resetting"}
     root = core.data_root()
-    removed = []
+    removed: list[str] = []
+    skipped: list[str] = []
     for sub in ("data", "logs"):
         path = os.path.join(root, sub)
+        if not os.path.isdir(path):
+            continue
+        skipped.extend(_force_rmtree(path))
         if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-            if not os.path.isdir(path):
-                removed.append(sub)
-    return {"ok": True, "removed": removed}
+            # A locked entry kept the tree alive (only ever the live log file);
+            # data/ has no such handle, so it is always fully removed here.
+            continue
+        removed.append(sub)
+    return {"ok": True, "removed": removed, "skipped": skipped}
