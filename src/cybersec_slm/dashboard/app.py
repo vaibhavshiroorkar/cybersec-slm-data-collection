@@ -14,7 +14,7 @@ import os
 
 import streamlit as st
 
-from cybersec_slm.dashboard import cached, charts, control, data, ui
+from cybersec_slm.dashboard import cached, charts, control, data, settings_store, ui
 
 st.set_page_config(page_title="cybersec-slm dashboard", page_icon="🛡️",
                    layout="wide")
@@ -51,15 +51,20 @@ st.divider()
 st.subheader("Run the full pipeline")
 cstat = control.status()
 running = cstat["running"]
-settings = ui.advanced_settings("all")
+# Seed the panel from settings saved on the stage pages, so a value configured
+# (and saved) on the Ingest/Clean/EDA page also drives the full run. Any flag
+# `all` does not accept is dropped by build_command.
+_saved_all = settings_store.merged_all()
+settings = ui.advanced_settings("all", defaults=_saved_all)
+run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
 b = st.columns(4)
 if b[0].button("▶ Start", disabled=running, use_container_width=True,
                help="Run all stages: ingest, clean, EDA, schema"):
-    res = control.start("all", settings=settings)
+    res = control.start("all", settings=run_settings)
     st.rerun() if res.get("ok") else st.error(res["error"])
 if b[1].button("⏵ Resume", disabled=running, use_container_width=True,
                help="Continue a prior run, skipping sources already fetched"):
-    res = control.start("all", resume=True, settings=settings)
+    res = control.start("all", resume=True, settings=run_settings)
     st.rerun() if res.get("ok") else st.error(res["error"])
 if b[2].button("⏹ Stop", disabled=not running, use_container_width=True):
     control.stop()
@@ -78,6 +83,9 @@ if b[3].button("🗑 Reset", disabled=running, use_container_width=True,
         st.toast(msg, icon="🗑")
     st.rerun()
 
+ui.save_settings_button("all", settings, key="all_save",
+                        label="💾 Save these settings for the full run")
+
 if running:
     st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  session (pid) "
                f"{cstat['pid']}  ·  started {cstat.get('started_at')}")
@@ -87,6 +95,44 @@ else:
     st.caption("Reset instantly deletes the data/ folder (no confirmation). "
                "Auto-rebalance is off by default; raw files are kept after cleaning. "
                "Controls act on this machine.")
+
+st.divider()
+
+# ------------------------------------------------------------------- funnel ----
+# Above the log, and cached: the funnel scans data/ on every rerun, which made the
+# Overview reload on each interaction. It now renders from a cached snapshot into a
+# stable placeholder; the Refresh button (or a run) clears the cache.
+_fh = st.columns([4, 1])
+_fh[0].subheader("Corpus funnel")
+if _fh[1].button("↻ Refresh", key="funnel_refresh", use_container_width=True,
+                 help="Remeasure data/ now (otherwise cached for ~90s)"):
+    cached.clear_stats()
+    st.rerun()
+
+
+def _funnel_row(label: str, d: dict) -> None:
+    """One funnel stage as a labelled Sources / Records / Size row."""
+    c = st.columns([1.6, 1, 1, 1])
+    c[0].markdown(f"**{label}**")
+    c[1].metric("Sources", charts.fmt_int(d["sources"]))
+    c[2].metric("Records", charts.fmt_int(d["lines"]))
+    c[3].metric("Size", charts.fmt_size(d["size_mb"]))
+
+
+with st.container():
+    _snap = cached.funnel(data.data_root())
+    funnel = _snap["funnel"]
+    prog = _snap["progress"]
+    pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
+    st.progress(min(pct, 1.0),
+                text=f"Sources checked: {prog['checked']} of {prog['total']} "
+                     f"({pct * 100:.0f}%)  ·  {prog['with_data']} produced data")
+    _funnel_row("Ingested (raw)", funnel["raw"])
+    _funnel_row("Cleaned", funnel["cleaned"])
+    _funnel_row("Final dataset", funnel["appended"])
+st.caption("Records are raw rows, so large tabular datasets dominate the ingested "
+           "count. Cached for ~90s (use Refresh to remeasure). See the Ingest page "
+           "for the per-source breakdown, including sources that produced no data.")
 
 st.divider()
 
@@ -116,37 +162,6 @@ with st.expander("Session history"):
                    "current": "●" if h["current"] else ""} for h in hist])
     else:
         st.caption("No pipeline sessions yet.")
-
-st.divider()
-
-# ------------------------------------------------------------------- funnel ----
-st.subheader("Corpus funnel")
-funnel = data.data_funnel()
-prog = data.ingest_progress()
-funnel["raw"]["size_mb"] = cached.raw_size_mb(data.data_root())
-
-pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
-st.progress(min(pct, 1.0),
-            text=f"Sources checked: {prog['checked']} of {prog['total']} "
-                 f"({pct * 100:.0f}%)  ·  {prog['with_data']} produced data")
-
-
-def _funnel_row(label: str, d: dict) -> None:
-    """One funnel stage as a labelled Sources / Records / Size row."""
-    c = st.columns([1.6, 1, 1, 1])
-    c[0].markdown(f"**{label}**")
-    c[1].metric("Sources", charts.fmt_int(d["sources"]))
-    c[2].metric("Records", charts.fmt_int(d["lines"]))
-    c[3].metric("Size", charts.fmt_size(d["size_mb"]))
-
-
-_funnel_row("Ingested (raw)", funnel["raw"])
-_funnel_row("Cleaned", funnel["cleaned"])
-_funnel_row("Final dataset", funnel["appended"])
-st.caption("Records are raw rows, so large tabular datasets dominate the ingested "
-           "count. Raw size is the real folder footprint (measured once, cached). "
-           "See the Ingest page for the per-source breakdown, including sources "
-           "that produced no data.")
 
 st.divider()
 

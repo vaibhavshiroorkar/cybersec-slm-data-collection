@@ -57,6 +57,53 @@ def existing_links(csv_path: str) -> set[str]:
     return {n for n in (normalize_url(v) for v in df[col]) if n}
 
 
+def _subdomain_column(columns) -> str | None:
+    lower = {str(c).strip().lower(): c for c in columns}
+    for h in ("sub-domain", "subdomain", "sub domain", "sub_domain"):
+        if h in lower:
+            return lower[h]
+    return None
+
+
+def delete_rows(csv_path: str, *, links: list[str] | None = None,
+                subdomains: list[str] | None = None) -> int:
+    """Delete catalog rows by link and/or Sub-Domain; return the count removed.
+
+    A row is removed if its (normalized) link is in ``links`` **or** its Sub-Domain
+    is in ``subdomains``. Matching links use :func:`normalize_url` so a slightly
+    different form of the same URL still matches. The write is atomic (temp file +
+    ``os.replace``), so a crash never leaves a half-written catalog.
+    """
+    if not os.path.exists(csv_path) or not (links or subdomains):
+        return 0
+    import pandas as pd
+
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    if df.empty:
+        return 0
+
+    mask = pd.Series(False, index=df.index)
+    if links:
+        col = _link_column(df.columns)
+        if col is not None:
+            wanted = {n for n in (normalize_url(x) for x in links) if n}
+            mask |= df[col].map(lambda v: normalize_url(v) in wanted)
+    if subdomains:
+        sdcol = _subdomain_column(df.columns)
+        if sdcol is not None:
+            wanted_sd = {str(s).strip() for s in subdomains}
+            mask |= df[sdcol].map(lambda v: str(v).strip() in wanted_sd)
+
+    removed = int(mask.sum())
+    if removed:
+        remaining = df[~mask]
+        os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+        tmp = f"{csv_path}.tmp"
+        remaining.to_csv(tmp, index=False, encoding="utf-8")
+        os.replace(tmp, csv_path)
+    return removed
+
+
 def append_rows(csv_path: str, rows: list[dict[str, str]]) -> int:
     """Append ``rows`` (column->value dicts) to the catalog CSV; return count.
 

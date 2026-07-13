@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, control, data, ui
-from cybersec_slm.sourcing import catalog
+from cybersec_slm.dashboard import charts, control, data, settings_store, ui
+from cybersec_slm.sourcing import catalog, sheet
 
 ui.inject_css()
 ui.stage_header("source", data.stage_states())
@@ -30,10 +30,17 @@ st.subheader("Run discovery")
 if not all_domains:
     st.info("No sub-domains configured yet. Add one below to get started.")
 
+# Seed the selection from saved source settings so a saved sub-domain / mode
+# choice is the starting point (and the same saved settings drive a CLI run).
+_saved = settings_store.get_stage("source")
+_dom_default = [d for d in _saved.get("domains", []) if d in all_domains] or all_domains
+_mode_default = _saved.get("mode", catalog.MODES[0])
+_mode_index = catalog.MODES.index(_mode_default) if _mode_default in catalog.MODES else 0
+
 col_a, col_b = st.columns([3, 1])
 selected = col_a.multiselect("Sub-domains to search", all_domains,
-                             default=all_domains, key="src_domains")
-mode = col_b.selectbox("Mode", catalog.MODES, index=0, key="src_mode",
+                             default=_dom_default, key="src_domains")
+mode = col_b.selectbox("Mode", catalog.MODES, index=_mode_index, key="src_mode",
                        help="datasets: corpora/repos · text: articles/docs · both")
 
 # Keyword viewer: every keyword that will run for the current selection.
@@ -64,6 +71,7 @@ if c2.button("⏹ Stop", disabled=not running, use_container_width=True,
              key="src_stop"):
     control.stop()
     st.rerun()
+ui.save_settings_button("source", settings, key="source_save")
 if running:
     st.caption(f"● running: {cstat.get('stage') or 'pipeline'}  ·  "
                f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
@@ -132,6 +140,57 @@ if by_dom:
     ui.table(by_dom, height=280)
 else:
     st.caption("No `sources/Sources.csv` found yet.")
+
+st.divider()
+
+# --------------------------------------------------------- delete catalog rows -
+st.subheader("Delete catalog rows")
+st.caption("Remove rows from `sources/Sources.csv` (deletes instantly). Deleted "
+           "sources can be re-discovered; this does not touch already-fetched data.")
+cat_rows = data.catalog_rows()
+cat_path = data.catalog_path()
+
+_LINK_KEYS = ("dataset link", "url", "link", "dataset_link", "source url")
+
+
+def _row_link(r: dict) -> str:
+    for k, v in r.items():
+        if str(k).strip().lower() in _LINK_KEYS:
+            return str(v)
+    return ""
+
+
+with st.expander("Delete by sub-domain (group)"):
+    dom_opts = sorted(cat_summary["by_domain"].keys())
+    victims = st.multiselect("Sub-domains to delete (all their rows)", dom_opts,
+                             key="del_domains")
+    n = sum(cat_summary["by_domain"].get(d, 0) for d in victims)
+    if st.button(f"Delete {n} row(s) in {len(victims)} sub-domain(s)",
+                 disabled=not victims, key="del_dom_go", type="secondary"):
+        removed = sheet.delete_rows(cat_path, subdomains=victims)
+        st.success(f"Deleted {removed} row(s) from the catalog")
+        st.rerun()
+
+with st.expander("Delete individual rows"):
+    if not cat_rows:
+        st.caption("No rows to delete.")
+    else:
+        labels: list[str] = []
+        label_link: dict[str, str] = {}
+        for i, r in enumerate(cat_rows):
+            link = _row_link(r)
+            label = f"{(r.get('Name') or '?')[:40]} · {r.get('Sub-Domain', '')} · {link}"
+            if label in label_link:
+                label = f"{label}  #{i}"
+            label_link[label] = link
+            labels.append(label)
+        picked = st.multiselect("Rows to delete", labels, key="del_rows")
+        if st.button(f"Delete {len(picked)} selected row(s)",
+                     disabled=not picked, key="del_rows_go", type="secondary"):
+            links = [label_link[la] for la in picked if label_link.get(la)]
+            removed = sheet.delete_rows(cat_path, links=links)
+            st.success(f"Deleted {removed} row(s) from the catalog")
+            st.rerun()
 
 st.divider()
 

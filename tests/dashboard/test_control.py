@@ -169,3 +169,11 @@ def test_build_command_selective_ingest_domains():
 def test_build_command_selective_clean_domains():
     cmd = control.build_command("clean", settings={"domains": ["Cryptography"]})
     assert "clean --domains Cryptography" in _joined(cmd)
+
+
+def test_build_command_source_searxng_url_and_language():
+    cmd = control.build_command("source", settings={
+        "searxng_url": "http://host:8080", "language": "fr"})
+    s = _joined(cmd)
+    assert "--searxng-url http://host:8080" in s
+    assert "--language fr" in s
