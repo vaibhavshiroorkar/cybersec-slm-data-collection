@@ -116,6 +116,13 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
 - `--searxng-url URL`: SearXNG base URL (or set `SEARXNG_URL`; default
   `http://localhost:8080`). The instance must enable the JSON format
   (`search: formats: [html, json]`).
+- `--no-enrich`: skip fetching per-source metadata. By default each discovered
+  source is enriched from its host (HuggingFace via `huggingface_hub`, GitHub via
+  the REST API, any other URL via an HTTP `HEAD`), filling License, Last Updated,
+  Original Size (MB), File Count, and the Author / Popularity / Tags columns.
+  Enrichment is best-effort (a failed lookup leaves the field blank, never aborts
+  the run) and adds one network call per source; set `GITHUB_TOKEN` to raise
+  GitHub's 60/hour unauthenticated rate limit.
 
 Sub-domains and their keywords are read from `sources/keywords.yaml` (editable;
 falls back to the built-in lists when absent), shared with the dashboard.

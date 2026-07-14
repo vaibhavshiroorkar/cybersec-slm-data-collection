@@ -31,6 +31,7 @@ from datetime import date
 
 from ..core import DATA_ROOT, LOGS, logger
 from . import catalog
+from .enrich import Enricher
 from .row import SHEET_COLUMNS, build_row, row_to_list
 from .search import SearchError, searxng_search
 from .sheet import append_rows, existing_links, normalize_url
@@ -58,7 +59,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
              per_keyword: int = 5, max_per_domain: int | None = None,
              max_total: int | None = None, mode: str = "datasets",
              dry_run: bool = False, out_csv: str | None = None,
-             base_url: str | None = None, language: str = "en", client=None) -> dict:
+             base_url: str | None = None, language: str = "en", client=None,
+             enrich: bool = True) -> dict:
     """Run sourcing and return a summary dict.
 
     ``mode`` selects the keyword catalog: ``datasets`` (corpora/repos), ``text``
@@ -67,9 +69,15 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     when either is hit. ``base_url`` overrides ``$SEARXNG_URL``; ``client`` is an
     optional shared ``httpx.Client``.
 
+    With ``enrich`` (default), each kept row is passed through
+    :class:`sourcing.enrich.Enricher`, which fills its metadata columns (size,
+    license, last updated, author, popularity, tags) from the source host. It is
+    best-effort - a failed lookup leaves the field blank and never aborts the run.
+
     Returns ``{"found", "new", "appended", "csv", "by_domain", "by_keyword"}``.
     """
     csv_path = csv_path or DEFAULT_CATALOG
+    enricher = Enricher(client=client) if enrich else None
 
     cat = catalog.load()
     all_domains = catalog.subdomains(cat)
@@ -117,7 +125,10 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                     if not norm or norm in seen:
                         continue
                     seen.add(norm)                 # also dedup within this run
-                    new_rows.append(build_row(res, domain, today=today))
+                    row = build_row(res, domain, today=today)
+                    if enricher is not None:
+                        enricher.enrich(row)
+                    new_rows.append(row)
                     added_here += 1
                     kw_new += 1
                     if max_per_domain is not None and added_here >= max_per_domain:

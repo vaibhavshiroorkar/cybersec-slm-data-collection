@@ -101,7 +101,7 @@ def test_append_rows_and_existing_links_round_trip(tmp_path):
     assert append_rows(csv_path, rows) == 1
     with open(csv_path, encoding="utf-8") as f:
         header, *data = list(_csv.reader(f))
-    assert header == list(SHEET_COLUMNS)              # 19 cols, canonical order
+    assert header == list(SHEET_COLUMNS)              # full canonical header
     assert len(data) == 1
     # Unfilled cells are blank strings, never the literal "nan".
     assert "nan" not in [c.strip().lower() for c in data[0]]
@@ -113,6 +113,83 @@ def test_append_rows_and_existing_links_round_trip(tmp_path):
     # A second append with the same link still writes (dedup is the caller's job),
     # and existing_links on a missing file is just empty.
     assert existing_links(str(tmp_path / "nope.csv")) == set()
+
+
+def test_append_rows_unions_new_columns_into_legacy_file(tmp_path):
+    import pandas as pd
+
+    csv_path = str(tmp_path / "Sources.csv")
+    # A catalog written before enrichment existed: no Author/Popularity/Tags.
+    legacy = ["Name", "Sub-Domain", "Dataset Link", "License"]
+    pd.DataFrame([{"Name": "Old", "Sub-Domain": "D",
+                   "Dataset Link": "https://a", "License": "MIT"}],
+                 columns=legacy).to_csv(csv_path, index=False, encoding="utf-8")
+
+    # Append a row carrying a new column (Author) -> it is unioned into the header.
+    append_rows(csv_path, [{"Name": "New", "Sub-Domain": "D",
+                            "Dataset Link": "https://b", "Author": "octo"}])
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    assert "Author" in df.columns
+    assert list(df.columns[:4]) == legacy            # legacy order preserved
+    assert df.iloc[0]["Author"] == ""                # legacy row left blank
+    assert df.iloc[1]["Author"] == "octo"            # new row filled
+
+
+def test_discover_enriches_rows_when_enabled(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    hit = Result(title="T", link="https://huggingface.co/datasets/x/y", snippet="s")
+    monkeypatch.setattr(run, "searxng_search", lambda *a, **k: [hit])
+
+    enriched: list[str] = []
+
+    class _SpyEnricher:
+        def __init__(self, **kw):
+            pass
+
+        def enrich(self, row):
+            enriched.append(row["Dataset Link"])
+            row["License"] = "MIT"
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _SpyEnricher)
+
+    csv_path = str(tmp_path / "Sources.csv")
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(csv_path, domains=[dom], per_keyword=1, max_total=1,
+                        enrich=True)
+
+    assert summ["new"] == 1
+    assert enriched == ["https://huggingface.co/datasets/x/y"]
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    assert df.iloc[0]["License"] == "MIT"            # enrichment landed in the row
+
+
+def test_discover_skips_enrichment_when_disabled(tmp_path, monkeypatch):
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    monkeypatch.setattr(run, "searxng_search", lambda *a, **k: [
+        Result(title="T", link="https://huggingface.co/datasets/x/y", snippet="s")])
+
+    built: list[int] = []
+
+    class _SpyEnricher:
+        def __init__(self, **kw):
+            built.append(1)
+
+        def enrich(self, row):
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _SpyEnricher)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                 max_total=1, enrich=False)
+    assert built == []                               # Enricher never constructed
 
 
 def test_delete_rows_by_subdomain_and_link(tmp_path):
