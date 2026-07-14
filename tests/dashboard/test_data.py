@@ -314,6 +314,32 @@ def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
     assert funnel["raw"]["size_mb"] == 0.0
 
 
+def test_ingest_source_rows_keeps_file_order_and_link_less_rows(monkeypatch):
+    monkeypatch.setattr(data, "catalog_rows", lambda: [
+        {"Name": "Alpha", "Sub-Domain": "Cryptography", "Dataset Link": "http://a"},
+        {"Name": "NoLink", "Sub-Domain": "Cloud Security", "Dataset Link": ""},
+        {"Name": "Beta", "Sub-Domain": "Cryptography", "Dataset Link": "http://b"},
+    ])
+    rows = data.ingest_source_rows()
+    # every catalog row is present, in Sources.csv file order (row numbers align)
+    assert [r["id"] for r in rows] == ["http://a", "", "http://b"]
+    assert rows[1]["id"] == ""                           # link-less row kept
+    assert rows[0]["subdomain"] == "Cryptography"
+
+
+def test_clean_source_rows_stable_sorted_with_folder_ids(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cryptography" / "zeta").mkdir(parents=True)
+    (raw / "Cryptography" / "alpha").mkdir(parents=True)
+    (raw / "Cloud Security" / "beta").mkdir(parents=True)
+
+    rows = data.clean_source_rows()
+    # sorted by (sub-domain, source); id is the '<sub-domain>/<source>' folder path
+    assert [r["id"] for r in rows] == [
+        "Cloud Security/beta", "Cryptography/alpha", "Cryptography/zeta"]
+
+
 def test_ingest_progress_uses_completed_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     raw = tmp_path / "data" / "raw"

@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--domains", nargs="*", default=None,
                    help="clean only these Sub-Domains (selective clean; a fresh run "
                         "wipes only their data/clean/<domain>/ folders)")
+    c.add_argument("--sources-only", nargs="*", default=None,
+                   help="clean only these specific raw source folders, each given "
+                        "as 'sub-domain/source' (row-level clean; takes precedence "
+                        "over --domains). A fresh run wipes only their "
+                        "data/clean/<sub-domain>/<source>/ folders.")
     c.add_argument("--cap", type=int, default=None,
                    help="max records per domain (balance action)")
     c.add_argument("--source-share", type=float, default=None, metavar="SHARE",
@@ -109,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
     ig.add_argument("--domains", nargs="*", default=None,
                     help="fetch only these Sub-Domains (selective ingest; a fresh "
                          "run wipes only their data/raw/<domain>/ folders)")
+    ig.add_argument("--sources-only", nargs="*", default=None,
+                    help="fetch only these specific sources, by catalog Dataset "
+                         "Link/URL (row-level ingest; combine with --domains to "
+                         "scope within Sub-Domains). A fresh row-level run wipes "
+                         "nothing and re-fetches just the chosen sources.")
 
     # ── source (SearXNG source discovery) ────────────────────────────────────
     d = sub.add_parser("source",
@@ -201,7 +211,8 @@ def main(argv: list[str] | None = None) -> None:
             parallel.run_clean(keep_raw=not args.purge_raw, limit=args.limit,
                                resume=args.resume,
                                drop_non_english=args.drop_non_english,
-                               domains=args.domains)
+                               domains=args.domains,
+                               sources_only=args.sources_only)
         elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
@@ -223,7 +234,8 @@ def main(argv: list[str] | None = None) -> None:
                             source_timeout=args.source_timeout,
                             max_source_gb=args.max_source_gb,
                             crawl=not args.no_crawler,
-                            domains=args.domains)
+                            domains=args.domains,
+                            sources_only=args.sources_only)
 
     elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
