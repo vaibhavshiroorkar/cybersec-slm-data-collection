@@ -146,3 +146,51 @@ def test_run_clean_selective_purge_raw_deletes_only_chosen(tmp_path, monkeypatch
     assert not (raw / "DomA").exists()               # chosen raw purged
     assert (raw / "DomB").is_dir()                   # other raw preserved
     pipeline.reset_cleaner_cache()
+
+
+def _wire_two_sources_one_domain(monkeypatch, tmp_path):
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
+    monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean"))
+    monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
+    monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
+    monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+    monkeypatch.setattr(pipeline, "DEDUP_CKPT", str(tmp_path / "ckpt.json"))
+    monkeypatch.setattr(pipeline, "DEDUP_DONE", str(tmp_path / "done.json"))
+    monkeypatch.setattr(pipeline, "Redactor", _StubRedactor)
+    monkeypatch.setattr(pipeline, "LangFilter", _StubLang)
+    monkeypatch.setattr(pipeline, "Translator", _StubTranslator)
+    pipeline.reset_cleaner_cache()
+
+    rec_1 = ("A first source record with enough descriptive prose to pass the "
+             "anomaly gate and land in the cleaned corpus for source one here.")
+    rec_2 = ("A second source record, also long enough to survive the cleaning "
+             "pipeline and remain in the corpus, belonging to source two here.")
+    _write_jsonl(str(raw / "DomA" / "s1" / "a.jsonl"), [{"text": rec_1}])
+    _write_jsonl(str(raw / "DomA" / "s2" / "b.jsonl"), [{"text": rec_2}])
+    return raw
+
+
+def test_run_clean_row_level_cleans_only_chosen_source(tmp_path, monkeypatch):
+    raw = _wire_two_sources_one_domain(monkeypatch, tmp_path)
+    clean_dir = tmp_path / "clean"
+    # a pre-existing cleaned artifact for s2 that a row-level clean of s1 must keep
+    preexisting = clean_dir / "DomA" / "s2" / "kept.jsonl"
+    os.makedirs(os.path.dirname(preexisting), exist_ok=True)
+    preexisting.write_text('{"kept": true}\n', encoding="utf-8")
+
+    result = parallel.run_clean(sources_only=["DomA/s1"], keep_raw=True)
+
+    assert result["files"] == 1                      # only s1 cleaned
+    assert (clean_dir / "DomA" / "s1").is_dir()      # s1 cleaned output written
+    assert preexisting.exists()                      # s2 cleaned output preserved
+    assert (raw / "DomA" / "s2").is_dir()            # s2 raw untouched
+    pipeline.reset_cleaner_cache()
+
+
+def test_run_clean_row_level_purge_raw_deletes_only_chosen_source(tmp_path, monkeypatch):
+    raw = _wire_two_sources_one_domain(monkeypatch, tmp_path)
+    parallel.run_clean(sources_only=["DomA/s1"], keep_raw=False)
+    assert not (raw / "DomA" / "s1").exists()        # chosen source raw purged
+    assert (raw / "DomA" / "s2").is_dir()            # sibling source preserved
+    pipeline.reset_cleaner_cache()

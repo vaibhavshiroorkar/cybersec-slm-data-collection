@@ -130,6 +130,93 @@ def stage_position(key: str) -> str:
     return f"Stage {stages.stage_keys().index(key) + 1} of {len(stages.STAGES)}"
 
 
+def _saved_row_range(saved: list[str], rows: list[dict], n: int) -> tuple[int, int]:
+    """Default (from, to) row numbers for the range widget, seeded from saved ids.
+
+    Only reseeds when the saved ``sources_only`` ids are exactly the contiguous
+    block they span in ``rows``; otherwise returns the full ``(1, n)`` (= no
+    selection), so a saved range round-trips but a scattered saved set does not
+    silently expand into a filled-in range.
+    """
+    idset = {s for s in saved if s}
+    if not idset:
+        return 1, n
+    positions = [i for i, r in enumerate(rows) if r["id"] and r["id"] in idset]
+    if not positions:
+        return 1, n
+    lo, hi = min(positions), max(positions)
+    block = {rows[i]["id"] for i in range(lo, hi + 1) if rows[i]["id"]}
+    return (lo + 1, hi + 1) if block == idset else (1, n)
+
+
+def _row_selection(stage: str, base: dict, picked_domains: list, s: dict) -> None:
+    """Render the specific-source ("row") picker for ingest/clean; set
+    ``s['sources_only']``.
+
+    With sub-domain(s) chosen, a nested multiselect lists only their sources
+    (empty = all of them). With none chosen, a start/end row-number range selects
+    a contiguous block of the full stage list (empty / full range = all sources).
+    Ingest rows are catalog rows (ids are Dataset Links) in ``Sources.csv`` order;
+    clean rows are ``<sub-domain>/<source>`` raw folders in stable order.
+    """
+    import streamlit as st
+
+    from . import data
+
+    rows = (data.clean_source_rows() if stage == "clean"
+            else data.ingest_source_rows())
+    saved = [str(x) for x in base.get("sources_only", []) if str(x)]
+
+    if picked_domains:
+        wanted = set(picked_domains)
+        subset = [r for r in rows if r["subdomain"] in wanted and r["id"]]
+        if not subset:
+            st.caption("No sources found for the selected sub-domain(s) yet.")
+            return
+        id_by_label: dict[str, str] = {}
+        labels: list[str] = []
+        for i, r in enumerate(subset):
+            label = f"{r['label']}  ·  {r['subdomain']}"
+            if label in id_by_label:
+                label = f"{label}  #{i}"
+            id_by_label[label] = r["id"]
+            labels.append(label)
+        saved_set = set(saved)
+        default_labels = [la for la, rid in id_by_label.items() if rid in saved_set]
+        chosen = st.multiselect(
+            "specific sources to run (empty = all in the chosen sub-domains)",
+            labels, default=default_labels, key=f"{stage}_rows",
+            help="Row-level run: only these sources are processed. Leave empty to "
+                 "run every source in the selected sub-domain(s).")
+        ids = [id_by_label[la] for la in chosen]
+        if ids:
+            s["sources_only"] = ids
+        return
+
+    # No sub-domain selected: pick a contiguous row-number range over the full list.
+    n = len(rows)
+    if not n:
+        st.caption("No sources available to range over yet.")
+        return
+    lo_default, hi_default = _saved_row_range(saved, rows, n)
+    c1, c2 = st.columns(2)
+    start = int(c1.number_input("from row #", 1, n, value=lo_default,
+                                key=f"{stage}_row_from"))
+    end = int(c2.number_input("to row #", 1, n, value=hi_default,
+                              key=f"{stage}_row_to"))
+    lo, hi = min(start, end), max(start, end)
+    if not (lo == 1 and hi == n):
+        ids = [rows[i]["id"] for i in range(lo - 1, hi) if rows[i]["id"]]
+        if ids:
+            s["sources_only"] = ids
+    order = "Sources.csv" if stage == "ingest" else "clean"
+    with st.expander(f"Numbered source list ({n}, in {order} order)"):
+        st.caption("The range above selects this block by the '#' column. A full "
+                   "range (1 to the last row) or an empty range means all sources.")
+        table([{"source": r["label"], "sub-domain": r["subdomain"]} for r in rows],
+              height=300)
+
+
 def advanced_settings(stage: str, defaults: dict | None = None,
                       save_extra: dict | None = None) -> dict:
     """Render an expander of the advanced flags ``stage`` accepts; return settings.
@@ -159,18 +246,22 @@ def advanced_settings(stage: str, defaults: dict | None = None,
     with st.expander("Advanced settings"):
         # Selective run by Sub-Domain (ingest/clean). The source stage renders its
         # own domain picker on the Sourcing page, so it is excluded here.
+        picked_domains: list = []
         if "domains" in allowed and stage != "source":
             from . import data
             opts = (data.raw_subdomains() if stage == "clean"
                     else data.catalog_subdomains())
             default_doms = [d for d in base.get("domains", []) if d in opts]
-            picked = st.multiselect(
+            picked_domains = st.multiselect(
                 "sub-domains to run (empty = all)", opts, default=default_doms,
                 key=f"{stage}_domains",
                 help="Selective run: only these Sub-Domains are processed; "
                      "everything else is left untouched.")
-            if picked:
-                s["domains"] = picked
+            if picked_domains:
+                s["domains"] = picked_domains
+        # Row-level run: pick specific sources within (or across) the sub-domains.
+        if "sources_only" in allowed and stage in ("ingest", "clean"):
+            _row_selection(stage, base, picked_domains, s)
         if "workers" in allowed:
             s["workers"] = int(st.number_input(
                 "workers", 1, 32, value=_clamp(int(base.get("workers", 4)), 1, 32),

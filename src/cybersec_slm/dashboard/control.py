@@ -36,8 +36,9 @@ _STAGE_FLAGS: dict[str, set[str]] = {
     "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
                "dry_run", "searxng_url", "language"},
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
-               "max_source_gb", "no_crawler", "domains"},
-    "clean": {"purge_raw", "limit", "resume", "drop_non_english", "domains"},
+               "max_source_gb", "no_crawler", "domains", "sources_only"},
+    "clean": {"purge_raw", "limit", "resume", "drop_non_english", "domains",
+              "sources_only"},
     "eda": {"no_auto_rebalance", "no_enforce"},
     "schema": {"fresh", "limit"},
 }
@@ -68,6 +69,7 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("fresh", "--fresh", "bool"),
     ("resume", "--resume", "bool"),
     ("domains", "--domains", "list"),
+    ("sources_only", "--sources-only", "list"),
 ]
 
 

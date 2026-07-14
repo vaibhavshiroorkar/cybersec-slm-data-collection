@@ -171,6 +171,33 @@ def test_build_command_selective_clean_domains():
     assert "clean --domains Cryptography" in _joined(cmd)
 
 
+def test_build_command_row_level_ingest_sources_only():
+    cmd = control.build_command("ingest", settings={
+        "sources_only": ["http://a", "http://b"]})
+    s = _joined(cmd)
+    # --sources-only comes after --domains and lists every value.
+    assert s.endswith("--sources-only http://a http://b")
+
+
+def test_build_command_row_level_clean_sources_only():
+    cmd = control.build_command("clean", settings={
+        "sources_only": ["Crypto/s1", "Crypto/s2"]})
+    assert _joined(cmd).endswith("--sources-only Crypto/s1 Crypto/s2")
+
+
+def test_build_command_sources_only_dropped_for_source_stage():
+    cmd = control.build_command("source", settings={"sources_only": ["http://a"]})
+    assert "--sources-only" not in _joined(cmd)
+
+
+def test_build_command_domains_and_sources_only_order():
+    cmd = control.build_command("ingest", settings={
+        "domains": ["Crypto"], "sources_only": ["http://a"]})
+    s = _joined(cmd)
+    # both list flags emitted, domains before sources-only so nargs never collides
+    assert "--domains Crypto --sources-only http://a" in s
+
+
 def test_build_command_source_searxng_url_and_language():
     cmd = control.build_command("source", settings={
         "searxng_url": "http://host:8080", "language": "fr"})

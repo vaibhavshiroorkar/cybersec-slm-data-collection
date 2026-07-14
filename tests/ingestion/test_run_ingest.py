@@ -123,3 +123,44 @@ def test_ingest_selective_fetches_only_chosen_domains(tmp_path, monkeypatch):
     assert fetched == ["Crypto"]                       # Cloud was filtered out
     # only Crypto's raw folder is wiped (not the whole tree, not the ledger)
     assert wiped == [os.path.join(core.RAW_DATA, "Crypto")]
+
+
+def test_ingest_row_level_fetches_only_chosen_rows_no_wipe(tmp_path, monkeypatch):
+    monkeypatch.setattr(parallel, "COMPLETED_LEDGER", str(tmp_path / "led.txt"))
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(parallel.ingestion_run, "show_table", lambda: None)
+
+    descriptors = [{"kind": "url", "url": "http://a", "domain": "Crypto",
+                    "license": "", "description": ""},
+                   {"kind": "url", "url": "http://b", "domain": "Crypto",
+                    "license": "", "description": ""}]
+    monkeypatch.setattr(parallel.sources, "load_descriptors",
+                        lambda spec=None, **kw: descriptors)
+
+    class _Log:
+        def record_many(self, rows):
+            pass
+    monkeypatch.setattr(parallel, "IngestLog", _Log)
+
+    wiped: list = []
+    monkeypatch.setattr(parallel, "_wipe_dir", lambda p: wiped.append(p))
+
+    fetched: list = []
+
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
+        fetched.append(descriptor["url"])
+        return {"status": "ok", "folder": None, "ingest_rows": [],
+                "light_eda_report": {}, "flags": {}, "clean_rows": []}
+    monkeypatch.setattr(parallel.worker, "process_source", _proc)
+
+    result = parallel.run_ingest(resume=False, sources_only=["http://a"])
+
+    assert result["ok"] == 1
+    assert fetched == ["http://a"]        # only the chosen row is fetched
+    assert wiped == []                    # row-level fresh run wipes nothing
+
+
+def test_ingest_row_level_no_match_returns_empty(tmp_path, monkeypatch):
+    _wire(monkeypatch, tmp_path)          # descriptors are http://a, http://b
+    result = parallel.run_ingest(resume=False, sources_only=["http://zzz"])
+    assert result["ok"] == 0

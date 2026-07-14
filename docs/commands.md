@@ -95,6 +95,14 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
   fresh selective run touches only those Sub-Domains' folders
   (`data/raw/<domain>/` or `data/clean/<domain>/`) and leaves every other
   Sub-Domain intact; clean still cross-source dedups over the whole corpus.
+- `--sources-only ...`: run only these specific sources (row-level `ingest` /
+  `clean`), combinable with `--domains`. For `ingest`, values are catalog Dataset
+  Links (URLs); a fresh row-level run wipes nothing and re-fetches just those
+  sources. For `clean`, values are `sub-domain/source` raw-folder paths; it takes
+  precedence over `--domains`, and a fresh run wipes only those sources'
+  `data/clean/<sub-domain>/<source>/` folders. In the dashboard, the Ingest and
+  Clean pages expose this as a nested source multiselect (when Sub-Domains are
+  chosen) or a start/end row-number range over the full list (when none are).
 
 **`source`** (SearXNG source discovery)
 - `--sources PATH`: catalog CSV to append to (default: `sources/Sources.csv`).

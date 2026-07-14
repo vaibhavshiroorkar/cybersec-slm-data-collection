@@ -299,6 +299,52 @@ def raw_subdomains() -> list[str]:
         return []
 
 
+_LINK_KEYS = ("dataset link", "url", "link", "dataset_link", "source url")
+
+
+def _row_link(row: dict) -> str:
+    """The catalog row's source URL (its ``Dataset Link``), searched flexibly."""
+    for k, v in row.items():
+        if str(k).strip().lower() in _LINK_KEYS:
+            return str(v).strip()
+    return ""
+
+
+def ingest_source_rows() -> list[dict]:
+    """Catalog rows for the ingest row-picker, in ``Sources.csv`` file order.
+
+    Every catalog row is included so a row-number range lines up with the
+    ``Sources.csv`` row numbers exactly. Each entry is ``{"subdomain", "label",
+    "id"}`` where ``id`` is the row's Dataset Link (== the descriptor key
+    ``run_ingest`` filters on); a row with no link keeps ``id == ""`` (it
+    contributes nothing to a selection but still occupies its row number).
+    """
+    out: list[dict] = []
+    for r in catalog_rows():
+        link = _row_link(r)
+        dom = (r.get("Sub-Domain") or "").strip() or "Uncategorized"
+        name = (r.get("Name") or "").strip() or link or "(no link)"
+        out.append({"subdomain": dom, "label": name[:60], "id": link})
+    return out
+
+
+def clean_source_rows() -> list[dict]:
+    """Raw source folders for the clean row-picker, in stable (sub-domain, source)
+    order.
+
+    Each entry is ``{"subdomain", "source", "label", "id"}`` where ``id`` is the
+    ``<sub-domain>/<source>`` folder path that ``run_clean`` cleans. Derived from
+    :func:`raw_table` (which is size-sorted) and re-sorted so a row-number range
+    over this list is stable and matches what the Clean page shows.
+    """
+    rows = [{"subdomain": r["sub-domain"], "source": r["source"],
+             "label": f"{r['sub-domain']} / {r['source']}",
+             "id": f"{r['sub-domain']}/{r['source']}"}
+            for r in raw_table()]
+    rows.sort(key=lambda r: (r["subdomain"].lower(), r["source"].lower()))
+    return rows
+
+
 def latest_source_summary() -> dict | None:
     """Newest sourcing-run summary (``logs/discovered/summary-*.json``), or None.
 
