@@ -159,6 +159,14 @@ def test_build_command_source_drops_unrelated_flags():
     assert "--dry-run" in s
 
 
+def test_build_command_source_no_enrich_flag():
+    cmd = control.build_command("source", settings={"no_enrich": True})
+    assert "--no-enrich" in _joined(cmd)
+    # enrichment on (no_enrich False) emits nothing.
+    cmd2 = control.build_command("source", settings={"no_enrich": False})
+    assert "--no-enrich" not in _joined(cmd2)
+
+
 def test_build_command_selective_ingest_domains():
     cmd = control.build_command("ingest", settings={
         "domains": ["Cryptography", "Cloud Security"]})

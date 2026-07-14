@@ -404,6 +404,15 @@ def advanced_settings(stage: str, defaults: dict | None = None,
                                  key=f"{stage}_lang")
             if lang.strip() and lang.strip() != "en":
                 s["language"] = lang.strip()
+        if "no_enrich" in allowed:
+            enrich_on = st.checkbox(
+                "enrich discovered sources with metadata "
+                "(size, license, last updated, author, popularity, tags)",
+                value=not bool(base.get("no_enrich", False)), key=f"{stage}_enrich",
+                help="Fetches per-source metadata from the host (HuggingFace, "
+                     "GitHub, or an HTTP HEAD). Adds a network call per source; "
+                     "set $GITHUB_TOKEN to raise GitHub's rate limit.")
+            s["no_enrich"] = not enrich_on
         if "dry_run" in allowed:
             s["dry_run"] = st.checkbox(
                 "dry run (write candidate CSV, do not append to the catalog)",

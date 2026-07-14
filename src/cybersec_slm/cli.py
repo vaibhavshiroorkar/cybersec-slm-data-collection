@@ -144,6 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="SearXNG base URL (env: SEARXNG_URL; default http://localhost:8080)")
     d.add_argument("--language", default="en",
                    help="SearXNG search language (default: en)")
+    d.add_argument("--no-enrich", action="store_true",
+                   help="skip fetching per-source metadata (size, license, last "
+                        "updated, author, popularity, tags) from the source host; "
+                        "faster, but leaves those columns blank")
 
     # ── synthetic-scan (curation aid) ─────────────────────────────────────────
     ss = sub.add_parser("synthetic-scan",
@@ -272,7 +276,8 @@ def main(argv: list[str] | None = None) -> None:
             args.sources, domains=args.domains,
             per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
             max_total=args.max_total, mode=args.mode, dry_run=args.dry_run,
-            out_csv=args.out, base_url=args.searxng_url, language=args.language)
+            out_csv=args.out, base_url=args.searxng_url, language=args.language,
+            enrich=not args.no_enrich)
         print(f"source: {summary['found']} hits, {summary['new']} new, "
               f"{summary['appended']} appended -> {summary['csv']}")
 

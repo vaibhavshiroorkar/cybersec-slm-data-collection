@@ -108,9 +108,12 @@ def append_rows(csv_path: str, rows: list[dict[str, str]]) -> int:
     """Append ``rows`` (column->value dicts) to the catalog CSV; return count.
 
     Rows are reindexed to the existing file's header (or :data:`CATALOG_COLUMNS`
-    when the file is new), so unknown columns stay blank and column order is
-    preserved. The write is atomic (temp file + ``os.replace``) so a crash never
-    leaves a half-written catalog.
+    when the file is new). Any column carried by the new rows but missing from the
+    existing header (e.g. enrichment's Author/Popularity/Tags on a catalog written
+    before enrichment existed) is unioned in - appended at the end so existing
+    column order is preserved, with existing rows left blank in it. The write is
+    atomic (temp file + ``os.replace``) so a crash never leaves a half-written
+    catalog.
     """
     if not rows:
         return 0
@@ -123,6 +126,14 @@ def append_rows(csv_path: str, rows: list[dict[str, str]]) -> int:
     else:
         existing = pd.DataFrame(columns=list(CATALOG_COLUMNS))
         columns = list(CATALOG_COLUMNS)
+
+    # Union any new-row columns the existing header lacks, appended at the end.
+    seen = set(columns)
+    for r in rows:
+        for c in r:
+            if c not in seen and c in CATALOG_COLUMNS:
+                seen.add(c)
+                columns.append(c)
 
     new = pd.DataFrame(rows).reindex(columns=columns, fill_value="")
     combined = pd.concat([existing, new], ignore_index=True)

@@ -51,7 +51,7 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
     "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
     "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
-    "Date Added", "Note",
+    "Date Added", "Author", "Popularity", "Tags", "Note",
 )
 
 # Coarse spreadsheet categories -> the sub-domain folder names used elsewhere.
