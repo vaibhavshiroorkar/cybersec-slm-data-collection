@@ -10,6 +10,8 @@ injection. Streamlit is imported lazily inside each rendering helper so this mod
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from .. import stages
 
 # Status vocabulary shared by the Overview strip and the stage-page headers.
@@ -23,7 +25,13 @@ def status_pill(state: str) -> str:
 
 
 def inject_css() -> None:
-    """Inject the dashboard stylesheet once per session (stable, quiet spacing)."""
+    """Inject the dashboard stylesheet once per session.
+
+    A quiet "instrument panel" layer over Streamlit: hairline-bordered section
+    cards, an uppercase eyebrow label, a status pill, and monospace tabular
+    numerals in the stat tiles. Surfaces use theme-neutral ``rgba`` so the look
+    holds in both light and dark; the accent comes from ``.streamlit/config.toml``.
+    """
     import streamlit as st
 
     if st.session_state.get("_ui_css"):
@@ -32,13 +40,41 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
-          /* tighter, consistent metric tiles so rows never reflow on refresh */
-          div[data-testid="stMetric"] { padding: 0.35rem 0.6rem;
+          section.main div.block-container { padding-top: 2.6rem;
+            max-width: 1200px; }
+
+          /* Section cards: st.container(border=True) wrapper. */
+          div[data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid rgba(128,128,128,0.22) !important;
+            border-radius: 0.6rem; padding: 0.4rem 0.15rem;
+            background: rgba(128,128,128,0.035); }
+
+          /* Uppercase eyebrow label used for card titles and the page header. */
+          .ui-eyebrow { text-transform: uppercase; letter-spacing: 0.09em;
+            font-size: 0.72rem; font-weight: 600; opacity: 0.62;
+            margin: 0.1rem 0 0.35rem 0; }
+
+          /* Page header: sequence eyebrow + title + status pill. */
+          .ui-head { display: flex; align-items: baseline; gap: 0.75rem;
+            flex-wrap: wrap; margin-bottom: 0.15rem; }
+          .ui-head h1 { margin: 0; font-size: 1.9rem; letter-spacing: -0.01em; }
+          .ui-pill { font-size: 0.72rem; font-weight: 600; padding: 0.1rem 0.55rem;
+            border-radius: 999px; text-transform: uppercase; letter-spacing: 0.05em;
+            border: 1px solid rgba(128,128,128,0.35); opacity: 0.9; }
+          .ui-pill.s-done    { color: #2f9e44; border-color: rgba(47,158,68,0.5); }
+          .ui-pill.s-running { color: #f08c00; border-color: rgba(240,140,0,0.5); }
+          .ui-pill.s-failed  { color: #e03131; border-color: rgba(224,49,49,0.5); }
+
+          /* Stat tiles: monospace tabular readouts, consistent footprint. */
+          div[data-testid="stMetric"] { padding: 0.35rem 0.65rem;
             background: rgba(128,128,128,0.06); border-radius: 0.5rem; }
-          div[data-testid="stMetricValue"] { font-size: 1.35rem; }
-          /* scrollable code/log boxes keep a fixed footprint */
+          div[data-testid="stMetricValue"] { font-size: 1.35rem;
+            font-variant-numeric: tabular-nums;
+            font-family: ui-monospace, "Cascadia Code", "Consolas", monospace; }
+          div[data-testid="stMetricLabel"] { text-transform: uppercase;
+            letter-spacing: 0.05em; font-size: 0.72rem; opacity: 0.72; }
+
           div[data-testid="stCode"] { max-height: 100%; }
-          section.main div.block-container { padding-top: 2.2rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -117,12 +153,59 @@ def stage_run_control(stage: str, *, run_label: str = "Run this stage") -> None:
                    f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
 
 
-def stage_header(key: str, states: dict) -> None:
-    """Render a stage page header: just the stage label (no stage numbering)."""
+def _html_escape(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def page_header(key: str, states: dict | None = None) -> None:
+    """Standardized stage-page header: sequence eyebrow, stage label, status pill.
+
+    ``states`` is :func:`data.stage_states` output (``{key: {"state", ...}}``); the
+    pill reflects this stage's state and is omitted when idle/unknown.
+    """
     import streamlit as st
 
     stage = stages.get_stage(key)
-    st.title(f"{stage.label}")
+    state = ((states or {}).get(key) or {}).get("state", "idle")
+    pill = ""
+    if state in ("done", "running", "failed", "pending"):
+        pill = (f"<span class='ui-pill s-{state}'>{status_pill(state)}</span>")
+    st.markdown(
+        f"<div class='ui-eyebrow'>{stage_position(key)}</div>"
+        f"<div class='ui-head'><h1>{_html_escape(stage.label)}</h1>{pill}</div>",
+        unsafe_allow_html=True)
+
+
+def app_header(title: str, subtitle: str | None = None) -> None:
+    """Header for the non-stage pages (Overview, Agent): title + optional subtitle."""
+    import streamlit as st
+
+    st.markdown(f"<div class='ui-head'><h1>{_html_escape(title)}</h1></div>",
+                unsafe_allow_html=True)
+    if subtitle:
+        st.caption(subtitle)
+
+
+@contextmanager
+def section(title: str, subtitle: str | None = None):
+    """A bordered section card with an uppercase eyebrow title.
+
+    Replaces the old ``subheader`` + ``divider`` pattern::
+
+        with ui.section("Run this stage"):
+            ...
+
+    Yields the container so callers can also target it directly if needed.
+    """
+    import streamlit as st
+
+    box = st.container(border=True)
+    with box:
+        st.markdown(f"<div class='ui-eyebrow'>{_html_escape(title)}</div>",
+                    unsafe_allow_html=True)
+        if subtitle:
+            st.caption(subtitle)
+        yield box
 
 
 def stage_position(key: str) -> str:

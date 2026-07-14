@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import agent_client
+from cybersec_slm.dashboard import agent_client, ui
 
-st.title("Agent")
+ui.inject_css()
+ui.app_header("Agent")
 st.caption("Ask about pipeline status or the corpus. Read-only: it can look "
            "things up, not trigger a run or change anything.")
 
