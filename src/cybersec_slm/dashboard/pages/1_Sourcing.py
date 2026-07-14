@@ -76,8 +76,8 @@ with discover_tab:
             st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
                        f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
         else:
-            st.caption("Discovery runs as a background process; watch its log on "
-                       "the Overview page. New rows land in `sources/Sources.csv`.")
+            st.caption("Discovery runs in the background; watch its log on the "
+                       "Overview page.")
 
     summ = data.latest_source_summary()
     if summ:
@@ -119,7 +119,9 @@ with edit_tab:
         name = st.text_input("Sub-domain name", key="add_name")
         ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
         tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
-        if st.button("Save sub-domain", key="add_save", disabled=not name.strip()):
+        if ui.right_slot().button("Save sub-domain", key="add_save",
+                                  disabled=not name.strip(),
+                                  use_container_width=True):
             catalog.add_subdomain(
                 name.strip(),
                 datasets=[ln.strip() for ln in ds.splitlines() if ln.strip()],

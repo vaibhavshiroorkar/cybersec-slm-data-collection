@@ -450,9 +450,22 @@ def advanced_settings(stage: str, defaults: dict | None = None,
     return s
 
 
+def right_slot():
+    """A column pinned bottom-right, for a section's trailing Save/action button.
+
+    Usage::
+
+        if ui.right_slot().button("Save", use_container_width=True):
+            ...
+    """
+    import streamlit as st
+
+    return st.columns([3, 1])[1]
+
+
 def save_settings_button(stage: str, settings: dict, *, key: str,
                          label: str = "Save as defaults") -> None:
-    """Render a button that persists ``settings`` as the saved defaults for ``stage``.
+    """Render a bottom-right button that persists ``settings`` for ``stage``.
 
     Saved settings seed this stage's panel on the next load and feed the full
     pipeline run launched from the Overview page (:mod:`settings_store`).
@@ -461,8 +474,8 @@ def save_settings_button(stage: str, settings: dict, *, key: str,
 
     from . import settings_store
 
-    if st.button(label, key=key,
-                 help="Persist these settings; reused for this stage's own runs "
-                      "and for the full pipeline run on the Overview page."):
+    if right_slot().button(label, key=key, use_container_width=True,
+                           help="Persist these settings; reused for this stage's "
+                                "own runs and for the full pipeline run."):
         settings_store.save_stage(stage, settings)
         st.toast(f"Saved {stage} settings")
