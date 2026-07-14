@@ -38,6 +38,9 @@ lid.176.bin
 # Logs
 logs/
 
+# Dashboard's machine-local advanced settings (settings_store); not project data.
+pipeline_settings.json
+
 # OS
 .DS_Store
 Thumbs.db
