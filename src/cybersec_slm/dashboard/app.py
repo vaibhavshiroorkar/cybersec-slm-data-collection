@@ -27,19 +27,50 @@ st.caption(f"Reading data root: `{data.data_root()}`  ·  run the whole pipeline
 # ---------------------------------------------------------------- live strip ---
 @st.fragment(run_every=3)
 def _live() -> None:
-    """Run status: state, current stage, elapsed / last activity."""
+    """Run status: state, current stage, elapsed, ETA + a live sources progress bar.
+
+    Re-runs every 3s (the fragment decorator), so the bar and ETA advance during a
+    run without reflowing the rest of the page. Every value is read from ``data``;
+    nothing here computes state.
+    """
     status = data.run_status()
     running = status["state"] == "running"
     phase = status.get("phase") or {}
     t = data.run_timing()
 
-    top = st.columns(3)
+    top = st.columns(4)
     top[0].metric("Pipeline", "running" if running else "idle")
     top[1].metric("Stage", phase.get("label", "n/a"))
     if running and t.get("elapsed_s") is not None:
         top[2].metric("Elapsed", charts.fmt_duration(t["elapsed_s"]))
     else:
         top[2].metric("Last activity", charts.fmt_age(status.get("age")))
+    # Projected total start-to-end runtime (HH:MM:SS). Only has a real number
+    # during ingest; otherwise name the tail stage instead of inventing a duration.
+    if running and t.get("total_s") is not None:
+        top[3].metric("Est. total", charts.fmt_hms(t["total_s"]),
+                      help="Projected full run time (start to finish), estimated "
+                           "from the ingest rate so far. Sources vary in size, so "
+                           "it settles as the run progresses.")
+    else:
+        _basis = {"finalizing": "finalizing", "starting": "starting",
+                  "finished": "done"}.get(t.get("basis"), "—")
+        top[3].metric("Est. total", _basis if running else "—")
+
+    # Live sources bar + "Stage N of 5" caption, shown only while a run is active.
+    if running:
+        ip = data.ingest_progress()
+        total = ip.get("total") or 0
+        checked = ip.get("checked") or 0
+        pct = (checked / total) if total else 0.0
+        st.progress(min(pct, 1.0),
+                    text=f"Ingest  ·  {charts.fmt_int(checked)} / "
+                         f"{charts.fmt_int(total)} sources ({pct * 100:.0f}%)"
+                         if total else
+                         f"Ingest  ·  {charts.fmt_int(checked)} sources")
+        idx, tot = phase.get("index"), phase.get("total")
+        if idx and tot:
+            st.caption(f"Stage {idx} of {tot}  ·  {phase.get('label', '')}")
 
 
 with ui.section("Run status"):
@@ -55,11 +86,42 @@ with ui.section("Run the full pipeline"):
     _saved_all = settings_store.merged_all()
     settings = ui.advanced_settings("all", defaults=_saved_all)
     run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
-    b = st.columns(4)
-    if b[0].button("Start", disabled=running, use_container_width=True,
-                   help="Run all stages: ingest, clean, EDA, schema"):
+
+    # Surface the resume ledger so saved progress is visible, and guard Start (a
+    # fresh run wipes data/raw/ + the ledger) with a confirm when a checkpoint exists.
+    ckpt = data.checkpoint_status()
+    if not running and ckpt["exists"]:
+        _saved = charts.fmt_int(ckpt["completed"])
+        _tot = f"/{charts.fmt_int(ckpt['total'])}" if ckpt.get("total") else ""
+        st.success(f"Checkpoint: {_saved}{_tot} sources saved  ·  "
+                   '"Resume" continues from here.')
+
+    def _do_start() -> None:
         res = control.start("all", settings=run_settings)
         st.rerun() if res.get("ok") else st.error(res["error"])
+
+    b = st.columns(4)
+    if b[0].button("Start", disabled=running, use_container_width=True,
+                   help="Run all stages fresh: ingest, clean, EDA, schema. Wipes "
+                        "any saved checkpoint."):
+        # With a checkpoint present, don't wipe on a single click: ask to confirm.
+        if ckpt["exists"]:
+            st.session_state["_confirm_fresh_start"] = True
+            st.rerun()
+        else:
+            _do_start()
+    if st.session_state.get("_confirm_fresh_start") and not running:
+        _saved = charts.fmt_int(ckpt["completed"])
+        _tot = f"/{charts.fmt_int(ckpt['total'])}" if ckpt.get("total") else ""
+        st.warning(f"Start wipes the saved checkpoint ({_saved}{_tot} sources). "
+                   'Use "Resume" instead to keep it.')
+        cc = st.columns(4)
+        if cc[0].button("Yes, start fresh", use_container_width=True):
+            st.session_state["_confirm_fresh_start"] = False
+            _do_start()
+        if cc[1].button("Cancel", use_container_width=True):
+            st.session_state["_confirm_fresh_start"] = False
+            st.rerun()
     if b[1].button("Resume", disabled=running, use_container_width=True,
                    help="Continue a prior run, skipping sources already fetched"):
         res = control.start("all", resume=True, settings=run_settings)

@@ -172,6 +172,24 @@ def test_live_and_run_status(tmp_path, monkeypatch):
     assert data.run_status()["state"] == "idle"
 
 
+def test_checkpoint_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+
+    # No ledger yet -> no checkpoint to resume from.
+    empty = data.checkpoint_status()
+    assert empty == {"exists": False, "completed": 0, "total": empty["total"]}
+    assert empty["exists"] is False
+
+    # A ledger with N recorded sources -> exists, counted; total from the catalog.
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "completed_sources.txt").write_text("hf:a\nurl:b\npdf:c\n",
+                                                encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_total", lambda: 5)
+    ck = data.checkpoint_status()
+    assert ck == {"exists": True, "completed": 3, "total": 5}
+
+
 def _write_log(tmp_path, name, body):
     logs = tmp_path / "logs"
     logs.mkdir(exist_ok=True)
@@ -434,6 +452,14 @@ def test_fmt_duration():
     assert charts.fmt_duration(None) == "-"
 
 
+def test_fmt_hms():
+    assert charts.fmt_hms(0) == "00:00:00"
+    assert charts.fmt_hms(65) == "00:01:05"          # hours never dropped
+    assert charts.fmt_hms(3661) == "01:01:01"
+    assert charts.fmt_hms(-5) == "00:00:00"          # clamps negatives
+    assert charts.fmt_hms(None) == "-"
+
+
 def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     monkeypatch.setattr(data, "_catalog_total", lambda: 4)     # 4 sources total
@@ -452,6 +478,8 @@ def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
     assert t["elapsed_s"] >= 99
     # 2 of 4 done -> remaining ≈ elapsed (linear): eta ≈ elapsed
     assert abs(t["eta_s"] - t["elapsed_s"]) < 2
+    # projected total start-to-end = elapsed + remaining (≈ 2x elapsed here)
+    assert abs(t["total_s"] - (t["elapsed_s"] + t["eta_s"])) < 1e-6
 
 
 def test_run_timing_finalizing_during_tail(tmp_path, monkeypatch):
