@@ -655,6 +655,19 @@ def live_progress(tail: int = 40) -> dict:
             "log_tail": log_tail(tail)}
 
 
+def checkpoint_status() -> dict:
+    """Resume-ledger state for the Overview: is there saved progress to resume from.
+
+    Reads ``logs/completed_sources.txt`` cheaply (no log tail, unlike
+    :func:`live_progress`). ``exists`` is True once any source has been recorded,
+    which is exactly what the ``Resume`` button continues from; ``completed`` /
+    ``total`` let the UI say "N of M sources saved".
+    """
+    completed = _completed_count()
+    return {"exists": completed > 0, "completed": completed,
+            "total": _catalog_total()}
+
+
 def session_history(limit: int = 15) -> list[dict]:
     """Recent pipeline sessions, newest first (one per ``pipeline.<pid>.log``).
 
@@ -723,16 +736,19 @@ def _run_started_at() -> float | None:
 
 
 def run_timing() -> dict:
-    """Elapsed time since the run started, plus a rough linear ETA.
+    """Elapsed time since the run started, plus a rough projected total runtime.
 
-    Returns ``{"elapsed_s", "eta_s", "basis"}``. ``elapsed_s`` is seconds since the
-    run's start (None if no start time is known). ``eta_s`` is a *rough* linear
-    projection (``elapsed / completed * (total - completed)``) computed only
-    during the ingest phase, which is ~80% of wall-clock and the only stage driven
-    by source count. Once ingestion is done the tail (dedup -> EDA -> normalize) is
-    not source-count driven, so ``eta_s`` is None and ``basis`` says ``finalizing``
-    rather than faking a number. Sources vary hugely in size, so treat the ETA as
-    an estimate only.
+    Returns ``{"elapsed_s", "eta_s", "total_s", "basis"}``. ``elapsed_s`` is seconds
+    since the run's start (None if no start time is known). ``eta_s`` is the linear
+    projection of *remaining* time (``elapsed / completed * (total - completed)``);
+    ``total_s`` is the projected *full* start-to-end runtime (``elapsed + eta_s``,
+    i.e. ``elapsed / completed * total``), which the UI shows because a total
+    duration reads as far less jumpy than a remaining-time countdown. Both are
+    computed only during the ingest phase, which is ~80% of wall-clock and the only
+    stage driven by source count; once ingestion is done the tail (dedup -> EDA ->
+    normalize) is not source-count driven, so both are None and ``basis`` says
+    ``finalizing`` rather than faking a number. Sources vary hugely in size, so
+    treat the projection as an estimate only.
     """
     start = _run_started_at()
     elapsed_s = (time.time() - start) if start is not None else None
@@ -740,18 +756,21 @@ def run_timing() -> dict:
     completed, total = _completed_count(), _catalog_total()
 
     eta_s: float | None = None
+    total_s: float | None = None
     if elapsed_s is None:
         basis = "no-start"
     elif pkey == "gate_failed":
         basis = "finished"
     elif pkey == "ingest" and total and completed:
         eta_s = max(elapsed_s / completed * (total - completed), 0.0)
+        total_s = elapsed_s + eta_s
         basis = "ingest-linear"
     elif pkey in ("clean", "eda", "schema"):
         basis = "finalizing"
     else:
         basis = "starting"
-    return {"elapsed_s": elapsed_s, "eta_s": eta_s, "basis": basis}
+    return {"elapsed_s": elapsed_s, "eta_s": eta_s, "total_s": total_s,
+            "basis": basis}
 
 
 # ------------------------------------------------------------------- EDA gate --

@@ -77,6 +77,23 @@ def fmt_duration(seconds) -> str:
     return f"{m}:{sec:02d}"
 
 
+def fmt_hms(seconds) -> str:
+    """Zero-padded ``HH:MM:SS`` for a duration (hours never dropped, e.g. 00:05:23).
+
+    Used for the projected total runtime, where a fixed HH:MM:SS shape reads more
+    steadily across refreshes than :func:`fmt_duration`'s variable width.
+    """
+    try:
+        s = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if s < 0:
+        s = 0
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
 def eda_trend_rows(history: list[dict]) -> list[dict]:
     """Flatten EDA run history into tidy rows for the trend line charts.
 
