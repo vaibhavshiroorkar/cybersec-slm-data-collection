@@ -323,6 +323,179 @@ flattened JSONL record, gets cleaned and masked and deduplicated, clears a quali
 bar, is validated into a standard shape, and lands in the finished dataset with a
 signed receipt attached.
 
+## Under the hood: the libraries and how they work
+
+This section goes one level deeper on each library, what it actually does here, and
+which alternatives were considered and passed over.
+
+### Format conversion: pandas, polars, pyarrow, json-repair
+
+Every downloaded file passes through `to_jsonl`. The reader chooses by extension
+against a priority list (`.parquet`, `.jsonl`, `.csv`, `.json`, `.xlsx`, ...), so a
+source that ships the same data in several formats is read from the cleanest one.
+Small and mid-size files load whole into a pandas DataFrame: `read_parquet` (through
+pyarrow), `read_json(lines=True)` then plain `read_json`, and `read_csv` with an
+encoding ladder that ends in `on_bad_lines="skip"` and latin-1 so a messy CSV still
+yields rows. Malformed JSON is run through json-repair's `repair_json` first, which
+fixes trailing commas, single quotes, and unquoted keys, so a slightly broken file
+still parses instead of being lost. Files over a size threshold take a polars lazy
+scan (`scan_csv` / `scan_parquet` / `scan_ndjson`): polars streams the file in
+constant memory straight to JSONL, which is what lets a multi-gigabyte CSV convert
+without blowing up RAM, and it falls back to the pandas path if it cannot handle a
+file.
+
+Why not the alternatives: loading everything in pandas alone runs out of memory on
+the big tabular datasets, which is exactly why the polars lazy path exists for large
+files. Dask or Spark would solve the memory problem but are heavyweight distributed
+frameworks for what is a single-machine job. Hand-rolled `csv`/`json` stdlib parsing
+cannot cope with the variety of real-world formats and encodings without becoming a
+second pandas.
+
+### PDFs: pymupdf
+
+PDF sources are opened with pymupdf (the MuPDF binding) and read a page at a time,
+each page becoming a record. pymupdf was chosen for speed and for the quality of its
+text extraction. pdfplumber and pdfminer.six extract text too but are noticeably
+slower on large documents; pypdf/PyPDF2 has weaker text extraction; Apache Tika is
+accurate but drags in a Java runtime.
+
+### Fetching datasets: huggingface-hub, kaggle, httpx, tenacity
+
+For Hugging Face, `HfApi().dataset_info(ref, files_metadata=True)` lists every file
+with its size; the fetcher keeps only the priority extensions, skips obvious
+non-data files, and groups sharded files (`train-00000-of-00010`) by their base name
+so all shards append into one JSONL instead of overwriting each other. Kaggle uses
+the official client (`authenticate`, `dataset_list_files`, `dataset_download_file`),
+unzipping archives before converting. Everything else, including the NVD REST feed
+and PDFs, goes over httpx with `follow_redirects=True`, streamed to disk in 64 KB
+chunks while a sha256 is computed so each raw file carries a fingerprint. tenacity
+wraps the download in a declarative retry so a transient blip retries instead of
+failing the source.
+
+Why not the alternatives: the Hugging Face `datasets` library would load and
+materialize a whole dataset through its own Arrow cache, which is heavier and more
+opinionated than needed when the goal is just the raw files, so the lower-level
+`huggingface-hub` file download is used instead. `requests` would work for the HTTP
+fetches, but httpx gives first-class streaming and HTTP/2 and keeps the door open to
+async; `urllib` is too low-level. Writing retry loops by hand is what tenacity
+replaces.
+
+### Crawling: scrapy, scrapy-playwright, selectolax
+
+Website sources run through Scrapy, but in a separate subprocess (`crawl_runner`),
+because Scrapy's Twisted reactor can only be started once per process and would clash
+with the parent. Playwright drives a real Chromium browser for pages that only render
+their content with JavaScript, and selectolax parses the returned HTML. The crawl is
+bounded by a page cap and an allow-prefix so it stays on the target site and
+terminates.
+
+Why not the alternatives: requests plus BeautifulSoup cannot run JavaScript and gives
+you no crawl orchestration, politeness, or retry handling. Selenium can drive a
+browser but is heavier and flakier than Playwright. selectolax is used instead of
+BeautifulSoup because it parses HTML several times faster, which matters across many
+pages.
+
+### PII redaction: presidio-analyzer, presidio-anonymizer, spaCy
+
+`Redactor` runs Presidio's `AnalyzerEngine`, which combines the `en_core_web_lg`
+spaCy model's named-entity recognition with Presidio's own pattern recognizers to
+locate spans of personal data, then `AnonymizerEngine` replaces each span with a
+typed placeholder such as `<EMAIL_ADDRESS>`. Because spaCy NER scans the whole text,
+cost grows with length, so records over ~10,000 characters (env-tunable) skip
+Presidio and take a linear regex fallback that still catches emails, US SSNs, IPv4,
+credit cards (validated with the Luhn checksum so it will not redact every long
+number), and phone numbers.
+
+Why not the alternatives: pure regex misses names and anything context-dependent,
+which is why it is kept only as the fast fallback, not the primary path. Cloud PII
+services (AWS Comprehend, Google DLP) are accurate but cost money and, more
+importantly, would send the corpus off the machine, which defeats the point of a
+local, auditable pipeline. Running spaCy NER directly would find entities but not
+give the recognizer-plus-anonymizer framework Presidio provides.
+
+### Language identification: fastText lid.176
+
+`LangFilter` loads fastText's `lid.176` model (a single compressed file that
+identifies 176 languages) and calls `predict` on the first 2000 characters. It only
+trusts a non-English verdict when the model's probability is at least 0.50; below
+that the text is labelled "unknown" and kept, so obfuscated text like a phishing
+email is not wrongly shipped off to translation. If fastText is unavailable it falls
+back to langdetect, then to a stdlib heuristic (Unicode script ranges plus English
+stopword frequency).
+
+Why not the alternatives: langdetect is slower and less reliable on short strings, so
+it is the fallback rather than the default. langid.py and Google's CLD3 are viable
+but fastText's lid.176 is faster, ships as one model file, and is well benchmarked.
+
+### Translation: deep-translator
+
+When a record is confidently non-English and drop mode is off, `Translator` uses
+deep-translator's `GoogleTranslator`, which calls Google's free endpoint with
+automatic source detection and no local model. Long text is split into sub-5000
+character chunks (on paragraphs, then lines), each record is capped at 8 chunks and a
+20-second budget, and after 6 consecutive failures the online backend disables itself
+for the rest of the run so a rate-limited endpoint cannot stall everything. An
+offline argostranslate backend is used if installed.
+
+Why not the alternatives: the paid Google Cloud Translation API is accurate but costs
+per character and needs billing set up. Local neural models (MarianMT, NLLB) avoid the
+network but pull in large per-language-pair weights and want a GPU to be quick.
+argostranslate is fully offline but needs a language package installed per pair and is
+lower quality, so it is the fallback. The free endpoint's weakness is exactly the
+rate-limiting seen in practice, which is why the pipeline also offers dropping
+non-English outright instead of translating.
+
+### Deduplication: datasketch (MinHash + LSH)
+
+Two layers. Exact dedup sha256-hashes the normalized text (lowercased, whitespace
+collapsed); a repeat hash is an exact duplicate. Near-dup, when enabled, turns the
+text into overlapping k-word shingles, hashes them into a MinHash signature of
+`num_perm` permutations, and indexes the signature in datasketch's `MinHashLSH`, which
+splits the signature into bands so only plausibly-similar records share a bucket; a
+query returns candidates whose estimated Jaccard similarity clears the threshold. When
+datasketch is not installed, a pure-python MinHash with banded LSH does the same with
+deterministic coefficients. In this corpus, near-dup is deliberately turned off for
+cross-source and final dedup (exact-only), because it was collapsing too many
+similar-but-distinct security records (templated CVE text, MITRE techniques, log
+lines). Only the exact-hash set is checkpointed, as JSON rather than pickle, so a
+resumed run cannot be tricked into running attacker-controlled code by deserializing a
+tampered checkpoint.
+
+Why not the alternatives: comparing every pair is O(n squared) and impossible at
+corpus scale, which is the whole reason for LSH. Embedding every record and doing
+vector-similarity dedup would catch semantic duplicates but needs an embedding model
+and a vector index and is far more expensive. Spark's MinHashLSH would distribute the
+work but is overkill for an in-memory corpus this size. SimHash is a reasonable
+alternative to MinHash but datasketch's MinHashLSH is the better-supported standard.
+
+### Schema validation: pydantic v2
+
+The final record is a pydantic v2 model, `CanonicalRecord`, configured with
+`extra="forbid"` (an unexpected field is an error, so a mapper bug surfaces instead of
+silently adding a column) and `str_strip_whitespace=True`. Field validators enforce
+the contract: `text` at least 20 characters, `content_hash` a 64-character hex sha256,
+`domain_name` and `subdomain_name` within their enums, `record_type` snapped to a
+known set, integer labels at least -1, `safe_unsafe` limited to SAFE/UNSAFE/null. A
+violation raises `ValidationError` and the record goes to the rejected sink.
+
+Why not the alternatives: dataclasses plus hand-written checks would be verbose and
+easy to let drift. jsonschema is declarative but less ergonomic and does no coercion.
+marshmallow and attrs+cattrs are workable but pydantic v2's Rust core is fast and its
+error messages point straight at the offending field.
+
+### Metrics, and the small plumbing
+
+The EDA metrics are pure standard library (`collections.Counter`,
+`statistics.mean`/`median`) computed in one streaming pass, so the gate stays cheap
+and predictable; pulling the whole corpus into pandas just to aggregate it would cost
+memory for no real benefit. Around the edges: loguru provides the per-run
+`pipeline.<pid>.log` and console format with far less boilerplate than stdlib logging;
+python-dotenv loads `.env` (resolved from the working directory, then the package
+root) so keys are present before any stage reads them; orjson serializes records on
+the write path faster than stdlib json while staying correct; and ftfy repairs mojibake
+(double-encoded UTF-8, stray replacement characters) during sanitize, which a plain
+Unicode normalize would not catch.
+
 ## Where everything ends up
 
 If you want to see any step for yourself, this is where each pile lives:
