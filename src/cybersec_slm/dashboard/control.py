@@ -23,9 +23,11 @@ import subprocess
 import sys
 import time
 
-from .. import core
+from .. import core, stages
+from . import settings_store
 
 CONTROL_NAME = "pipeline_run.json"
+PLAN_NAME = "pipeline_plan.json"
 
 # Which advanced-settings keys each stage accepts. The dashboard offers only a
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
@@ -103,12 +105,49 @@ def build_command(stage: str = "all", *, resume: bool = False,
     return cmd
 
 
+def stage_argv(stage: str, *, resume: bool = False,
+               settings: dict | None = None) -> list[str]:
+    """The CLI argv (``[stage, *flags]``) for one stage, without the interpreter.
+
+    ``build_command`` prefixes ``python -m cybersec_slm``; this drops those three
+    tokens so ``cli.main(stage_argv(...))`` can run the stage in-process (used by
+    the five-stage full-run orchestrator).
+    """
+    return build_command(stage, resume=resume, settings=settings)[3:]
+
+
+def build_full_plan(overrides: dict | None = None, *,
+                    resume: bool = False) -> list[list[str]]:
+    """The ordered per-stage argv list for a full ``source->...->schema`` run.
+
+    Each stage is built from its own saved advanced settings
+    (``settings_store.get_stage``) with ``overrides`` (the Overview panel) layered
+    on top so a live Overview edit wins over a per-page save. ``build_command``
+    drops any flag a stage does not accept, so a cross-stage key (e.g. ``domains``)
+    falls away harmlessly per stage. With ``resume=True`` the ``source`` stage is
+    skipped (discovery appends new rows and has no checkpoint) and ``--resume`` is
+    passed to the stages that support it (ingest, clean). Pure and side-effect-free.
+    """
+    over = dict(overrides or {})
+    plan: list[list[str]] = []
+    for key in stages.stage_keys():
+        if resume and key == "source":
+            continue
+        effective = {**settings_store.get_stage(key), **over}
+        plan.append(stage_argv(key, resume=resume, settings=effective))
+    return plan
+
+
 def _logs_dir() -> str:
     return os.path.join(core.data_root(), "logs")
 
 
 def _control_file() -> str:
     return os.path.join(_logs_dir(), CONTROL_NAME)
+
+
+def _plan_file() -> str:
+    return os.path.join(_logs_dir(), PLAN_NAME)
 
 
 def _read_control() -> dict | None:
@@ -160,16 +199,42 @@ def status() -> dict:
     }
 
 
+def _spawn_detached(cmd: list[str], *, root: str, logs: str) -> int:
+    """Launch ``cmd`` detached with the dashboard's data root; return its PID.
+
+    The child survives dashboard reruns and can be killed as a whole tree; its
+    stdout/stderr go to ``logs/pipeline_control.out`` while the pipeline writes its
+    own ``logs/pipeline.<pid>.log`` that the live monitor tails.
+    """
+    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root}
+    out = open(os.path.join(logs, "pipeline_control.out"), "ab")
+    kwargs: dict = {"cwd": root, "env": env, "stdout": out, "stderr": out,
+                    "stdin": subprocess.DEVNULL}
+    if os.name == "nt":
+        # DETACHED_PROCESS (0x8) + new group: survive dashboard reruns, kill as a tree.
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(cmd, **kwargs)
+    finally:
+        out.close()
+    return proc.pid
+
+
 def start(stage: str = "all", *, resume: bool = False,
           settings: dict | None = None, _command: list[str] | None = None) -> dict:
     """Spawn one pipeline ``stage`` (default the full ``all`` run) as a detached
     subprocess.
 
     Refuses when a run is already live. ``stage`` is one of ``all``, ``source``,
-    ``ingest``, ``clean``, ``eda``, ``schema``; ``settings`` carries the advanced
-    flags (worker count, source-timeout, purge-raw, ...) that ``build_command``
-    filters to the ones that stage accepts. ``resume`` adds ``--resume`` where
-    supported. ``_command`` overrides the launched command (a test seam). The child
+    ``ingest``, ``clean``, ``eda``, ``schema``. For a single stage, ``settings``
+    carries the advanced flags (worker count, source-timeout, purge-raw, ...) that
+    ``build_command`` filters to the ones that stage accepts. For ``all`` the child
+    is the five-stage orchestrator (``run_all``) and ``settings`` is the Overview
+    override layer applied on top of each page's saved settings. ``resume`` adds
+    ``--resume`` where supported. ``_command`` overrides the launched command (a
+    test seam; skips the plan/orchestrator branch). The child
     runs with the dashboard's data root so its output lands where the dashboard
     reads; its stdout/stderr go to ``logs/pipeline_control.out`` and the pipeline
     writes its own ``logs/pipeline.<pid>.log`` that the live monitor tails.
@@ -181,29 +246,26 @@ def start(stage: str = "all", *, resume: bool = False,
     root = core.data_root()
     logs = _logs_dir()
     os.makedirs(logs, exist_ok=True)
-    cmd = _command or build_command(stage, resume=resume, settings=settings)
-    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root}
-
-    out = open(os.path.join(logs, "pipeline_control.out"), "ab")
-    kwargs: dict = {"cwd": root, "env": env, "stdout": out, "stderr": out,
-                    "stdin": subprocess.DEVNULL}
-    if os.name == "nt":
-        # DETACHED_PROCESS (0x8) + new group: survive dashboard reruns, kill as a tree.
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008
+    if _command is not None:
+        cmd = _command
+    elif stage == "all":
+        # Full run: one detached orchestrator that runs the five stages in order,
+        # each with its own page's saved settings (overridden by ``settings``, the
+        # Overview panel). The plan is handed to it via logs/pipeline_plan.json.
+        plan = build_full_plan(settings, resume=resume)
+        with open(_plan_file(), "w", encoding="utf-8") as f:
+            json.dump(plan, f)
+        cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
     else:
-        kwargs["start_new_session"] = True
+        cmd = build_command(stage, resume=resume, settings=settings)
+    pid = _spawn_detached(cmd, root=root, logs=logs)
 
-    try:
-        proc = subprocess.Popen(cmd, **kwargs)
-    finally:
-        out.close()
-
-    ctl = {"pid": proc.pid, "cmd": cmd, "stage": stage,
+    ctl = {"pid": pid, "cmd": cmd, "stage": stage,
            "resume": bool(resume or (settings or {}).get("resume")),
            "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with open(_control_file(), "w", encoding="utf-8") as f:
         json.dump(ctl, f)
-    return {"ok": True, "pid": proc.pid, "stage": stage, "resume": ctl["resume"]}
+    return {"ok": True, "pid": pid, "stage": stage, "resume": ctl["resume"]}
 
 
 def _kill_tree(pid: int) -> bool:

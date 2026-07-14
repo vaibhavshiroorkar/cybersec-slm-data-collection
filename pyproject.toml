@@ -102,6 +102,12 @@ dev = [
     "pre-commit>=3.7.0",         # local secrets/lint hooks (threat model: Unmonitored Code)
 ]
 
+# setuptools < 83.0.0 carries PYSEC-2026-3447 (an sdist path-traversal on macOS
+# APFS/HFS+); it is pulled in transitively by spacy/thinc. Constrain to the fixed
+# release so the CI supply-chain audit (pip-audit) stays green.
+[tool.uv]
+constraint-dependencies = ["setuptools>=83.0.0"]
+
 # The presidio NLP engine loads the large English spaCy model by name; pin its
 # release wheel so `uv sync` installs it (no separate `python -m spacy download`).
 [tool.uv.sources]

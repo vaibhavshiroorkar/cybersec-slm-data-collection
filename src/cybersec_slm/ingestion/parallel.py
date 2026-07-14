@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Parallel ingestion orchestrator - the five-stage pipeline.
+"""Parallel ingestion orchestrator - the corpus-build stages of the pipeline.
 
-The pipeline runs five physically separate stages (no ingest/clean overlap):
+Implements stages 2-5 of the canonical pipeline (sourcing, stage 1, is a separate
+curation step in ``sourcing/``). ``run_v2_pipeline`` runs these four physically
+separate stages in order (no ingest/clean overlap):
 
 Stage 2 - Ingest (``run_ingest``):
     A spawn ``ProcessPoolExecutor`` of fetch-only workers fetches every source to
@@ -21,7 +23,7 @@ Then (``run_v2_pipeline``):
 
     cybersec-slm ingest --sources sources/Sources.csv --workers 4
     cybersec-slm clean
-    cybersec-slm all                          # full pipeline (all five stages)
+    cybersec-slm all                          # corpus build: ingest..schema
 
 The shared process-pool machinery lives in ``_run_pool``; ``run_ingest`` drives it.
 """
@@ -372,7 +374,7 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
               sources_only: list[str] | None = None) -> dict:
     """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
 
-    The clean stage of the five-stage pipeline. Cleans every fetched source in one
+    The clean stage of the pipeline. Cleans every fetched source in one
     pass (per-source transforms, per-source dedup disabled), writes
     ``logs/clean_report.csv``, then runs the single deterministic cross-source
     dedup pass (:func:`cleaning.pipeline.final_global_dedup`). ``data/raw/`` is
@@ -543,8 +545,10 @@ def run_v2_pipeline(spec: str | None = None, *,
                     crawl: bool = True,
                     enforce_eda: bool = True,
                     normalize: bool = True) -> dict:
-    """Run the five stages in sequence: ingest -> clean -> EDA -> schema.
+    """Run the corpus build in sequence: ingest -> clean -> EDA -> schema.
 
+    These are the four stages that consume an already-curated catalog; sourcing is
+    a separate curation step (``cybersec-slm source``) that is not run here.
     Physically separate stages (no ingest/clean overlap): ingest fetches every
     source to data/raw/, clean cleans the whole tree and cross-source dedups into
     data/clean/ (data/raw/ is retained by default; pass keep_raw=False to delete

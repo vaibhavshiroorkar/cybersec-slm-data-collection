@@ -26,8 +26,11 @@ from .. import core
 FILE_NAME = "pipeline_settings.json"
 
 # Stages whose saved settings feed a full ``all`` run, in increasing precedence
-# (``all`` last so an explicit Overview save wins over a per-stage save).
-_ALL_FEED_ORDER = ("schema", "eda", "clean", "ingest", "all")
+# (``all`` last so an explicit Overview save wins over a per-stage save). Used only
+# to seed the Overview override panel - the full run itself reads each stage's saved
+# settings directly (control.build_full_plan), so cross-stage flag collisions in this
+# flat merge do not affect the actual per-stage commands.
+_ALL_FEED_ORDER = ("schema", "eda", "clean", "ingest", "source", "all")
 
 
 def settings_path(path: str | None = None) -> str:

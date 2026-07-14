@@ -9,7 +9,7 @@ stages:
     cmd: cybersec-slm all
     deps:
       - src/cybersec_slm
-      - sources/allowlist.yaml
+      - sources/Sources.csv
     outs:
       - data/final/dataset.jsonl
       - data/final/manifest.json
