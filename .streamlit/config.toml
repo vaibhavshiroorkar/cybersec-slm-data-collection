@@ -1,6 +1,6 @@
-# Dashboard theme. Only the accent and font are set so a viewer's light/dark
-# choice is preserved; card surfaces are drawn with theme-neutral rgba in
-# dashboard/ui.py inject_css().
+# Dashboard theme. Dark by default; card surfaces are drawn with theme-neutral
+# rgba in dashboard/ui.py inject_css() so the instrument-panel look holds.
 [theme]
+base = "dark"
 primaryColor = "#4C6EF5"
 font = "sans serif"

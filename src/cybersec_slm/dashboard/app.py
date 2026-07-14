@@ -87,9 +87,7 @@ with ui.section("Run the full pipeline"):
     elif cstat.get("stale"):
         st.caption("Previous run ended without a clean stop.")
     else:
-        st.caption("Reset instantly deletes the data/ folder (no confirmation). "
-                   "Auto-rebalance is off by default; raw files are kept after "
-                   "cleaning. Controls act on this machine.")
+        st.caption("Reset deletes the data/ folder with no confirmation.")
 
 # ------------------------------------------------------------------- funnel ----
 # Cached: the funnel scans data/ on every rerun, which made the Overview reload on

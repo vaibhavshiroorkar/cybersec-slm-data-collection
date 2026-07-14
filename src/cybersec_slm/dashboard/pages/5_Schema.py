@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, data, ui
+from cybersec_slm.dashboard import charts, data, schema_store, ui
 
 PAGE_SIZE = 50
 _SNIPPET = 160
@@ -21,7 +21,8 @@ st.caption("Cleaned records mapped onto the canonical schema in "
            "`data/final/dataset.jsonl`, with a provenance manifest.")
 
 man = data.manifest()
-run_tab, manifest_tab, browse_tab = st.tabs(["Run", "Manifest", "Browse"])
+run_tab, fields_tab, manifest_tab, browse_tab = st.tabs(
+    ["Run", "Fields", "Manifest", "Browse"])
 
 # ------------------------------------------------------------------ run --------
 with run_tab:
@@ -43,6 +44,31 @@ with run_tab:
                     st.warning(f"paused sources: {', '.join(nr['paused_sources'])}")
         else:
             st.caption("No normalize report yet.")
+
+# --------------------------------------------------------------- fields --------
+with fields_tab:
+    with ui.section("Canonical schema fields",
+                    "The 22-field record contract. Type and requiredness come from "
+                    "the model; edit a field's default or description and save. "
+                    "Edits annotate the catalog only — validation is unchanged."):
+        import pandas as pd
+
+        df = pd.DataFrame(schema_store.field_catalog())
+        edited = st.data_editor(
+            df, use_container_width=True, hide_index=True,
+            key="schema_fields_editor", disabled=("field", "type", "required"),
+            column_config={
+                "field": st.column_config.TextColumn("field", width="medium"),
+                "type": st.column_config.TextColumn("type"),
+                "required": st.column_config.CheckboxColumn("required"),
+                "default": st.column_config.TextColumn("default"),
+                "description": st.column_config.TextColumn(
+                    "description", width="large"),
+            })
+        if ui.right_slot().button("Save fields", key="schema_fields_save",
+                                  use_container_width=True):
+            schema_store.save_overrides(edited.to_dict("records"))
+            st.toast("Saved schema field edits")
 
 # ------------------------------------------------------------- manifest --------
 with manifest_tab:
