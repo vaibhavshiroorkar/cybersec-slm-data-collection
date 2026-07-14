@@ -2,7 +2,8 @@
 """Unified command-line entry point for the pipeline.
 
 Full pipeline (end-to-end):
-    cybersec-slm all      # ingest -> clean -> EDA -> schema (five stages)
+    cybersec-slm all      # ingest -> clean -> EDA -> schema (four stages; run
+                          # `source` separately to curate the catalog first)
 
 Individual stages:
     cybersec-slm source   [--domains ...] [--dry-run]        # 1: search -> Sources.csv
@@ -179,7 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ── all ───────────────────────────────────────────────────────────────────
     a = sub.add_parser("all",
-                       help="full pipeline: ingest -> clean -> EDA -> schema (5 stages)")
+                       help="full corpus build: ingest -> clean -> EDA -> schema "
+                            "(4 stages; run `source` separately to curate first)")
     a.add_argument("--sources", default=None,
                    help="path to a sources .csv (default: sources/Sources.csv)")
     a.add_argument("--workers", type=int, default=None,
@@ -282,7 +284,8 @@ def main(argv: list[str] | None = None) -> None:
               f"{summary['appended']} appended -> {summary['csv']}")
 
     elif args.stage == "all":
-        # Full pipeline: ingest -> clean -> EDA -> schema (five stages, no overlap).
+        # Full corpus build: ingest -> clean -> EDA -> schema (four stages, no
+        # overlap). Sourcing is a separate curation step (`cybersec-slm source`).
         if getattr(args, "no_auto_rebalance", False):
             from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False

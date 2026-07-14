@@ -80,9 +80,11 @@ with ui.section("Run status"):
 with ui.section("Run the full pipeline"):
     cstat = control.status()
     running = cstat["running"]
-    # Seed the panel from settings saved on the stage pages, so a value configured
-    # (and saved) on the Ingest/Clean/EDA page also drives the full run. Any flag
-    # `all` does not accept is dropped by build_command.
+    # The full run executes source -> ingest -> clean -> eda -> schema in order,
+    # each stage built from its own page's saved settings. This panel seeds from
+    # those saved values and its live edits become per-run *overrides* layered on
+    # top of every stage (control.build_full_plan); build_command drops any flag a
+    # given stage does not accept.
     _saved_all = settings_store.merged_all()
     settings = ui.advanced_settings("all", defaults=_saved_all)
     run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
@@ -102,8 +104,10 @@ with ui.section("Run the full pipeline"):
 
     b = st.columns(4)
     if b[0].button("Start", disabled=running, use_container_width=True,
-                   help="Run all stages fresh: ingest, clean, EDA, schema. Wipes "
-                        "any saved checkpoint."):
+                   help="Run all stages fresh, in order: source, ingest, clean, "
+                        "EDA, schema. Each stage uses the advanced settings saved "
+                        "on its page (overridden by the panel above). Wipes any "
+                        "saved checkpoint."):
         # With a checkpoint present, don't wipe on a single click: ask to confirm.
         if ckpt["exists"]:
             st.session_state["_confirm_fresh_start"] = True
