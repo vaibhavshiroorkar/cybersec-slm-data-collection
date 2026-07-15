@@ -22,6 +22,26 @@ def test_every_domain_has_keywords_and_vocab():
         assert kw.DOMAIN_VOCAB[domain], f"{domain} vocab empty"
 
 
+def test_every_domain_has_ample_dataset_keywords():
+    # The GitHub engine is single-page, so breadth (many distinct keywords) is the
+    # only lever for wider commercial-valid coverage per sub-domain.
+    for domain, words in kw.DOMAIN_KEYWORDS.items():
+        assert len(words) >= 12, f"{domain} has too few keywords ({len(words)})"
+        assert len(words) == len(set(words)), f"{domain} has duplicate keywords"
+
+
+def test_default_engines_are_github_first_and_reliable():
+    ds = kw.default_engines(is_datasets=True)
+    assert ds.split(",")[0] == "github"            # highest commercial-valid yield
+    for eng in ("openairedatasets", "arxiv", "semantic scholar"):
+        assert eng in ds
+    # None of the rate-limited general web engines are in the default set.
+    for dead in ("google", "duckduckgo", "brave", "startpage", "bing"):
+        assert dead not in ds
+    txt = kw.default_engines(is_datasets=False)
+    assert "github" in txt
+
+
 # ----------------------------------------------------------------- classify ---
 
 
@@ -192,6 +212,106 @@ def test_discover_skips_enrichment_when_disabled(tmp_path, monkeypatch):
     assert built == []                               # Enricher never constructed
 
 
+def test_discover_paginates_until_target_reached(tmp_path, monkeypatch):
+    # Each result page yields one new link (the same one for every keyword on that
+    # page, so dedup leaves exactly one per page). Reaching a target of 3 therefore
+    # requires walking to page 3 - proving the run keeps going past the first page.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    seen_pages: list[int] = []
+
+    def fake_search(query, *, url=None, num=10, language="en", client=None,
+                    pageno=1, **k):
+        seen_pages.append(pageno)
+        if pageno <= 5:
+            return [Result(title="T", link=f"https://example.com/page{pageno}",
+                           snippet="s")]
+        return []
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        max_total=3, enrich=False)
+
+    assert summ["new"] == 3
+    assert summ["target"] == 3
+    assert summ["target_reached"] is True
+    assert max(seen_pages) >= 3               # actually paged past page 1
+
+
+def test_discover_stops_when_search_space_exhausted(tmp_path, monkeypatch):
+    # Only two pages ever return results; the target (100) can never be met, so the
+    # run must stop at what exists instead of looping forever.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    def fake_search(query, *, url=None, num=10, language="en", client=None,
+                    pageno=1, **k):
+        if pageno <= 2:
+            return [Result(title="T", link=f"https://example.com/page{pageno}",
+                           snippet="s")]
+        return []
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        max_total=100, enrich=False)
+
+    assert summ["new"] == 2                    # only what the space held
+    assert summ["target_reached"] is False
+
+
+def test_discover_single_pass_when_no_target(tmp_path, monkeypatch):
+    # Without max_total the run makes exactly one pass (page 1 only), unchanged.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    seen_pages: list[int] = []
+
+    def fake_search(query, *, url=None, num=10, language="en", client=None,
+                    pageno=1, **k):
+        seen_pages.append(pageno)
+        return [Result(title="T", link=f"https://example.com/{query}", snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], enrich=False)
+
+    assert set(seen_pages) == {1}              # never paged beyond the first
+    assert summ["target"] is None
+    assert summ["target_reached"] is True
+
+
+def test_valid_counts_by_subdomain_counts_only_commercial_ok(tmp_path):
+    import pandas as pd
+
+    from cybersec_slm.sourcing.sheet import valid_counts_by_subdomain
+
+    csv_path = str(tmp_path / "Sources.csv")
+    pd.DataFrame([
+        {"Sub-Domain": "Cryptography", "Dataset Link": "https://a", "License": "MIT"},
+        {"Sub-Domain": "Cryptography", "Dataset Link": "https://b", "License": "Apache-2.0"},
+        {"Sub-Domain": "Cryptography", "Dataset Link": "https://c", "License": "CC BY-NC 4.0"},
+        {"Sub-Domain": "Cryptography", "Dataset Link": "https://d", "License": ""},
+        {"Sub-Domain": "Network Security", "Dataset Link": "https://e", "License": "BSD-3-Clause"},
+        {"Sub-Domain": "Network Security", "Dataset Link": "https://f", "License": "GPL-3.0"},
+    ]).to_csv(csv_path, index=False, encoding="utf-8")
+
+    counts = valid_counts_by_subdomain(csv_path)
+    assert counts["Cryptography"] == 2         # MIT + Apache; NC and blank excluded
+    assert counts["Network Security"] == 1     # BSD ok; GPL blocked
+
+
+def test_valid_counts_by_subdomain_missing_file_is_empty(tmp_path):
+    from cybersec_slm.sourcing.sheet import valid_counts_by_subdomain
+
+    assert valid_counts_by_subdomain(str(tmp_path / "nope.csv")) == {}
+
+
 def test_delete_rows_by_subdomain_and_link(tmp_path):
     csv_path = str(tmp_path / "Sources.csv")
     rows = [
@@ -219,6 +339,317 @@ def test_delete_rows_by_subdomain_and_link(tmp_path):
     assert delete_rows(str(tmp_path / "missing.csv"), links=["x"]) == 0
 
 
+def test_delete_rows_by_position(tmp_path):
+    csv_path = str(tmp_path / "Sources.csv")
+    rows = [
+        build_row(Result(title=name, link=f"https://example.com/{name}",
+                         snippet="s"), "Network Security", today="01/01/2026")
+        for name in ("A", "B", "C", "D")
+    ]
+    append_rows(csv_path, rows)
+
+    # 1-based inclusive range: delete rows 2..3 (B, C), keep A and D.
+    assert delete_rows(csv_path, positions=[2, 3]) == 2
+    links = existing_links(csv_path)
+    assert normalize_url("https://example.com/A") in links
+    assert normalize_url("https://example.com/D") in links
+    assert len(links) == 2
+
+    # out-of-range positions are ignored, not errors
+    assert delete_rows(csv_path, positions=[99]) == 0
+
+
+# ------------------------------------------------------ discover: new behavior --
+
+
+def test_discover_spreads_evenly_across_domains(tmp_path, monkeypatch):
+    # Every keyword yields a fresh unique link, so the only thing bounding the run
+    # is the total cap. With an odd cap over two domains, the round-robin schedule
+    # must split them as evenly as possible (differ by at most one).
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    counter = {"n": 0}
+
+    def fake_search(query, *, pageno=1, **k):
+        counter["n"] += 1
+        return [Result(title="T", link=f"https://example.com/r{counter['n']}",
+                       snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    doms = run.catalog.subdomains(run.catalog.load())[:2]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=doms, per_keyword=1,
+                        max_total=5, enrich=False)
+
+    assert summ["new"] == 5
+    counts = sorted(summ["by_domain"][d] for d in doms)
+    assert counts[1] - counts[0] <= 1          # even split (3 and 2)
+
+
+def test_discover_survives_a_failing_query(tmp_path, monkeypatch):
+    # One keyword's search raises; the run logs and skips it, and still gathers
+    # rows from the queries that succeed (no whole-run abort).
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result, SearchError
+
+    calls = {"n": 0}
+
+    def flaky_search(query, *, pageno=1, **k):
+        calls["n"] += 1
+        if calls["n"] == 2:                    # the 2nd query blows up
+            raise SearchError("boom")
+        return [Result(title="T", link=f"https://example.com/ok{calls['n']}",
+                       snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", flaky_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        max_total=3, enrich=False)
+
+    assert summ["new"] == 3                     # gathered despite the failure
+
+
+def test_discover_first_query_failure_is_fatal(tmp_path, monkeypatch):
+    # If the very first query fails, the instance is unreachable/misconfigured, so
+    # discovery fails fast with a clear error rather than churning through every
+    # keyword.
+    import pytest
+
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import SearchError
+
+    def dead_search(query, *, pageno=1, **k):
+        raise SearchError("connection refused")
+
+    monkeypatch.setattr(run, "searxng_search", dead_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    with pytest.raises(SearchError):
+        run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                     max_total=3, enrich=False)
+
+
+def test_discover_stops_on_time_budget(tmp_path, monkeypatch):
+    # A tiny time budget (via an injected clock that trips after a few ticks) stops
+    # the run early even though the search space is effectively infinite.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    counter = {"n": 0}
+
+    def fake_search(query, *, pageno=1, **k):
+        counter["n"] += 1
+        return [Result(title="T", link=f"https://example.com/t{counter['n']}",
+                       snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    ticks = {"n": 0}
+
+    def clock():                                # 0 for the first few calls, then jump
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] <= 6 else 10_000.0
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        max_minutes=1, enrich=False, clock=clock)
+
+    assert summ["max_minutes"] == 1
+    assert 0 < summ["new"] < 8                  # stopped well before exhausting
+
+
+def test_discover_reports_license_fill(tmp_path, monkeypatch):
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    monkeypatch.setattr(run, "searxng_search", lambda *a, **k: [
+        Result(title="T", link="https://huggingface.co/datasets/x/y", snippet="s")])
+
+    class _SpyEnricher:
+        def __init__(self, **kw):
+            pass
+
+        def enrich(self, row):
+            row["License"] = "MIT"
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _SpyEnricher)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        max_total=1, enrich=True)
+
+    assert summ["new"] == 1
+    assert summ["license_filled"] == 1
+    assert summ["license_rate"] == 1.0
+
+
+def test_discover_quality_filter_drops_junk(tmp_path, monkeypatch):
+    # A junk (social) result and a good one arrive together; only the good one is
+    # kept when the quality filter is on.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    monkeypatch.setattr(run, "searxng_search", lambda *a, **k: [
+        Result(title="junk", link="https://www.youtube.com/watch?v=x", snippet="s"),
+        Result(title="good", link="https://huggingface.co/datasets/a/b", snippet="s"),
+    ])
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=2,
+                        max_total=5, enrich=False, quality_filter=True)
+
+    # Only the HuggingFace dataset survived (the YouTube link was dropped).
+    assert summ["new"] == 1
+
+
+def test_discover_targets_reliable_engines_without_site_clause(tmp_path, monkeypatch):
+    # The foundational engine fix: every query is routed to the reliable engines
+    # (GitHub first) and carries no `site:` clause (the API engines ignore it).
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    seen: dict[str, list] = {"queries": [], "engines": []}
+
+    def fake_search(query, *, pageno=1, engines=None, **k):
+        seen["queries"].append(query)
+        seen["engines"].append(engines)
+        return [Result(title="T", link=f"https://example.com/{query}/{pageno}",
+                       snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1, enrich=False)
+
+    assert seen["queries"], "no searches were issued"
+    assert all("site:" not in q for q in seen["queries"])
+    assert all(e and e.split(",")[0] == "github" for e in seen["engines"])
+
+
+def test_discover_fill_reaches_per_domain_target(tmp_path, monkeypatch):
+    # Fill mode tops a lagging domain up to its per-domain valid target and stops.
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    n = {"i": 0}
+
+    def fake_search(query, *, pageno=1, **k):
+        n["i"] += 1
+        return [Result(title="T", link=f"https://example.com/item{n['i']}", snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    class _Enr:
+        def __init__(self, **kw):
+            pass
+
+        def enrich(self, row):
+            row["License"] = "MIT"                 # every candidate is commercial-ok
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _Enr)
+
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1,
+                        target_per_domain=3, enrich=True)
+
+    assert summ["new"] == 3
+    assert summ["by_domain"][dom] == 3
+
+
+def test_discover_fill_counts_only_commercial_valid(tmp_path, monkeypatch):
+    # Only rows the license gate passes count toward the target; unknown/blocked
+    # candidates are gathered and enriched but never appended or counted.
+    import re
+
+    import pandas as pd
+
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    n = {"i": 0}
+
+    def fake_search(query, *, pageno=1, **k):
+        n["i"] += 1
+        return [Result(title="T", link=f"https://example.com/item{n['i']}", snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    class _Enr:
+        def __init__(self, **kw):
+            pass
+
+        def enrich(self, row):
+            i = int(re.search(r"(\d+)$", row["Dataset Link"]).group(1))
+            row["License"] = "MIT" if i % 2 == 0 else "GPL-3.0"   # copyleft is blocked
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _Enr)
+
+    csv_path = str(tmp_path / "S.csv")
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    summ = run.discover(csv_path, domains=[dom], per_keyword=1,
+                        target_per_domain=2, enrich=True)
+
+    assert summ["new"] == 2
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    assert set(df["License"]) == {"MIT"}           # no GPL row was kept
+
+
+def test_discover_fill_skips_already_satisfied_domain(tmp_path, monkeypatch):
+    # A domain already at its target is skipped entirely - no searches are issued.
+    import pandas as pd
+
+    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing.search import Result
+
+    csv_path = str(tmp_path / "S.csv")
+    dom = run.catalog.subdomains(run.catalog.load())[0]
+    pd.DataFrame([{"Sub-Domain": dom, "Dataset Link": f"https://x/{i}",
+                   "License": "MIT"} for i in range(3)]
+                 ).to_csv(csv_path, index=False, encoding="utf-8")
+
+    called = {"n": 0}
+
+    def fake_search(query, *, pageno=1, **k):
+        called["n"] += 1
+        return [Result(title="T", link=f"https://example.com/{called['n']}", snippet="s")]
+
+    monkeypatch.setattr(run, "searxng_search", fake_search)
+
+    class _Enr:
+        def __init__(self, **kw):
+            pass
+
+        def enrich(self, row):
+            row["License"] = "MIT"
+            return row
+
+    monkeypatch.setattr(run, "Enricher", _Enr)
+
+    summ = run.discover(csv_path, domains=[dom], per_keyword=1,
+                        target_per_domain=3, enrich=True)
+
+    assert summ["new"] == 0
+    assert called["n"] == 0                          # already satisfied -> never searched
+
+
+def test_build_query_site_scopes_datasets_only():
+    from cybersec_slm.sourcing.keywords import (
+        QUERY_QUALIFIER,
+        TEXT_QUERY_QUALIFIER,
+        site_clause,
+    )
+
+    clause = site_clause()
+    assert "site:huggingface.co" in clause and "site:github.com" in clause
+    # datasets qualifier is the site-scoped one; text is not.
+    assert QUERY_QUALIFIER != TEXT_QUERY_QUALIFIER
+
+
 # ----------------------------------------------------------- search parsing ---
 
 
@@ -235,3 +666,41 @@ def test_parse_items_tolerates_missing_fields_and_no_items():
     assert "\n" not in items[0].snippet
     # display_link falls back to the host when absent.
     assert items[0].display_link == "x.com"
+
+
+class _CaptureClient:
+    """A fake httpx.Client that records the params of the last GET."""
+
+    def __init__(self, results=None):
+        self.last_params = None
+        self._results = results or []
+
+    def get(self, endpoint, params=None, headers=None):
+        self.last_params = params
+
+        class _Resp:
+            status_code = 200
+
+            def json(_self):
+                return {"results": self.results_}
+
+            text = ""
+
+        self.results_ = self._results
+        return _Resp()
+
+
+def test_searxng_search_forwards_engines_when_set():
+    from cybersec_slm.sourcing.search import searxng_search
+
+    client = _CaptureClient(results=[{"url": "https://github.com/a/b", "title": "t"}])
+    searxng_search("q", client=client, engines="github,arxiv")
+    assert client.last_params["engines"] == "github,arxiv"
+
+
+def test_searxng_search_omits_engines_when_none():
+    from cybersec_slm.sourcing.search import searxng_search
+
+    client = _CaptureClient(results=[])
+    searxng_search("q", client=client)
+    assert "engines" not in client.last_params

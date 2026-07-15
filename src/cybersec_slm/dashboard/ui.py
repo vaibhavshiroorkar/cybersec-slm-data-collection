@@ -346,9 +346,13 @@ def advanced_settings(stage: str, defaults: dict | None = None,
         if "sources_only" in allowed and stage in ("ingest", "clean"):
             _row_selection(stage, base, picked_domains, s)
         if "workers" in allowed:
+            _wdef = 12 if stage == "source" else 4
             s["workers"] = int(st.number_input(
-                "workers", 1, 32, value=_clamp(int(base.get("workers", 4)), 1, 32),
-                key=f"{stage}_workers"))
+                "workers", 1, 32,
+                value=_clamp(int(base.get("workers", _wdef)), 1, 32),
+                key=f"{stage}_workers",
+                help=("enrichment thread pool (license/metadata fetch)"
+                      if stage == "source" else None)))
         if "source_timeout" in allowed:
             s["source_timeout"] = int(st.number_input(
                 "source timeout (s)", 30, 7200,
@@ -388,11 +392,44 @@ def advanced_settings(stage: str, defaults: dict | None = None,
                 s["max_per_domain"] = m
         if "max_total" in allowed:
             t = int(st.number_input(
-                "stop after N new sources total (0 = no cap)", 0, 1_000_000,
+                "gather until N new sources total (0 = single pass)", 0, 1_000_000,
                 value=_clamp(int(base.get("max_total", 0)), 0, 1_000_000),
                 key=f"{stage}_maxtot"))
             if t:
                 s["max_total"] = t
+        if "max_minutes" in allowed:
+            mm = float(st.number_input(
+                "time budget in minutes (0 = none)", 0.0, 600.0,
+                value=_clamp(float(base.get("max_minutes") or 0.0), 0.0, 600.0),
+                step=1.0, key=f"{stage}_maxmin",
+                help="Stop after this long; combines with the source cap above "
+                     "(whichever is hit first)."))
+            if mm > 0:
+                s["max_minutes"] = mm
+        if "time_range" in allowed:
+            _tr = ["any", "day", "week", "month", "year"]
+            _cur = str(base.get("time_range", "year") or "year")
+            tr = st.selectbox(
+                "freshness (prefer results within)", _tr,
+                index=_tr.index(_cur) if _cur in _tr else _tr.index("year"),
+                key=f"{stage}_timerange",
+                help="Falls back to unfiltered when a query would return nothing.")
+            if tr != "year":
+                s["time_range"] = tr
+        if "no_site_scope" in allowed:
+            scope_on = st.checkbox(
+                "scope datasets queries to licensable hosts",
+                value=not bool(base.get("no_site_scope", False)),
+                key=f"{stage}_sitescope",
+                help="HuggingFace, GitHub, Kaggle, Zenodo, arXiv, data.gov, UCI. "
+                     "Falls back to an unscoped query when a scoped one finds nothing.")
+            s["no_site_scope"] = not scope_on
+        if "no_quality_filter" in allowed:
+            qf_on = st.checkbox(
+                "drop low-quality results (social/listing/search pages)",
+                value=not bool(base.get("no_quality_filter", False)),
+                key=f"{stage}_qualfilter")
+            s["no_quality_filter"] = not qf_on
         if "searxng_url" in allowed:
             url = st.text_input(
                 "SearXNG URL (blank = env SEARXNG_URL / localhost:8080)",

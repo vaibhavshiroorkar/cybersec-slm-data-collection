@@ -22,6 +22,8 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 from ..core import logger
+from .license_detect import (detect_license, license_from_github_json,
+                             license_from_hf_info)
 
 _HF_RE = re.compile(r"huggingface\.co/datasets/([^/?#]+/[^/?#]+)", re.IGNORECASE)
 _GH_RE = re.compile(r"github\.com/([^/?#]+)/([^/?#]+)", re.IGNORECASE)
@@ -49,13 +51,6 @@ def _fmt_date(v) -> str:
         return parsedate_to_datetime(s).strftime("%Y-%m-%d")
     except (TypeError, ValueError):
         return ""
-
-
-def _lic_str(lic) -> str:
-    """A license cell from a str / list value (HF cardData can hold either)."""
-    if isinstance(lic, (list, tuple)):
-        lic = next((x for x in lic if x), "")
-    return str(lic).strip()
 
 
 def _clean_tags(tags) -> str:
@@ -86,19 +81,9 @@ def _enrich_hf(ref: str) -> dict:
     info = HfApi().dataset_info(ref, files_metadata=True)
     out: dict[str, str] = {}
 
-    card = getattr(info, "cardData", None) or {}
-    lic = None
-    try:
-        lic = card.get("license")
-    except AttributeError:
-        lic = getattr(card, "license", None)
-    if not lic:
-        for t in getattr(info, "tags", None) or []:
-            if isinstance(t, str) and t.startswith("license:"):
-                lic = t.split(":", 1)[1]
-                break
+    lic = license_from_hf_info(info)          # shared normalizer (sourcing.license_detect)
     if lic:
-        out["License"] = _lic_str(lic)
+        out["License"] = lic
 
     if getattr(info, "lastModified", None):
         out["Last Updated"] = _fmt_date(info.lastModified)
@@ -139,8 +124,8 @@ def _enrich_github(owner: str, repo: str, *, client=None, token=None,
     d = resp.json()
     out: dict[str, str] = {}
 
-    lic = (d.get("license") or {}).get("spdx_id")
-    if lic and lic != "NOASSERTION":
+    lic = license_from_github_json(d)          # shared normalizer
+    if lic:
         out["License"] = lic
     if d.get("pushed_at"):
         out["Last Updated"] = _fmt_date(d["pushed_at"])
@@ -172,6 +157,11 @@ def _enrich_url(url: str, *, client=None, timeout: float = 8.0) -> dict:
     host = urlparse(url).netloc.removeprefix("www.")
     if host:
         out["Author"] = host
+    # A HEAD carries no license, so deep-detect it from the page (Kaggle/arXiv/
+    # generic HTML). Best-effort - a miss just leaves the column blank.
+    lic = detect_license(url, client=client, timeout=timeout)
+    if lic:
+        out["License"] = lic
     return out
 
 
@@ -185,10 +175,15 @@ class Enricher:
 
     def __init__(self, *, client=None, github_token: str | None = None,
                  timeout: float = 8.0):
+        import threading
+
         self._client = client
         self._token = github_token or os.getenv("GITHUB_TOKEN") or None
         self._timeout = timeout
         self._github_ok = True
+        # ``enrich`` is called concurrently from a discovery thread pool; the only
+        # shared mutable state is the GitHub rate-limit flag, guarded by this lock.
+        self._lock = threading.Lock()
 
     def enrich(self, row: dict) -> dict:
         link = (row.get("Dataset Link") or "").strip()
@@ -201,14 +196,17 @@ class Enricher:
             if hf:
                 meta = _enrich_hf(hf.group(1))
             elif gh and gh.group(1).lower() not in _GH_SKIP:
-                if self._github_ok:
+                with self._lock:
+                    github_ok = self._github_ok
+                if github_ok:
                     repo = re.sub(r"\.git$", "", gh.group(2))
                     meta = _enrich_github(gh.group(1), repo, client=self._client,
                                           token=self._token, timeout=self._timeout)
             else:
                 meta = _enrich_url(link, client=self._client, timeout=self._timeout)
         except _RateLimited:
-            self._github_ok = False
+            with self._lock:
+                self._github_ok = False
             logger.info("enrich: GitHub rate limit hit; skipping GitHub for the "
                         "rest of this run (set $GITHUB_TOKEN to raise the limit)")
         except Exception as e:                          # noqa: BLE001 - best-effort

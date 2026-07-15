@@ -288,6 +288,65 @@ def catalog_subdomains() -> list[str]:
     return sorted(catalog_summary()["by_domain"].keys())
 
 
+def _blacklist_path() -> str:
+    return os.path.join(_repo_root(), "sources", "Blacklist.csv")
+
+
+def blacklist_rows() -> list[dict]:
+    """Every row of the license blacklist (``sources/Blacklist.csv``), as read."""
+    return _read_csv(_blacklist_path())
+
+
+def blacklist_summary() -> dict:
+    """Blacklist overview: total rows + per-reason counts (empty when absent)."""
+    rows = blacklist_rows()
+    by_reason: dict[str, int] = {}
+    for r in rows:
+        reason = (r.get("Blacklist Reason") or "").strip() or "unspecified"
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    return {"total": len(rows), "by_reason": by_reason}
+
+
+def license_coverage() -> dict:
+    """Catalog license coverage using the gate verdict.
+
+    Returns ``{"total", "filled", "unknown", "red"}`` where ``unknown`` counts
+    blank / "Unknown" / "to-verify" cells and ``red`` counts rows whose license is
+    a confirmed-restrictive one still sitting in the catalog (0 after a blacklist
+    move). Used by the Sourcing page's Licenses tab.
+    """
+    from ..ingestion.license_gate import license_verdict
+
+    rows = catalog_rows()
+    filled = unknown = red = 0
+    for r in rows:
+        lic = (r.get("License") or "").strip()
+        if not lic or lic.lower() in ("unknown", "to-verify", "n/a", "none", "tbd"):
+            unknown += 1
+        else:
+            filled += 1
+        if license_verdict(lic) == "blocked":
+            red += 1
+    return {"total": len(rows), "filled": filled, "unknown": unknown, "red": red}
+
+
+def blank_license_links() -> list[str]:
+    """Source links of catalog rows whose license is blank / unresolved.
+
+    Mirrors the ``unknown`` bucket of :func:`license_coverage` (blank / "Unknown" /
+    "to-verify" / "n/a" / "none" / "tbd"). Used by the Sourcing page to delete every
+    source whose license could not be resolved in one action.
+    """
+    out: list[str] = []
+    for r in catalog_rows():
+        lic = (r.get("License") or "").strip().lower()
+        if lic in ("", "unknown", "to-verify", "n/a", "none", "tbd"):
+            link = _row_link(r)
+            if link:
+                out.append(link)
+    return out
+
+
 def raw_subdomains() -> list[str]:
     """Sorted Sub-Domains that have fetched data under ``data/raw/`` (for clean)."""
     raw = os.path.join(_root(), "data", "raw")
@@ -888,6 +947,82 @@ def _ingest_ledger_stats() -> dict:
         "lines": int(rows[1] or 0),
         "size_mb": float(rows[2] or 0.0),
     }
+
+
+def _catalog_lines_by_folder() -> dict:
+    """Map ``(sub-domain, data/raw folder name) -> (Total Lines, JSONL Size MB)``.
+
+    Uses the ingestion descriptor loader to derive each catalog row's on-disk
+    folder name (the same mapping the fetch layer uses), joined to that row's
+    line/size cells by :func:`sources.source_identity`. This lets the funnel read
+    per-source catalog figures for exactly the sources present under ``data/raw/``
+    without scanning the (100+ GB) raw tree. Empty when the catalog or descriptors
+    can't be read; the caller then reports zero records for on-disk sources.
+    """
+    try:
+        from ..ingestion import sources as _srcs
+    except Exception:
+        return {}
+    catalog = _catalog_path()
+    if not os.path.exists(catalog):
+        return {}
+
+    # identity -> (lines, size_mb) from the raw catalog rows.
+    ident_ls: dict[str, tuple[float, float]] = {}
+    for r in catalog_rows():
+        ident = _srcs.source_identity(_row_link(r))
+        if ident:
+            ident_ls[ident] = (_cat_num(r.get("Total Lines")),
+                               _cat_num(r.get("JSONL Size (MB)")))
+    try:
+        descs = _srcs.load_descriptors(catalog, order_by_size=False)
+    except Exception:
+        return {}
+
+    out: dict[tuple[str, str], tuple[float, float]] = {}
+    for d in descs:
+        base = _descriptor_base(d)
+        if not base:
+            continue
+        ident = _srcs.source_identity(d.get("url") or d.get("start_url"))
+        ls = ident_ls.get(ident)
+        if ls is not None:
+            out[(d.get("domain", ""), base)] = ls
+    return out
+
+
+def _raw_on_disk_totals() -> dict:
+    """Raw-stage totals restricted to sources physically present under ``data/raw/``.
+
+    Iterates the on-disk ``<sub-domain>/<source>`` folders and joins each to its
+    catalog line/size via :func:`_catalog_lines_by_folder`, so Sources, Records and
+    Size all describe the same population (the data actually on this machine) rather
+    than the whole catalog. ``sources`` counts every on-disk folder; a folder the
+    catalog has no measured figures for contributes to the count but not the totals.
+    Returns ``{"sources", "lines", "size_mb"}`` (all zero when no raw tree exists).
+    """
+    raw_root = os.path.join(_root(), "data", "raw")
+    if not os.path.isdir(raw_root):
+        return {"sources": 0, "lines": 0, "size_mb": 0.0}
+
+    key_ls = _catalog_lines_by_folder()
+    sources = 0
+    lines = 0.0
+    size_mb = 0.0
+    try:
+        for dom in os.scandir(raw_root):
+            if not dom.is_dir() or dom.name.startswith("."):
+                continue
+            for src in os.scandir(dom.path):
+                if not src.is_dir() or src.name.startswith("."):
+                    continue
+                sources += 1
+                ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
+                lines += ln
+                size_mb += sz
+    except OSError:
+        pass
+    return {"sources": sources, "lines": int(lines), "size_mb": size_mb}
 
 
 def data_funnel() -> dict:

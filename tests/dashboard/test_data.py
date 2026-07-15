@@ -332,6 +332,19 @@ def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
     assert funnel["raw"]["size_mb"] == 0.0
 
 
+def test_blank_license_links_returns_only_unresolved_rows_with_links(monkeypatch):
+    monkeypatch.setattr(data, "catalog_rows", lambda: [
+        {"Name": "Good", "Dataset Link": "http://good", "License": "MIT"},
+        {"Name": "Blank", "Dataset Link": "http://blank", "License": ""},
+        {"Name": "Unknown", "Dataset Link": "http://unk", "License": "Unknown"},
+        {"Name": "ToVerify", "Dataset Link": "http://tv", "License": "to-verify"},
+        {"Name": "BlankNoLink", "Dataset Link": "", "License": ""},
+    ])
+    links = data.blank_license_links()
+    # licensed row excluded; unresolved rows with a link included; link-less dropped
+    assert links == ["http://blank", "http://unk", "http://tv"]
+
+
 def test_ingest_source_rows_keeps_file_order_and_link_less_rows(monkeypatch):
     monkeypatch.setattr(data, "catalog_rows", lambda: [
         {"Name": "Alpha", "Sub-Domain": "Cryptography", "Dataset Link": "http://a"},

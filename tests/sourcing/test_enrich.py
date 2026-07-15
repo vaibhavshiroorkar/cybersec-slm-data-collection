@@ -36,7 +36,7 @@ def test_enrich_hf_fills_all_fields(monkeypatch):
     monkeypatch.setattr("huggingface_hub.HfApi", _FakeHfApi)
     row = {"Dataset Link": "https://huggingface.co/datasets/CyberCorp/threats"}
     out = enrich_row(row)
-    assert out["License"] == "apache-2.0"
+    assert out["License"] == "Apache-2.0"             # normalized by license_detect
     assert out["Last Updated"] == "2024-03-01"
     assert out["Original Size (MB)"] == "2.00"        # only the data file counts
     assert out["File Count"] == "1"                   # README.md excluded

@@ -65,16 +65,45 @@ def _subdomain_column(columns) -> str | None:
     return None
 
 
-def delete_rows(csv_path: str, *, links: list[str] | None = None,
-                subdomains: list[str] | None = None) -> int:
-    """Delete catalog rows by link and/or Sub-Domain; return the count removed.
+def valid_counts_by_subdomain(csv_path: str) -> dict[str, int]:
+    """Count existing **commercial-valid** rows per Sub-Domain in the catalog.
 
-    A row is removed if its (normalized) link is in ``links`` **or** its Sub-Domain
-    is in ``subdomains``. Matching links use :func:`normalize_url` so a slightly
-    different form of the same URL still matches. The write is atomic (temp file +
-    ``os.replace``), so a crash never leaves a half-written catalog.
+    A row counts only when its License passes the ingestion gate as clearly
+    commercial (``license_verdict == "ok"``); blank/unknown and confirmed-red
+    rows are excluded. Used by the valid-gated fill to compute each domain's
+    deficit to its target. Returns ``{}`` for a missing/empty/columnless catalog.
     """
-    if not os.path.exists(csv_path) or not (links or subdomains):
+    if not csv_path or not os.path.exists(csv_path):
+        return {}
+    import pandas as pd
+
+    from ..ingestion.license_gate import license_verdict
+
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    sdcol = _subdomain_column(df.columns)
+    if sdcol is None or "License" not in df.columns:
+        return {}
+    counts: dict[str, int] = {}
+    for sub, lic in zip(df[sdcol], df["License"]):
+        if license_verdict(lic) == "ok":
+            key = str(sub).strip()
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def delete_rows(csv_path: str, *, links: list[str] | None = None,
+                subdomains: list[str] | None = None,
+                positions: list[int] | None = None) -> int:
+    """Delete catalog rows by link, Sub-Domain, and/or position; return the count.
+
+    A row is removed if its (normalized) link is in ``links``, its Sub-Domain is in
+    ``subdomains``, **or** its 1-based position (row order in the CSV, matching the
+    Sources.csv table) is in ``positions``. Matching links use :func:`normalize_url`
+    so a slightly different form of the same URL still matches; out-of-range
+    positions are ignored. The write is atomic (temp file + ``os.replace``), so a
+    crash never leaves a half-written catalog.
+    """
+    if not os.path.exists(csv_path) or not (links or subdomains or positions):
         return 0
     import pandas as pd
 
@@ -93,6 +122,10 @@ def delete_rows(csv_path: str, *, links: list[str] | None = None,
         if sdcol is not None:
             wanted_sd = {str(s).strip() for s in subdomains}
             mask |= df[sdcol].map(lambda v: str(v).strip() in wanted_sd)
+    if positions:
+        wanted_idx = {p - 1 for p in positions if p >= 1}
+        mask |= pd.Series(df.reset_index(drop=True).index.isin(wanted_idx),
+                          index=df.index)
 
     removed = int(mask.sum())
     if removed:
