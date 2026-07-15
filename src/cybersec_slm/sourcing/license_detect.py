@@ -28,7 +28,6 @@ Two layers so callers don't double-fetch:
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
 
 from ..core import logger
 
@@ -83,11 +82,26 @@ _CC_ELEMENTS = [("attribution", "BY"), ("noncommercial", "NC"),
 _GRANT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"free\s+for\s+non[- ]?commercial", re.IGNORECASE), "Non-commercial use only"),
     (re.compile(r"non[- ]?commercial\s+use\s+only", re.IGNORECASE), "Non-commercial use only"),
-    (re.compile(r"not\s+(?:for|permitted\s+for)\s+commercial\s+use", re.IGNORECASE), "Non-commercial use only"),
-    (re.compile(r"free\s+for\s+(?:personal\s+and\s+)?commercial\s+use", re.IGNORECASE), "Free for commercial use"),
-    (re.compile(r"commercial\s+use\s+(?:is\s+)?(?:permitted|allowed)", re.IGNORECASE), "Commercial use permitted"),
-    (re.compile(r"(?:permitted|allowed)\s+for\s+commercial(?:\s+(?:use|purposes?))?", re.IGNORECASE), "Commercial use permitted"),
-    (re.compile(r"may\s+be\s+used\s+(?:freely\s+)?for\s+(?:any\s+)?commercial", re.IGNORECASE), "Commercial use permitted"),
+    (re.compile(
+        r"not\s+(?:for|permitted\s+for)\s+commercial\s+use",
+        re.IGNORECASE,
+    ), "Non-commercial use only"),
+    (re.compile(
+        r"free\s+for\s+(?:personal\s+and\s+)?commercial\s+use",
+        re.IGNORECASE,
+    ), "Free for commercial use"),
+    (re.compile(
+        r"commercial\s+use\s+(?:is\s+)?(?:permitted|allowed)",
+        re.IGNORECASE,
+    ), "Commercial use permitted"),
+    (re.compile(
+        r"(?:permitted|allowed)\s+for\s+commercial(?:\s+(?:use|purposes?))?",
+        re.IGNORECASE,
+    ), "Commercial use permitted"),
+    (re.compile(
+        r"may\s+be\s+used\s+(?:freely\s+)?for\s+(?:any\s+)?commercial",
+        re.IGNORECASE,
+    ), "Commercial use permitted"),
     (re.compile(r"royalty[- ]free", re.IGNORECASE), "Royalty-free"),
     (re.compile(r"free\s+of\s+charge", re.IGNORECASE), "Free to use"),
     (re.compile(r"free\s+to\s+use", re.IGNORECASE), "Free to use"),

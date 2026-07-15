@@ -22,8 +22,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 from ..core import logger
-from .license_detect import (detect_license, license_from_github_json,
-                             license_from_hf_info)
+from .license_detect import detect_license, license_from_github_json, license_from_hf_info
 
 _HF_RE = re.compile(r"huggingface\.co/datasets/([^/?#]+/[^/?#]+)", re.IGNORECASE)
 _GH_RE = re.compile(r"github\.com/([^/?#]+)/([^/?#]+)", re.IGNORECASE)
