@@ -8,6 +8,45 @@ from __future__ import annotations
 QUERY_QUALIFIER = "dataset OR github OR repository OR corpus"
 TEXT_QUERY_QUALIFIER = "guide OR tutorial OR explained OR documentation OR writeup"
 
+# Licensable dataset / repo / paper hosts a ``datasets``-mode query is scoped to
+# (via a SearXNG ``site:`` clause) so discovery leans toward sources whose license
+# can actually be resolved. Text-mode queries are never scoped (prose comes from
+# anywhere). The scope is a soft bias: a scoped query that returns nothing is
+# retried unscoped by the discovery driver, so recall is never lost.
+SITE_SCOPE_HOSTS: tuple[str, ...] = (
+    "huggingface.co", "github.com", "gitlab.com", "kaggle.com", "zenodo.org",
+    "arxiv.org", "data.gov", "archive.ics.uci.edu",
+)
+
+
+def site_clause(hosts: tuple[str, ...] = SITE_SCOPE_HOSTS) -> str:
+    """A ``(site:a OR site:b ...)`` clause biasing a query toward licensable hosts."""
+    return "(" + " OR ".join(f"site:{h}" for h in hosts) + ")"
+
+
+# Reliable SearXNG engines the pipeline targets instead of the general web
+# engines, which are perpetually rate-limited (brave/google "too many requests",
+# duckduckgo "access denied", startpage "CAPTCHA"). These API-based engines index
+# licensable sources directly and are not throttled. GitHub is listed first
+# because it is by far the highest commercial-valid yield (MIT/Apache/BSD repos);
+# the dataset/paper engines add reach (OpenAIRE carries CC-licensed datasets;
+# arXiv/Scholar paginate deeply but mostly resolve to unknown at the license gate).
+# Because these engines ignore ``site:`` operators, the site-scope clause above is
+# not applied when they are in use.
+DATASET_ENGINES: tuple[str, ...] = (
+    "github", "openairedatasets", "arxiv", "semantic scholar",
+)
+# Prose/how-to sources. The general web engines that used to serve these are dead,
+# so this stays thin (developer Q&A + docs-bearing repos + papers).
+TEXT_ENGINES: tuple[str, ...] = (
+    "github", "stackoverflow", "arxiv", "semantic scholar",
+)
+
+
+def default_engines(is_datasets: bool = True) -> str:
+    """Comma-separated default engine list for a keyword set (datasets vs text)."""
+    return ",".join(DATASET_ENGINES if is_datasets else TEXT_ENGINES)
+
 DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "Application Security": [
         "vulnerable source code dataset",
@@ -18,6 +57,14 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "software vulnerability commit dataset",
         "web application attack payload dataset",
         "code security bug dataset github",
+        "vulnerability detection machine learning dataset",
+        "Devign vulnerability dataset",
+        "Juliet test suite CWE dataset",
+        "smart contract vulnerability dataset",
+        "fuzzing corpus github",
+        "SQL injection payload dataset",
+        "software supply chain security dataset",
+        "awesome application security",
     ],
     "Network Security": [
         "network intrusion detection dataset",
@@ -28,6 +75,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "NetFlow anomaly detection dataset",
         "packet capture malware traffic dataset",
         "firewall log dataset",
+        "CICIDS intrusion detection dataset",
+        "UNSW-NB15 network dataset",
+        "network anomaly detection github",
+        "Zeek Suricata logs dataset",
+        "malware traffic analysis dataset",
+        "IoT network attack dataset",
+        "awesome network security",
     ],
     "Cloud Security": [
         "cloud security misconfiguration dataset",
@@ -38,6 +92,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "cloud audit log dataset security",
         "terraform IaC misconfiguration dataset",
         "S3 bucket exposure dataset",
+        "kubernetes audit logs dataset",
+        "cloudtrail logs dataset",
+        "falco runtime security rules github",
+        "IaC security scanning dataset",
+        "cloud attack detection dataset",
+        "serverless security dataset",
+        "awesome cloud security",
     ],
     "Identity Access and Management": [
         "identity access management dataset",
@@ -48,6 +109,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "OAuth SAML token dataset",
         "insider threat access dataset",
         "RBAC permissions dataset",
+        "authentication anomaly detection dataset",
+        "login logs dataset github",
+        "user behavior analytics dataset security",
+        "access control policy dataset",
+        "SSO federation dataset",
+        "credential stuffing dataset",
+        "awesome iam security",
     ],
     "Incident Response and Forensics": [
         "digital forensics dataset",
@@ -58,6 +126,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "Windows event log forensic dataset",
         "timeline analysis artifact dataset",
         "malware incident case dataset",
+        "volatility memory samples dataset",
+        "windows forensic artifacts dataset",
+        "log2timeline plaso dataset",
+        "ransomware incident dataset github",
+        "sysmon event dataset",
+        "host intrusion detection dataset",
+        "awesome incident response",
     ],
     "Data Security and Privacy": [
         "PII detection dataset",
@@ -68,6 +143,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "de-identification anonymization dataset",
         "data breach records dataset",
         "credential leak dataset",
+        "named entity PII dataset",
+        "text anonymization benchmark dataset",
+        "differential privacy dataset",
+        "synthetic PII dataset github",
+        "sensitive data detection github",
+        "data masking dataset",
+        "awesome data privacy",
     ],
     "Penetration Testing": [
         "penetration testing dataset",
@@ -78,6 +160,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "privilege escalation technique dataset",
         "attack payload dataset",
         "CTF exploit writeup dataset",
+        "nuclei templates github",
+        "metasploit modules github",
+        "web attack payloads github",
+        "OSCP privilege escalation writeup",
+        "web application pentest dataset",
+        "bug bounty writeups github",
+        "awesome pentest",
     ],
     "Vulnerability Management": [
         "CVE vulnerability dataset",
@@ -88,6 +177,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "vulnerability disclosure dataset",
         "NVD CVE feed dataset",
         "software vulnerability advisory dataset",
+        "CVE json feed github",
+        "exploit prediction EPSS dataset",
+        "dependency vulnerability dataset",
+        "OSV vulnerability database github",
+        "security advisories dataset",
+        "vulnerability scanner results dataset",
+        "awesome vulnerability management",
     ],
     "Governance, Risk and Compliance": [
         "security compliance controls dataset",
@@ -98,6 +194,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "audit findings dataset cybersecurity",
         "control framework mapping dataset",
         "regulatory compliance dataset security",
+        "OSCAL security controls github",
+        "CIS benchmark dataset",
+        "security controls catalog dataset",
+        "compliance mapping github",
+        "risk assessment dataset github",
+        "NIST 800-53 controls dataset",
+        "awesome grc",
     ],
     "Cryptography": [
         "cryptography dataset",
@@ -110,6 +213,11 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "lattice-based cryptography dataset",
         "key exchange protocol dataset",
         "crypto CTF challenge dataset",
+        "cryptographic protocol dataset",
+        "TLS handshake dataset",
+        "hash function analysis dataset",
+        "homomorphic encryption dataset",
+        "awesome cryptography",
     ],
     "Security Operations": [
         "SOC alert triage dataset",
@@ -120,6 +228,13 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "security alert labeled dataset",
         "log anomaly detection dataset",
         "EDR telemetry dataset",
+        "sigma rules github",
+        "detection rules dataset github",
+        "MITRE ATT&CK detection dataset",
+        "SOC log dataset github",
+        "security alerts labeled dataset",
+        "detection engineering dataset",
+        "awesome detection engineering",
     ],
     "Threat Intelligence": [
         "threat intelligence dataset",
@@ -133,6 +248,10 @@ DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "malware API call sequence dataset",
         "threat actor TTP dataset",
         "CTI feed dataset",
+        "malware samples dataset github",
+        "phishing email dataset github",
+        "threat intelligence feeds github",
+        "ransomware samples dataset",
     ],
 }
 

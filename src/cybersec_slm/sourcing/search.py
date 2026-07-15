@@ -58,29 +58,60 @@ def _parse_items(payload: dict) -> list[Result]:
     return out
 
 
+# SearXNG's recognized ``time_range`` values (freshness filter); anything else is
+# treated as "no time filter".
+_TIME_RANGES = {"day", "week", "month", "year"}
+
+
 def searxng_search(query: str, *, url: str | None = None, num: int = 10,
                    categories: str = "general", language: str = "en",
-                   client=None) -> list[Result]:
+                   pageno: int = 1, time_range: str | None = None,
+                   engines: str | None = None,
+                   client=None, retries: int = 2) -> list[Result]:
     """Search a SearXNG instance and return up to ``num`` results.
 
-    ``url`` overrides ``$SEARXNG_URL``. ``client`` is an optional shared
-    ``httpx.Client`` (search reuses it). Raises :class:`SearchError` when the
-    instance is unreachable or has the JSON format disabled.
+    ``url`` overrides ``$SEARXNG_URL``. ``pageno`` (1-based) selects the result
+    page, so a caller can walk deeper through the engine's results to keep
+    gathering beyond the first page. ``time_range`` (``day``/``week``/``month``/
+    ``year``) applies SearXNG's freshness filter; any other value is ignored.
+    ``engines`` (a comma-separated engine list, e.g. ``"github,arxiv"``) targets
+    specific SearXNG engines; when set, the instance uses those engines instead of
+    the ``categories`` default. This is how the pipeline routes around the
+    rate-limited general web engines to the reliable API ones. ``client`` is an
+    optional shared ``httpx.Client`` (search reuses it). ``retries`` transient
+    network errors are retried with a short backoff before a :class:`SearchError`
+    is raised. Raises :class:`SearchError` when the instance is unreachable or has
+    the JSON format disabled.
     """
     endpoint = base_url(url) + "/search"
     params = {"q": query, "format": "json", "categories": categories,
-              "language": language}
+              "language": language, "pageno": max(1, int(pageno))}
+    if time_range in _TIME_RANGES:
+        params["time_range"] = time_range
+    if engines:
+        params["engines"] = engines
+
+    import time as _time
 
     import httpx
     owns_client = client is None
     client = client or httpx.Client(timeout=30, follow_redirects=True)
     try:
-        resp = client.get(endpoint, params=params,
-                          headers={"Accept": "application/json"})
-    except httpx.HTTPError as e:                       # network/timeout/DNS
-        raise SearchError(
-            f"SearXNG request to {endpoint} failed: {e}. Is SEARXNG_URL "
-            f"({base_url(url)}) reachable?") from e
+        resp = None
+        last_err: Exception | None = None
+        for attempt in range(max(1, retries + 1)):
+            try:
+                resp = client.get(endpoint, params=params,
+                                  headers={"Accept": "application/json"})
+                break
+            except httpx.HTTPError as e:              # network/timeout/DNS
+                last_err = e
+                if attempt < retries:
+                    _time.sleep(0.5 * (attempt + 1))  # brief backoff, then retry
+        if resp is None:
+            raise SearchError(
+                f"SearXNG request to {endpoint} failed: {last_err}. Is SEARXNG_URL "
+                f"({base_url(url)}) reachable?") from last_err
     finally:
         if owns_client:
             client.close()

@@ -22,6 +22,7 @@ for local dev/testing.
 
 Public API:
     classify_license(raw)   -> (commercial_ok, reason)   # pure classifier
+    license_verdict(raw)    -> "ok" | "blocked" | "unknown"  # 3-state
     is_license_ok(descriptor) -> (allowed, reason)       # + env kill switch
 """
 
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Literal
 
 # Non-commercial, copyleft, share-alike, proprietary, or unresolved-restrictive.
 # `lgpl`/`agpl` are listed explicitly because a `\bgpl\b` boundary would not match
@@ -43,15 +45,21 @@ _DENY = re.compile(
 )
 
 # Clearly-commercial: permissive OSS, public-domain / government works, bare
-# CC0 / CC-BY-4.0 (the deny pass above has already removed -nc/-sa variants), and
-# the named-entity terms present in this catalog that are free-to-use commercially
-# (MITRE ATT&CK/CAPEC/CWE, IETF Trust). `mit` is boundary-matched so it does not
-# fire inside "permit"/"limited".
+# CC0 / CC-BY-4.0 (the deny pass above has already removed -nc/-sa variants), the
+# named-entity terms present in this catalog that are free-to-use commercially
+# (MITRE ATT&CK/CAPEC/CWE, IETF Trust), and the plain-English usage grants the
+# deep detector now records from a source's terms-of-use prose ("free for
+# commercial use", "commercial use permitted", "royalty-free", "free to use").
+# The deny pass above already turned away the non-commercial forms of these, so a
+# grant reaching here is an unencumbered one. `mit` is boundary-matched so it does
+# not fire inside "permit"/"limited".
 _ALLOW = re.compile(
     r"\b("
     r"mit|apache|bsd|cc0|cdla[- ]permissive|"
     r"public domain|us[- ]gov|u\.s\. gov|government work|"
-    r"mitre|ietf|cc[- ]by[- ]?4\.0|open access"
+    r"mitre|ietf|cc[- ]by[- ]?4\.0|open access|"
+    r"free for commercial|commercial use permitted|commercial use allowed|"
+    r"royalty[- ]free|free to use|free of charge|free for any|free for all"
     r")\b"
 )
 
@@ -75,6 +83,31 @@ def classify_license(raw: str | None) -> tuple[bool, str]:
         return True, f"commercial-ok ({allow.group(1)})"
 
     return False, f"unrecognized license: {raw!r}"
+
+
+def license_verdict(raw: str | None) -> Literal["ok", "blocked", "unknown"]:
+    """Three-state license verdict for a free-text license string.
+
+    Unlike :func:`classify_license` (default-deny: blank/unrecognized both count
+    as "not commercial-ok"), this separates a **confirmed-restrictive** license
+    from a merely *absent or unrecognized* one:
+
+    - ``"blocked"`` only when a deny pattern matches (copyleft / non-commercial /
+      share-alike / proprietary / all-rights-reserved) - a *confirmed red* license.
+    - ``"ok"`` when an allow pattern matches (clearly-commercial permissive).
+    - ``"unknown"`` for blank or unrecognized text.
+
+    The blacklist keys on ``"blocked"`` so a source is never blacklisted for a
+    missing/unknown license - only for one we positively recognise as red.
+    """
+    if raw is None or not str(raw).strip():
+        return "unknown"
+    s = " ".join(str(raw).strip().lower().split())
+    if _DENY.search(s):
+        return "blocked"
+    if _ALLOW.search(s):
+        return "ok"
+    return "unknown"
 
 
 def _enforced() -> bool:

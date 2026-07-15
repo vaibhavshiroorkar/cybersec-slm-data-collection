@@ -33,6 +33,11 @@ _COMMERCIAL_OK = [
     "MITRE ATT&CK Terms (free w/ attribution)",
     "MITRE CWE Terms of Use (free use with attribution)",
     "arXiv.org perpetual non-exclusive license (CC BY 4.0)",
+    # plain-English usage grants captured from a source's terms-of-use prose
+    "Free for commercial use",
+    "Commercial use permitted",
+    "Royalty-free",
+    "Free to use",
 ]
 
 # Licenses that forbid, restrict, or fail to establish commercial use -> block.
@@ -51,6 +56,8 @@ _BLOCKED = [
     "to-verify",
     "Unknown",
     "Contact",
+    # non-commercial usage grant captured from terms-of-use prose
+    "Non-commercial use only",
 ]
 
 
@@ -106,3 +113,26 @@ def test_gate_enforced_by_default(monkeypatch):
     monkeypatch.delenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", raising=False)
     ok, _ = license_gate.is_license_ok({"license": "GPL-3.0"})
     assert ok is False
+
+
+# ----------------------------------------------------------- 3-state verdict ----
+@pytest.mark.parametrize("raw", ["GPL-3.0", "CC BY-NC-SA 4.0", "CC BY-SA 4.0",
+                                 "All Rights Reserved", "AGPL-3.0", "proprietary"])
+def test_verdict_confirmed_red_is_blocked(raw):
+    assert license_gate.license_verdict(raw) == "blocked"
+
+
+@pytest.mark.parametrize("raw", ["MIT", "Apache-2.0", "CC BY 4.0", "CC0-1.0"])
+def test_verdict_permissive_is_ok(raw):
+    assert license_gate.license_verdict(raw) == "ok"
+
+
+@pytest.mark.parametrize("raw", ["", "   ", None, "Unknown", "ATIS",
+                                 "arXiv (non-exclusive)", "some-weird-license",
+                                 # "public use" is captured faithfully but is too
+                                 # ambiguous to auto-clear the commercial gate.
+                                 "Public use"])
+def test_verdict_blank_or_unrecognized_is_unknown(raw):
+    # Crucially, a blank/unknown license is NOT "blocked" - it is never
+    # blacklisted on mere absence, only on a positively-recognised red license.
+    assert license_gate.license_verdict(raw) == "unknown"

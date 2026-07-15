@@ -136,7 +136,34 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--max-per-domain", type=int, default=None,
                    help="cap new rows kept per Sub-Domain")
     d.add_argument("--max-total", type=int, default=None,
-                   help="stop the whole run after this many new rows (all domains)")
+                   help="stop the whole run after this many new rows (all domains). "
+                        "In fill mode this caps the total commercial-valid rows")
+    d.add_argument("--target-per-domain", type=int, default=None,
+                   help="fill mode: top each Sub-Domain up to this many "
+                        "commercial-valid rows total (reads existing counts and "
+                        "fills only the deficit); stops a domain at the target or "
+                        "when its search is exhausted")
+    d.add_argument("--engines", default=None,
+                   help="comma-separated SearXNG engines to query (env: "
+                        "SEARXNG_ENGINES; default a GitHub-first reliable set). "
+                        "Routes around the rate-limited general web engines")
+    d.add_argument("--max-minutes", type=float, default=None,
+                   help="time budget: stop the run after this many minutes "
+                        "(combine with --max-total; whichever is hit first wins)")
+    d.add_argument("--workers", type=int, default=None,
+                   help="enrichment thread-pool size (default 12); higher = faster "
+                        "license/metadata fetch")
+    d.add_argument("--time-range", choices=["any", "day", "week", "month", "year"],
+                   default="year",
+                   help="freshness bias: prefer results within this window "
+                        "(any = no filter; default year). Falls back to unfiltered "
+                        "when a query would return nothing")
+    d.add_argument("--no-site-scope", action="store_true",
+                   help="do not scope datasets-mode queries to licensable hosts "
+                        "(HuggingFace, GitHub, Kaggle, Zenodo, arXiv, data.gov, UCI)")
+    d.add_argument("--no-quality-filter", action="store_true",
+                   help="keep low-quality results (social/listing/search pages) "
+                        "instead of dropping them before enrichment")
     d.add_argument("--dry-run", action="store_true",
                    help="discover + write CSV but do not append to Sources.csv")
     d.add_argument("--out", default=None,
@@ -149,6 +176,18 @@ def build_parser() -> argparse.ArgumentParser:
                    help="skip fetching per-source metadata (size, license, last "
                         "updated, author, popularity, tags) from the source host; "
                         "faster, but leaves those columns blank")
+    d.add_argument("--backfill", action="store_true",
+                   help="instead of discovery, deep-detect licenses for existing "
+                        "catalog rows (blank/Unknown by default) and move any "
+                        "confirmed-red source to sources/Blacklist.csv")
+    d.add_argument("--backfill-all", action="store_true",
+                   help="with --backfill, re-detect every row's license, not just "
+                        "the blank/Unknown ones")
+    d.add_argument("--no-blacklist", action="store_true",
+                   help="with --backfill, detect licenses only; do not move "
+                        "confirmed-red sources to the blacklist")
+    d.add_argument("--limit", type=int, default=None,
+                   help="with --backfill, detect at most this many rows (a sample)")
 
     # ── synthetic-scan (curation aid) ─────────────────────────────────────────
     ss = sub.add_parser("synthetic-scan",
@@ -272,16 +311,38 @@ def main(argv: list[str] | None = None) -> None:
         from .dashboard.launch import launch
         launch(port=args.port, headless=args.headless)
 
+    elif args.stage == "source" and getattr(args, "backfill", False):
+        from .sourcing import backfill_licenses
+        summary = backfill_licenses(
+            args.sources, only_blank=not args.backfill_all, limit=args.limit,
+            dry_run=args.dry_run, then_blacklist=not args.no_blacklist)
+        print(f"source: backfill scanned {summary['scanned']}, "
+              f"detected {summary['detected']}, "
+              f"still unknown {summary['still_unknown']}, "
+              f"blacklisted {summary['blacklisted']}"
+              f"{' (dry-run)' if summary['dry_run'] else ''} -> {summary['summary']}")
+
     elif args.stage == "source":
         from .sourcing import run as sourcing
-        summary = sourcing.discover(
-            args.sources, domains=args.domains,
-            per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
-            max_total=args.max_total, mode=args.mode, dry_run=args.dry_run,
-            out_csv=args.out, base_url=args.searxng_url, language=args.language,
-            enrich=not args.no_enrich)
+        from .sourcing.search import SearchError
+        try:
+            summary = sourcing.discover(
+                args.sources, domains=args.domains,
+                per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
+                max_total=args.max_total, max_minutes=args.max_minutes,
+                mode=args.mode, dry_run=args.dry_run,
+                out_csv=args.out, base_url=args.searxng_url, language=args.language,
+                time_range=(None if args.time_range == "any" else args.time_range),
+                site_scope=not args.no_site_scope,
+                quality_filter=not args.no_quality_filter,
+                workers=args.workers or 12, enrich=not args.no_enrich,
+                engines=args.engines, target_per_domain=args.target_per_domain)
+        except SearchError as e:
+            raise SystemExit(f"source: discovery could not run: {e}") from None
         print(f"source: {summary['found']} hits, {summary['new']} new, "
-              f"{summary['appended']} appended -> {summary['csv']}")
+              f"{summary['appended']} appended, {summary['license_filled']} licensed "
+              f"({summary['license_rate']:.0%}) in {summary['elapsed_s']}s "
+              f"-> {summary['csv']}")
 
     elif args.stage == "all":
         # Full corpus build: ingest -> clean -> EDA -> schema (four stages, no

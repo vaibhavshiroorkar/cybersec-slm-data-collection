@@ -153,10 +153,23 @@ def test_build_command_no_crawler_flag_when_disabled():
 
 
 def test_build_command_source_drops_unrelated_flags():
-    cmd = control.build_command("source", settings={"workers": 4, "dry_run": True})
+    cmd = control.build_command(
+        "source", settings={"purge_raw": True, "dry_run": True})
     s = _joined(cmd)
-    assert "--workers" not in s        # not a source-stage flag
+    assert "--purge-raw" not in s      # not a source-stage flag
     assert "--dry-run" in s
+
+
+def test_build_command_source_emits_run_limit_flags():
+    cmd = control.build_command("source", settings={
+        "workers": 8, "max_minutes": 5, "time_range": "month",
+        "no_site_scope": True, "no_quality_filter": True})
+    s = _joined(cmd)
+    assert "--workers 8" in s          # enrichment pool size (now a source flag)
+    assert "--max-minutes 5" in s
+    assert "--time-range month" in s
+    assert "--no-site-scope" in s
+    assert "--no-quality-filter" in s
 
 
 def test_build_command_source_no_enrich_flag():
@@ -212,3 +225,11 @@ def test_build_command_source_searxng_url_and_language():
     s = _joined(cmd)
     assert "--searxng-url http://host:8080" in s
     assert "--language fr" in s
+
+
+def test_build_command_source_engines_and_target_per_domain():
+    cmd = control.build_command("source", settings={
+        "engines": "github,arxiv", "target_per_domain": 83})
+    s = _joined(cmd)
+    assert "--engines github,arxiv" in s
+    assert "--target-per-domain 83" in s
