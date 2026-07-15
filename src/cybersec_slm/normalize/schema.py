@@ -23,27 +23,44 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..sourcing import catalog as _catalog
+
 # ----------------------------------------------------------- domain allowlist --
-# The 12 canonical cybersecurity domains the corpus is organised around.
-CANONICAL_DOMAINS: tuple[str, ...] = (
-    "Application Security",
-    "Cloud Security",
-    "Cryptography",
-    "Data Security and Privacy",
-    "Governance, Risk and Compliance",
-    "Identity Access and Management",
-    "Incident Response and Forensics",
-    "Network Security",
-    "Penetration Testing",
-    "Security Operations",
-    "Threat Intelligence",
-    "Vulnerability Management",
-)
+# The corpus's sub-domains and top-level domain_name label are read from the
+# same editable taxonomy the sourcing stage's catalog uses (sources/keywords.yaml
+# via cybersec_slm.sourcing.catalog), so both stages stay in sync from one file.
+# Read once at import time (see _load_taxonomy's docstring for what that implies).
+
+
+def _load_taxonomy() -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """``(CANONICAL_DOMAINS, SUBDOMAIN_NAMES, domain_name)`` from the live catalog.
+
+    Sub-domain order is alphabetical (``catalog.subdomains()`` is
+    ``sorted(keys())``), which for the original 12 built-in domains reproduces
+    today's exact ``SUBDOMAIN_NAMES`` order — the order the downstream
+    ``snorkel_subdomain.py`` LabelModel depends on (pinned by
+    ``tests/normalize/test_schema.py::test_default_catalog_matches_legacy_order``).
+    Read once at import time: a catalog edit made mid-run only takes effect the
+    next time a fresh process imports this module, which is a non-issue for the
+    dashboard's full-run flow (schema runs last, in its own subprocess, after any
+    pre-run catalog edit is already on disk).
+    """
+    cat = _catalog.load()
+    names = tuple(_catalog.subdomains(cat))
+    codes = tuple(_catalog.code_for(n, cat) for n in names)
+    return names, codes, _catalog.domain_name()
+
+
+# The canonical sub-domains the corpus is organised around (default: the 12
+# built-in cybersecurity domains).
+CANONICAL_DOMAINS, SUBDOMAIN_NAMES, _DOMAIN_NAME = _load_taxonomy()
 ALLOWED_DOMAINS: frozenset[str] = frozenset(CANONICAL_DOMAINS)
 
 # Folder/spelling variants seen in the wild -> canonical domain. Keeps real data
 # from being rejected over a directory typo (e.g. "Forsenics"), and folds the
-# retired Quantum and Malware Analysis tracks onto their merge targets.
+# retired Quantum and Malware Analysis tracks onto their merge targets. Specific
+# to the historical 12-domain cybersecurity taxonomy; a harmless no-op for any
+# other domain (nothing in a different taxonomy will match these keys).
 DOMAIN_ALIASES: dict[str, str] = {
     "incident response and forsenics": "Incident Response and Forensics",
     "incident response and forensics": "Incident Response and Forensics",
@@ -60,30 +77,16 @@ DOMAIN_ALIASES: dict[str, str] = {
 }
 
 # ----------------------------------------------- subdomain enum (schema names) -
-# The 12 schema `subdomain_name` values, in the canonical 0..11 order that the
-# downstream snorkel_subdomain.py LabelModel must align to. The integer
-# `subdomain_label` we emit is always -1 (ABSTAIN) — this ordering only fixes the
-# name<->index contract for when labels are later assigned downstream.
-SUBDOMAIN_NAMES: tuple[str, ...] = (
-    "APPLICATION",            # 0  Application Security
-    "CLOUD",                  # 1  Cloud Security
-    "CRYPTOGRAPHY",           # 2  Cryptography
-    "DATA_PRIVACY",           # 3  Data Security and Privacy
-    "GRC",                    # 4  Governance, Risk and Compliance
-    "IAM",                    # 5  Identity Access and Management
-    "INCIDENT_RESPONSE",      # 6  Incident Response and Forensics
-    "NETWORK",                # 7  Network Security
-    "PENTEST",                # 8  Penetration Testing
-    "SECOPS",                 # 9  Security Operations
-    "THREAT_INTELLIGENCE",    # 10 Threat Intelligence
-    "VULN_MANAGEMENT",        # 11 Vulnerability Management
-)
+# SUBDOMAIN_NAMES (the schema `subdomain_name` values) came from _load_taxonomy()
+# above, in the same order as CANONICAL_DOMAINS. The integer `subdomain_label` we
+# emit is always -1 (ABSTAIN) — this ordering only fixes the name<->index
+# contract for when labels are later assigned downstream.
 CANONICAL_TO_SUBDOMAIN: dict[str, str] = dict(
     zip(CANONICAL_DOMAINS, SUBDOMAIN_NAMES, strict=True))
 ALLOWED_SUBDOMAINS: frozenset[str] = frozenset(SUBDOMAIN_NAMES)
 
-# domain_name (top-level) enum + integer codes (the schema's domain_label space).
-DOMAIN_NAMES: frozenset[str] = frozenset({"CYBERSEC"})
+# domain_name (top-level) enum (the schema's domain_label space); default "CYBERSEC".
+DOMAIN_NAMES: frozenset[str] = frozenset({_DOMAIN_NAME})
 
 # Record-type enum (schema examples: cve / article / log). Open-ish but closed to
 # a known set so a mapper bug surfaces as a reject rather than silent drift.

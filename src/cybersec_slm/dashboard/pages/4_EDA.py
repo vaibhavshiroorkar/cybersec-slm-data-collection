@@ -14,11 +14,8 @@ from cybersec_slm.dashboard import charts, data, ui
 ui.inject_css()
 ui.page_header("eda", data.stage_states())
 st.caption("The cleaned corpus checked against the sufficiency gate. A blocker "
-           "halts the full pipeline until data is added or rebalanced.")
-
-# ------------------------------------------------------------------ run --------
-with ui.section("Run this stage"):
-    ui.stage_run_control("eda", run_label="Run EDA")
+           "halts the full pipeline until data is added or rebalanced. Run this "
+           "stage from the Overview page.")
 
 # --------------------------------------------------------------- gate ----------
 eda = data.latest_eda()

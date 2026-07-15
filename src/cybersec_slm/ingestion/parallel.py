@@ -34,7 +34,7 @@ import multiprocessing as mp
 import os
 import shutil
 import time
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, as_completed, wait
 from concurrent.futures.process import BrokenProcessPool
 
 from .. import core
@@ -48,6 +48,9 @@ from .sources import descriptor_key
 # reads it to skip work that already succeeded (avoids re-downloading multi-GB
 # sources and re-cleaning what is already in data/clean/).
 COMPLETED_LEDGER = os.path.join(core.LOGS, "completed_sources.txt")
+# Per-source clean progress for the separate clean stage. ``run_clean`` can
+# resume a prior run by skipping already-cleaned raw source folders.
+CLEANED_LEDGER = os.path.join(core.LOGS, "cleaned_sources.txt")
 
 POLL_INTERVAL_S = 5.0              # wait() granularity for the consume loop
 DEFAULT_SOURCE_TIMEOUT_S = 1800.0  # per-source wall-clock budget (30 min)
@@ -72,7 +75,7 @@ def _wipe_dir(path: str) -> None:
 def _empty_summary() -> dict:
     return {"ok": 0, "failed": 0, "skipped": 0, "rejected": 0, "timed_out": 0,
             "ingest_rows": [], "light_eda_reports": [], "flags": [],
-            "clean_rows": []}
+            "clean_rows": [], "failed_keys": []}
 
 
 def _load_completed(path: str) -> set[str]:
@@ -92,6 +95,36 @@ def _reset_completed(path: str) -> None:
         pass
 
 
+def _load_cleaned(path: str) -> set[str]:
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {ln.strip() for ln in f if ln.strip()}
+    except OSError:
+        return set()
+
+
+def _reset_cleaned(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+
+
+def _source_dirs(raw_root: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    if not os.path.isdir(raw_root):
+        return out
+    for dom in os.scandir(raw_root):
+        if not dom.is_dir():
+            continue
+        for src in os.scandir(dom.path):
+            if src.is_dir():
+                out.append((src.path, f"{dom.name}/{src.name}"))
+    return out
+
+
 def _force_shutdown(pool) -> None:
     """Shut a pool down without waiting, terminating any leaked/hung workers."""
     for p in list(getattr(pool, "_processes", {}).values() or []):
@@ -103,6 +136,15 @@ def _force_shutdown(pool) -> None:
         pool.shutdown(wait=False, cancel_futures=True)
     except Exception:
         pass
+
+
+def _clean_source(src_dir: str, sid: str, raw_root: str,
+                  limit: int | None, drop_non_english: bool) -> tuple[str, list[dict]]:
+    rows = cleaning_pipeline.clean_one_source(
+        src_dir, raw_root=raw_root,
+        clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA,
+        limit=limit, drop_non_english=drop_non_english)
+    return sid, rows
 
 
 def _label(d) -> str:
@@ -160,7 +202,12 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                 retries[k] = retries.get(k, 0) + 1
                 _submit(d)                 # resubmit into the SAME live pool
             else:
+                # Terminally failed after all retries: record its key so a
+                # ``--resume`` run checkpoints past it instead of re-grinding a
+                # deterministically-failing source (e.g. a shard the JSON writer
+                # cannot serialize) on every restart.
                 summary["failed"] += 1
+                summary.setdefault("failed_keys", []).append(k)
 
         broke = timed_out = False
         try:
@@ -223,6 +270,10 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                 logger.error(f"  giving up on {len(pending_descriptors)} sources "
                              f"after {MAX_POOL_REBUILDS} pool rebuilds")
                 summary["failed"] += len(pending_descriptors)
+                # A source that keeps breaking the pool is deterministically bad;
+                # checkpoint the abandoned batch so ``--resume`` skips it.
+                summary.setdefault("failed_keys", []).extend(
+                    descriptor_key(d) for d in pending_descriptors)
                 pending_descriptors = []
     return summary
 
@@ -234,7 +285,8 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
                source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
                max_source_gb: float | None = None, crawl: bool = True,
                domains: list[str] | None = None,
-               sources_only: list[str] | None = None) -> dict:
+               sources_only: list[str] | None = None,
+               scan_hazards: bool = True) -> dict:
     """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
 
     Each source is fetched and passed through the license + light-EDA gate by a
@@ -336,18 +388,29 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
             summary["skipped"] += 1
             ledger.write(descriptor_key(d) + "\n"); ledger.flush()
         elif status == "rejected":
+            # A gate rejection (not a PDF, no JSONL produced, license-excluded) is
+            # deterministic, so checkpoint it too: ``--resume`` then skips it
+            # instead of re-fetching a source that will only be rejected again.
             summary["rejected"] += 1
+            ledger.write(descriptor_key(d) + "\n"); ledger.flush()
         else:
             return False   # unknown/"failed": _run_pool decides retry vs fail
         return True
 
     def _submit(pool, d):
         return pool.submit(worker.process_source, d, data_root=core.DATA_ROOT,
-                           limit=limit, clean=False, crawl=crawl)
+                           limit=limit, clean=False, crawl=crawl,
+                           scan_hazards=scan_hazards)
 
     try:
         _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
                   source_timeout=source_timeout, summary=summary, ctx=ctx)
+        # Checkpoint terminally-failed sources (crashed the worker or broke the
+        # pool past every retry) so a ``--resume`` run continues past them rather
+        # than re-grinding the same deterministic failures each restart.
+        for k in summary.get("failed_keys", []):
+            ledger.write(k + "\n")
+        ledger.flush()
     finally:
         ledger.close()
 
@@ -371,7 +434,8 @@ def _split_source_id(sid: str) -> tuple[str, str] | None:
 def run_clean(*, keep_raw: bool = True, limit: int | None = None,
               resume: bool = False, drop_non_english: bool = False,
               domains: list[str] | None = None,
-              sources_only: list[str] | None = None) -> dict:
+              sources_only: list[str] | None = None,
+              workers: int | None = None) -> dict:
     """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
 
     The clean stage of the pipeline. Cleans every fetched source in one
@@ -400,8 +464,14 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     raw_root = core.RAW_DATA
     selected = list(domains) if domains else None
     picked = [p for p in (_split_source_id(s) for s in (sources_only or [])) if p]
-    if not resume:
+    if resume:
+        cleaned_sources = _load_cleaned(CLEANED_LEDGER)
+        if cleaned_sources:
+            logger.info(f"clean: resume skipping {len(cleaned_sources)} already-cleaned source(s)")
+    else:
         cleaning_pipeline.reset_dedup_state()
+        _reset_cleaned(CLEANED_LEDGER)
+        cleaned_sources = set()
         if picked:
             for dom, src in picked:
                 _wipe_dir(os.path.join(cleaning_pipeline.OUT_CLEAN_DATA, dom, src))
@@ -424,37 +494,68 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     # the whole tree, passing one Sub-Domain folder cleans just that Sub-Domain.
     # Cross-source dedup follows, over the whole clean tree either way.
     if picked:
-        logger.info(f"clean: row-level {len(picked)} source(s) -> "
-                    f"{cleaning_pipeline.OUT_CLEAN_DATA}")
-        rows: list[dict] = []
+        sources = []
         for dom, src in picked:
             src_dir = os.path.join(raw_root, dom, src)
-            if os.path.isdir(src_dir):
-                rows += cleaning_pipeline.clean_one_source(
-                    src_dir, raw_root=raw_root,
-                    clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
-                    drop_non_english=drop_non_english)
-            else:
-                logger.warning(f"clean: no raw data for source {dom}/{src}")
+            sources.append((src_dir, f"{dom}/{src}"))
     elif selected:
-        logger.info(f"clean: selective {sorted(set(selected))} -> "
-                    f"{cleaning_pipeline.OUT_CLEAN_DATA}")
-        rows = []
+        sources = []
         for dom in selected:
             dom_dir = os.path.join(raw_root, dom)
             if os.path.isdir(dom_dir):
-                rows += cleaning_pipeline.clean_one_source(
-                    dom_dir, raw_root=raw_root,
-                    clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
-                    drop_non_english=drop_non_english)
+                for src in os.scandir(dom_dir):
+                    if src.is_dir():
+                        sources.append((src.path, f"{dom}/{src.name}"))
             else:
                 logger.warning(f"clean: no raw data for sub-domain {dom!r}")
     else:
-        logger.info(f"clean: {raw_root} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
-        rows = cleaning_pipeline.clean_one_source(
-            raw_root, raw_root=raw_root,
-            clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
-            drop_non_english=drop_non_english)
+        sources = _source_dirs(raw_root)
+
+    to_clean = [(src_dir, sid) for src_dir, sid in sources
+                if sid not in cleaned_sources]
+    if resume and not to_clean and sources:
+        logger.info("clean: resume - all selected sources already cleaned")
+
+    os.makedirs(core.LOGS, exist_ok=True)
+    ledger = open(CLEANED_LEDGER, "a", encoding="utf-8")
+    rows: list[dict] = []
+    if workers is None or workers <= 1:
+        for src_dir, sid in to_clean:
+            if not os.path.isdir(src_dir):
+                logger.warning(f"clean: no raw data for source {sid}")
+                continue
+            logger.info(f"clean: {sid} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
+            src_rows = cleaning_pipeline.clean_one_source(
+                src_dir, raw_root=raw_root,
+                clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
+                drop_non_english=drop_non_english)
+            rows += src_rows
+            ledger.write(sid + "\n")
+            ledger.flush()
+    else:
+        workers = max(1, min(workers, len(to_clean)))
+        logger.info(f"clean: parallelizing over {workers} workers")
+        ctx = mp.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            futures = {
+                pool.submit(_clean_source, src_dir, sid, raw_root, limit,
+                            drop_non_english): sid
+                for src_dir, sid in to_clean
+                if os.path.isdir(src_dir)
+            }
+            for fut in as_completed(futures):
+                sid = futures[fut]
+                try:
+                    _, src_rows = fut.result()
+                except Exception as ex:
+                    logger.error(f"clean: worker failed for {sid}: {type(ex).__name__}: {ex}")
+                    ledger.close()
+                    raise
+                rows.extend(src_rows)
+                ledger.write(sid + "\n")
+                ledger.flush()
+    ledger.close()
+
     if rows:
         cleaning_pipeline._write_report(rows)
 
@@ -543,8 +644,10 @@ def run_v2_pipeline(spec: str | None = None, *,
                     max_source_gb: float | None = None,
                     drop_non_english: bool = False,
                     crawl: bool = True,
+                    scan_hazards: bool = True,
                     enforce_eda: bool = True,
-                    normalize: bool = True) -> dict:
+                    normalize: bool = True,
+                    clean_workers: int | None = None) -> dict:
     """Run the corpus build in sequence: ingest -> clean -> EDA -> schema.
 
     These are the four stages that consume an already-curated catalog; sourcing is
@@ -576,17 +679,24 @@ def run_v2_pipeline(spec: str | None = None, *,
         Raise SufficiencyError on EDA blockers (default True).
     normalize : bool
         Run schema normalization; False stops after EDA.
+    clean_workers : int | None
+        Process-pool size for the clean stage (default: sequential). Cleaning is
+        per-source and independent, and the single deterministic cross-source
+        dedup pass runs once over the whole tree afterward regardless, so raising
+        this speeds cleaning up without changing the output.
     """
     from ..eda import SufficiencyError
 
     # Stage 2: fetch every source to data/raw/ (no cleaning).
     ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
                                source_timeout=source_timeout,
-                               max_source_gb=max_source_gb, crawl=crawl)
+                               max_source_gb=max_source_gb, crawl=crawl,
+                               scan_hazards=scan_hazards)
 
     # Stage 3: clean the whole raw tree + cross-source dedup -> data/clean/.
     clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume,
-                             drop_non_english=drop_non_english)
+                             drop_non_english=drop_non_english,
+                             workers=clean_workers)
 
     # Stage 4: deep global EDA sufficiency gate.
     try:

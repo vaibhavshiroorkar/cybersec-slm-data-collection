@@ -9,18 +9,15 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, data, ui
+from cybersec_slm.dashboard import cached, charts, data, ui
 
 ui.inject_css()
 ui.page_header("clean", data.stage_states())
-st.caption("Cleaned and cross-source deduplicated records under `data/clean/`.")
-
-# ------------------------------------------------------------------ run --------
-with ui.section("Run this stage"):
-    ui.stage_run_control("clean", run_label="Run clean")
+st.caption("Cleaned and cross-source deduplicated records under `data/clean/`. "
+           "Run this stage from the Overview page.")
 
 # ------------------------------------------------------------------ stats ------
-funnel = data.data_funnel()
+funnel = cached.data_funnel(data.data_root())
 cleaned = funnel["cleaned"]
 with ui.section("Cleaned"):
     c = st.columns(3)
@@ -39,7 +36,7 @@ with ui.section("Cleaned"):
 
 # ----------------------------------------------------------- cleaned table -----
 with ui.section("Cleaned sources"):
-    ct = data.cleaned_table()
+    ct = cached.cleaned_table(data.data_root())
     if ct:
         st.caption(f"{len(ct)} sources under `data/clean/`.")
         ui.table(ct, height=340)

@@ -84,7 +84,7 @@ def _get_synthetic_ids() -> frozenset[str]:
 
 def process_source(
     descriptor: dict, *, data_root: str | None = None, limit: int | None = None,
-    clean: bool = True, crawl: bool = True,
+    clean: bool = True, crawl: bool = True, scan_hazards: bool = True,
 ) -> dict:
     """Fetch one source, run the light EDA gate, and (optionally) clean it.
 
@@ -93,7 +93,10 @@ def process_source(
     real ingest log by the parent. With ``clean=False`` (the ingest stage) the
     worker stops after the gate and leaves the raw folder in place; the separate
     clean stage cleans the whole raw tree later. With ``crawl=False`` a website
-    (crawl) source is recorded as skipped and never fetched.
+    (crawl) source is recorded as skipped and never fetched. ``scan_hazards``
+    controls the light-EDA gate's security-hazard scan (passed explicitly since
+    this function runs in a spawned worker process, so a module-global toggle set
+    in the parent would never reach it).
     """
     collector = _Collector()
     result = {"descriptor": descriptor, "status": "ok", "error": None,
@@ -142,7 +145,7 @@ def process_source(
         if os.path.isdir(folder):
             syn_ids = _get_synthetic_ids()
             passed, leda_report = light_eda.assess_source(
-                folder, descriptor, synthetic_ids=syn_ids)
+                folder, descriptor, synthetic_ids=syn_ids, scan_hazards=scan_hazards)
             result["light_eda_report"] = leda_report
             result["flags"] = leda_report.get("flags", result["flags"])
 

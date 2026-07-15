@@ -9,7 +9,18 @@ breaks on a fresh checkout.
 
 A catalog is a plain dict::
 
-    {"<Sub-Domain>": {"datasets": [kw, ...], "text": [kw, ...]}, ...}
+    {"<Sub-Domain>": {"datasets": [kw, ...], "text": [kw, ...],
+                      "code": "ENUM_CODE", "vocab": [term, ...]}, ...}
+
+``code`` is the schema's ``subdomain_name`` enum value for this sub-domain (blank
+until a code is derived or explicitly set — see :func:`code_for`); ``vocab`` is an
+optional list of short, distinctive terms used only to break domain-classification
+ties during discovery (falls back to the ``datasets``+``text`` keywords when
+absent). The catalog also carries one top-level ``domain_name`` label (the
+schema's top-level ``domain_name`` field, e.g. ``CYBERSEC``) alongside
+``subdomains`` — see :func:`domain_name`/:func:`set_domain_name`. This one file is
+also the taxonomy the schema/normalize stage validates records against (see
+:mod:`cybersec_slm.normalize.schema`), so editing it here reshapes both stages.
 
 This module is Streamlit-free and side-effect-light (it only touches the YAML
 file), so it is unit-testable directly.
@@ -18,6 +29,7 @@ file), so it is unit-testable directly.
 from __future__ import annotations
 
 import os
+import re
 
 from .. import core
 from . import keywords as kw
@@ -36,17 +48,35 @@ def _defaults() -> dict:
     out: dict[str, dict[str, list[str]]] = {}
     for name in kw.DOMAIN_KEYWORDS:
         out[name] = {"datasets": list(kw.DOMAIN_KEYWORDS.get(name, [])),
-                     "text": list(kw.DOMAIN_TEXT_KEYWORDS.get(name, []))}
+                     "text": list(kw.DOMAIN_TEXT_KEYWORDS.get(name, [])),
+                     "code": kw.DOMAIN_CODES.get(name, ""),
+                     "vocab": sorted(kw.DOMAIN_VOCAB.get(name, set()))}
     return out
 
 
 def _normalize(subs: dict) -> dict:
+    """Normalize a raw ``subdomains`` mapping to the full 4-key shape.
+
+    A blank/missing ``code`` or ``vocab`` for a name that matches one of the 12
+    built-in domains falls back to that domain's historical value (from
+    :mod:`cybersec_slm.sourcing.keywords`), so a ``keywords.yaml`` written before
+    these fields existed (only ``datasets``/``text``) keeps producing the exact
+    same schema enum codes it always has, rather than a freshly-derived slug. An
+    explicit non-blank value in the file always wins over this fallback.
+    """
     out: dict[str, dict[str, list[str]]] = {}
     for name, spec in (subs or {}).items():
         spec = spec or {}
-        out[str(name)] = {
+        name = str(name)
+        code = str(spec.get("code") or "").strip() or kw.DOMAIN_CODES.get(name, "")
+        vocab = [str(k).strip() for k in (spec.get("vocab") or []) if str(k).strip()]
+        if not vocab and name in kw.DOMAIN_VOCAB:
+            vocab = sorted(kw.DOMAIN_VOCAB[name])
+        out[name] = {
             "datasets": [str(k).strip() for k in (spec.get("datasets") or []) if str(k).strip()],
             "text": [str(k).strip() for k in (spec.get("text") or []) if str(k).strip()],
+            "code": code,
+            "vocab": vocab,
         }
     return out
 
@@ -63,15 +93,69 @@ def load(path: str | None = None) -> dict:
     return cat or _defaults()
 
 
-def save(cat: dict, path: str | None = None) -> str:
-    """Write the catalog to YAML (creating the parent dir); return the path."""
+def _read_domain_name(path: str | None) -> str:
+    p = catalog_path(path)
+    if not os.path.exists(p):
+        return kw.DEFAULT_DOMAIN_NAME
+    import yaml
+    with open(p, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    label = str(data.get("domain_name") or "").strip()
+    return label or kw.DEFAULT_DOMAIN_NAME
+
+
+def save(cat: dict, path: str | None = None, *, domain_name: str | None = None) -> str:
+    """Write the catalog to YAML (creating the parent dir); return the path.
+
+    ``domain_name`` persists the top-level schema label; when omitted, whatever is
+    already on disk is preserved (or the default, on a first write), so a call that
+    only touches ``subdomains`` (e.g. :func:`add_subdomain`) never resets it.
+    """
     p = catalog_path(path)
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    label = domain_name if domain_name is not None else _read_domain_name(path)
     import yaml
     with open(p, "w", encoding="utf-8") as f:
-        yaml.safe_dump({"subdomains": _normalize(cat)}, f, sort_keys=True,
-                       allow_unicode=True, default_flow_style=False)
+        yaml.safe_dump({"domain_name": label, "subdomains": _normalize(cat)}, f,
+                       sort_keys=True, allow_unicode=True, default_flow_style=False)
     return p
+
+
+def domain_name(path: str | None = None) -> str:
+    """The top-level schema ``domain_name`` label (default when unset: ``CYBERSEC``)."""
+    return _read_domain_name(path)
+
+
+def set_domain_name(name: str, path: str | None = None) -> str:
+    """Persist the top-level ``domain_name`` label; return the catalog file path."""
+    name = (name or "").strip() or kw.DEFAULT_DOMAIN_NAME
+    return save(load(path), path, domain_name=name)
+
+
+def _derive_code(name: str, taken: set[str]) -> str:
+    """Upper-snake slug of ``name``, disambiguated against ``taken`` if needed."""
+    base = re.sub(r"[^A-Za-z0-9]+", "_", name.upper()).strip("_") or "DOMAIN"
+    code = base
+    i = 2
+    while code in taken:
+        code = f"{base}_{i}"
+        i += 1
+    return code
+
+
+def code_for(name: str, cat: dict | None = None) -> str:
+    """The sub-domain's enum code: its stored ``code``, else a derived slug.
+
+    Does not persist the derived code by itself; callers that want it saved
+    (e.g. :func:`add_subdomain`) do so explicitly.
+    """
+    cat = cat if cat is not None else load()
+    spec = cat.get(name) or {}
+    stored = str(spec.get("code") or "").strip()
+    if stored:
+        return stored
+    taken = {str(s.get("code") or "").strip() for s in cat.values()} - {""}
+    return _derive_code(name, taken)
 
 
 def subdomains(cat: dict | None = None) -> list[str]:
@@ -108,13 +192,22 @@ def keyword_sets(mode: str = "datasets",
 
 
 def add_subdomain(name: str, *, datasets: list[str] | None = None,
-                  text: list[str] | None = None, path: str | None = None) -> dict:
-    """Add (or replace) a sub-domain and persist; return the updated catalog."""
+                  text: list[str] | None = None, code: str | None = None,
+                  path: str | None = None) -> dict:
+    """Add (or replace) a sub-domain and persist; return the updated catalog.
+
+    ``code`` is the schema enum code for this sub-domain; when omitted, one is
+    derived from ``name`` (see :func:`_derive_code`) and persisted so it stays
+    stable across future loads.
+    """
     name = (name or "").strip()
     if not name:
         raise ValueError("sub-domain name is required")
     cat = load(path)
-    cat[name] = {"datasets": list(datasets or []), "text": list(text or [])}
+    taken = {str(s.get("code") or "").strip() for s in cat.values()} - {""}
+    cat[name] = {"datasets": list(datasets or []), "text": list(text or []),
+                "code": (code or "").strip() or _derive_code(name, taken),
+                "vocab": []}
     save(cat, path)
     return cat
 

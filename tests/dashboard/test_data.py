@@ -308,23 +308,24 @@ def test_raw_funnel_counts_disk_sources_and_catalog_lines(tmp_path, monkeypatch)
     raw = tmp_path / "data" / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cryptography" / "src-b").mkdir(parents=True)
-    # Line/size totals come from the catalog, not a live scan of the raw tree.
-    monkeypatch.setattr(data, "catalog_totals", lambda: {
-        "raw_lines": 22_000_000, "raw_size_mb": 43000.0,
-        "cleaned_lines": 500, "cleaned_size_mb": 12.0})
+    # Line totals come from a per-folder catalog join (only sources actually on
+    # disk contribute); size is measured live from disk so it stays accurate as a
+    # run writes to data/raw/, rather than a stale catalog-wide sum.
+    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_bytes(b"\0" * (1024 * 1024))
+    (raw / "Cryptography" / "src-b" / "data.jsonl").write_bytes(b"\0" * (2 * 1024 * 1024))
+    monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {
+        ("Cloud Security", "src-a"): (20_000_000, 40000.0),
+        ("Cryptography", "src-b"): (2_000_000, 3000.0)})
 
     funnel = data.data_funnel()
     assert funnel["raw"]["sources"] == 2                 # counted on disk
-    assert funnel["raw"]["lines"] == 22_000_000          # from the catalog
-    assert funnel["raw"]["size_mb"] == 43000.0
+    assert funnel["raw"]["lines"] == 22_000_000          # joined from the catalog
+    assert funnel["raw"]["size_mb"] == 3.0               # measured on disk (1 + 2 MB)
 
 
 def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))                                 # no data/raw/ created
-    monkeypatch.setattr(data, "catalog_totals", lambda: {
-        "raw_lines": 22_000_000, "raw_size_mb": 43000.0,
-        "cleaned_lines": 0, "cleaned_size_mb": 0.0})
 
     funnel = data.data_funnel()
     assert funnel["raw"]["sources"] == 0

@@ -28,12 +28,15 @@ discover_tab, catalog_tab, licenses_tab, edit_tab, delete_tab, csv_tab = st.tabs
 
 # ============================================================== Discover =======
 with discover_tab:
-    with ui.section("Run discovery"):
+    with ui.section("Keyword preview",
+                    "Preview the keywords a discovery run would use. Configure and "
+                    "run Sourcing from the Overview page (its Sourcing settings)."):
         if not all_domains:
             st.info("No sub-domains configured yet. Add one in the Sub-domains tab.")
 
-        # Seed selection from saved source settings so a saved sub-domain / mode
-        # choice is the starting point (and the same settings drive a CLI run).
+        # Seed the preview from the saved source settings so it reflects what a run
+        # launched from the Overview page would search. Read-only: this tab no
+        # longer launches discovery.
         _saved = settings_store.get_stage("source")
         _dom_default = [d for d in _saved.get("domains", [])
                         if d in all_domains] or all_domains
@@ -42,7 +45,7 @@ with discover_tab:
                        if _mode_default in catalog.MODES else 0)
 
         col_a, col_b = st.columns([3, 1])
-        selected = col_a.multiselect("Sub-domains to search", all_domains,
+        selected = col_a.multiselect("Sub-domains", all_domains,
                                      default=_dom_default, key="src_domains")
         mode = col_b.selectbox(
             "Mode", catalog.MODES, index=_mode_index, key="src_mode",
@@ -56,49 +59,8 @@ with discover_tab:
                 ui.table(kw_rows, height=300)
             else:
                 st.caption("Select at least one sub-domain to see its keywords.")
-
-        # Headline run limits: a run stops at whichever is reached first. Both 0
-        # means a single page-1 pass. These win over the Advanced panel's copies.
-        lc1, lc2 = st.columns(2)
-        budget_min = float(lc1.number_input(
-            "Time budget (minutes, 0 = none)", 0.0, 600.0,
-            value=float(_saved.get("max_minutes") or 0.0), step=1.0,
-            key="src_minutes", help="Discovery finishes within this window; "
-            "the license fetch runs concurrently so it stays fast."))
-        budget_max = int(lc2.number_input(
-            "Max new sources (0 = none)", 0, 1_000_000,
-            value=int(_saved.get("max_total") or 0), step=10, key="src_maxtotal",
-            help="Spread evenly across the selected sub-domains."))
-
-        adv = ui.advanced_settings(
-            "source",
-            defaults={**_saved, "max_minutes": budget_min, "max_total": budget_max},
-            save_extra={"domains": selected, "mode": mode})
-        settings = {**adv, "domains": selected, "mode": mode}
-        settings.pop("max_minutes", None)
-        settings.pop("max_total", None)
-        if budget_min > 0:
-            settings["max_minutes"] = budget_min
-        if budget_max > 0:
-            settings["max_total"] = budget_max
-
-        cstat = control.status()
-        running = cstat["running"]
-        c1, c2 = st.columns(2)
-        if c1.button("Run discovery", disabled=running or not selected,
-                     use_container_width=True, key="src_run"):
-            res = control.start("source", settings=settings)
-            st.rerun() if res.get("ok") else st.error(res["error"])
-        if c2.button("Stop", disabled=not running, use_container_width=True,
-                     key="src_stop"):
-            control.stop()
-            st.rerun()
-        if running:
-            st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
-                       f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
-        else:
-            st.caption("Discovery runs in the background; watch its log on the "
-                       "Overview page.")
+        st.caption("This preview is read-only. Set the sub-domains, mode, and caps "
+                   "for an actual run in the Overview page's Sourcing settings.")
 
     summ = data.latest_source_summary()
     if summ:
@@ -144,6 +106,8 @@ with licenses_tab:
     cov = data.license_coverage()
     bl = data.blacklist_summary()
 
+    running = control.status()["running"]
+
     with ui.section("License coverage",
                     "Deep-detect the license for each source from its page "
                     "(GitHub, Kaggle, arXiv, HuggingFace, and generic HTML), then "
@@ -154,29 +118,9 @@ with licenses_tab:
             ("Unknown / blank", charts.fmt_int(cov["unknown"])),
             ("Blacklisted", charts.fmt_int(bl["total"])),
         ], cols=4)
-
-        cstat = control.status()
-        running = cstat["running"]
-        c1, c2 = st.columns(2)
-        redetect = c1.checkbox("Re-detect all rows (not just Unknown)",
-                               key="bf_all", value=False)
-        skip_bl = c2.checkbox("Detect only, keep reds in catalog",
-                              key="bf_no_bl", value=False)
-        limit_raw = st.text_input("Row limit (blank = all)", key="bf_limit", value="")
-        limit_val = limit_raw.strip() or None
-
-        if st.button("Backfill licenses", disabled=running,
-                     use_container_width=True, key="bf_run"):
-            settings = {"backfill": True, "backfill_all": redetect,
-                        "no_blacklist": skip_bl, "limit": limit_val}
-            res = control.start("source", settings=settings)
-            st.rerun() if res.get("ok") else st.error(res["error"])
-        if running:
-            st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
-                       f"pid {cstat['pid']}. Watch its log on the Overview page.")
-        else:
-            st.caption("Runs in the background over the whole catalog; set "
-                       "`GITHUB_TOKEN` first for full GitHub coverage.")
+        st.caption("Run a full license backfill from the command line: "
+                   "`cybersec-slm source --backfill` (set `GITHUB_TOKEN` first for "
+                   "full GitHub coverage). The instant tools below need no run.")
 
     with ui.section("Clean up by license",
                     "Act on `sources/Sources.csv` instantly, no run needed. Deleted "
@@ -214,9 +158,27 @@ with licenses_tab:
 
 # ============================================================= Sub-domains =====
 with edit_tab:
+    with ui.section("Corpus taxonomy",
+                    "The top-level `domain_name` schema label this whole corpus "
+                    "is filed under (default `CYBERSEC`). Shared by the schema "
+                    "stage — change it once here to repoint the pipeline at a "
+                    "different data domain."):
+        dn = st.text_input("Domain name", value=catalog.domain_name(),
+                           key="domain_name_input")
+        if ui.right_slot().button("Save domain name", key="domain_name_save",
+                                  disabled=not dn.strip(),
+                                  use_container_width=True):
+            catalog.set_domain_name(dn.strip())
+            st.success(f"Saved domain_name='{dn.strip()}' to sources/keywords.yaml")
+            st.rerun()
+
     with ui.section("Add or replace a sub-domain",
                     "Sub-domains and keywords persist to `sources/keywords.yaml`."):
         name = st.text_input("Sub-domain name", key="add_name")
+        code = st.text_input(
+            "Enum code (blank = auto-derived from the name)", key="add_code",
+            help="The schema's `subdomain_name` enum value for this sub-domain, "
+                 "e.g. `APPLICATION`. Leave blank to derive one automatically.")
         ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
         tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
         if ui.right_slot().button("Save sub-domain", key="add_save",
@@ -225,7 +187,8 @@ with edit_tab:
             catalog.add_subdomain(
                 name.strip(),
                 datasets=[ln.strip() for ln in ds.splitlines() if ln.strip()],
-                text=[ln.strip() for ln in tx.splitlines() if ln.strip()])
+                text=[ln.strip() for ln in tx.splitlines() if ln.strip()],
+                code=code.strip() or None)
             st.success(f"Saved '{name.strip()}' to sources/keywords.yaml")
             st.rerun()
 

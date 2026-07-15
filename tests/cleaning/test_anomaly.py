@@ -1,4 +1,4 @@
-from cybersec_slm.cleaning import anomaly
+from cybersec_slm.cleaning import anomaly, common
 from cybersec_slm.cleaning.common import MAX_TEXT_CHARS
 
 
@@ -45,3 +45,17 @@ def test_extreme_length_is_behavioral():
     text = "word " * (MAX_TEXT_CHARS // 2)        # well over the char cap
     bucket, reason = anomaly.classify({"text": text})
     assert bucket == "behavioral" and "length" in reason
+
+
+def test_min_text_chars_override_takes_effect():
+    """A settings-driven override of common.MIN_TEXT_CHARS must actually change
+    anomaly's behavior (regression test for the module-global import-binding bug:
+    anomaly.py used to `from .common import MIN_TEXT_CHARS`, which froze the value
+    at import time and silently ignored any later override)."""
+    original = common.MIN_TEXT_CHARS
+    try:
+        common.MIN_TEXT_CHARS = 5
+        bucket, _ = anomaly.classify({"text": "short"})
+        assert bucket == "clean"
+    finally:
+        common.MIN_TEXT_CHARS = original

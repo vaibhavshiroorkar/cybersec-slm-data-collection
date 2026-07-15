@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm.dashboard import charts, data, schema_store, ui
+from cybersec_slm.dashboard import cached, charts, data, schema_store, ui
 
 PAGE_SIZE = 50
 _SNIPPET = 160
@@ -21,16 +21,13 @@ st.caption("Cleaned records mapped onto the canonical schema in "
            "`data/final/dataset.jsonl`, with a provenance manifest.")
 
 man = data.manifest()
-run_tab, fields_tab, manifest_tab, browse_tab = st.tabs(
-    ["Run", "Fields", "Manifest", "Browse"])
+norm_tab, fields_tab, manifest_tab, browse_tab = st.tabs(
+    ["Normalize", "Fields", "Manifest", "Browse"])
 
-# ------------------------------------------------------------------ run --------
-with run_tab:
-    with ui.section("Run this stage"):
-        ui.stage_run_control("schema", run_label="Run schema")
-
+# ------------------------------------------------------------- normalize -------
+with norm_tab:
     with ui.section("Normalization"):
-        appended = data.data_funnel()["appended"]
+        appended = cached.data_funnel(data.data_root())["appended"]
         c = st.columns(3)
         c[0].metric("Sources", charts.fmt_int(appended["sources"]))
         c[1].metric("Records written", charts.fmt_int(appended["lines"]))
@@ -75,7 +72,7 @@ with manifest_tab:
     with ui.section("Release manifest"):
         if not man:
             st.caption("No manifest yet (`data/final/manifest.json`). Run this "
-                       "stage from the Run tab.")
+                       "stage from the Overview page.")
         else:
             ui.stat_grid([
                 ("Records", charts.fmt_int(man.get("record_count"))),

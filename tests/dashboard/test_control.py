@@ -119,9 +119,9 @@ def test_build_command_eda_boolean_flag():
 
 
 def test_build_command_drops_flags_a_stage_does_not_accept():
-    cmd = control.build_command("clean", settings={"workers": 8, "purge_raw": True})
+    cmd = control.build_command("clean", settings={"mode": "both", "purge_raw": True})
     s = _joined(cmd)
-    assert "--workers" not in s        # workers is not a clean-stage flag
+    assert "--mode" not in s            # mode is a source-only flag, not clean
     assert "--purge-raw" in s
 
 
@@ -233,3 +233,54 @@ def test_build_command_source_engines_and_target_per_domain():
     s = _joined(cmd)
     assert "--engines github,arxiv" in s
     assert "--target-per-domain 83" in s
+
+
+def test_build_command_ingest_no_hazard_scan_flag():
+    cmd = control.build_command("ingest", settings={"no_hazard_scan": True})
+    assert "--no-hazard-scan" in _joined(cmd)
+    cmd2 = control.build_command("ingest", settings={"no_hazard_scan": False})
+    assert "--no-hazard-scan" not in _joined(cmd2)
+
+
+def test_build_command_no_hazard_scan_dropped_for_clean_stage():
+    cmd = control.build_command("clean", settings={"no_hazard_scan": True})
+    assert "--no-hazard-scan" not in _joined(cmd)
+
+
+def test_build_command_clean_tunables():
+    cmd = control.build_command("clean", settings={
+        "min_text_chars": 10, "max_text_chars": 5000, "garbage_max": 0.5,
+        "repeat_max": 0.6, "near_dup_threshold": 0.9, "shingle_size": 3,
+        "minhash_perm": 64, "allowed_langs": ["en", "fr"]})
+    s = _joined(cmd)
+    assert "--min-text-chars 10" in s
+    assert "--max-text-chars 5000" in s
+    assert "--garbage-max 0.5" in s
+    assert "--repeat-max 0.6" in s
+    assert "--near-dup-threshold 0.9" in s
+    assert "--shingle-size 3" in s
+    assert "--minhash-perm 64" in s
+    assert s.endswith("--allowed-langs en fr")
+
+
+def test_build_command_eda_taxonomy_agnostic_thresholds():
+    cmd = control.build_command("eda", settings={
+        "min_total_records": 100, "min_records_per_subdomain": 10,
+        "max_source_share": 0.5, "max_drift": 0.3, "max_dup_rate": 0.2,
+        "min_avg_tokens": 8.0, "max_topic_cv": 2.0, "min_subdomain_share": 0.02,
+        "owner": "team-x"})
+    s = _joined(cmd)
+    assert "--min-total-records 100" in s
+    assert "--min-records-per-subdomain 10" in s
+    assert "--max-source-share 0.5" in s
+    assert "--max-drift 0.3" in s
+    assert "--max-dup-rate 0.2" in s
+    assert "--min-avg-tokens 8.0" in s
+    assert "--max-topic-cv 2.0" in s
+    assert "--min-subdomain-share 0.02" in s
+    assert "--owner team-x" in s
+
+
+def test_build_command_eda_tunables_dropped_for_ingest_stage():
+    cmd = control.build_command("ingest", settings={"min_total_records": 100})
+    assert "--min-total-records" not in _joined(cmd)

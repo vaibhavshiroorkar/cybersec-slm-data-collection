@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import re
 
-from .common import GARBAGE_MAX, MAX_TEXT_CHARS, MIN_TEXT_CHARS, PARSE_ERROR, REPEAT_MAX, text_of
+from . import common
+from .common import PARSE_ERROR, text_of
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
@@ -67,20 +68,20 @@ def classify(rec: dict) -> tuple[str, str]:
     n = len(text)
     if n == 0:
         return "structural", "empty text"
-    if n < MIN_TEXT_CHARS:
-        return "structural", f"text shorter than {MIN_TEXT_CHARS} chars"
+    if n < common.MIN_TEXT_CHARS:
+        return "structural", f"text shorter than {common.MIN_TEXT_CHARS} chars"
 
     # --- behavioral (content oddities) ---
-    if n > MAX_TEXT_CHARS:
+    if n > common.MAX_TEXT_CHARS:
         return "behavioral", f"extreme length ({n} chars)"
     gr = garbage_ratio(text)
-    if gr > GARBAGE_MAX:
+    if gr > common.GARBAGE_MAX:
         return "behavioral", f"garbage ratio {gr:.2f}"
     rlr = repeated_line_ratio(text)
-    if rlr > REPEAT_MAX:
+    if rlr > common.REPEAT_MAX:
         return "behavioral", f"repeated-line ratio {rlr:.2f}"
     ttr = top_token_ratio(text)
-    if ttr > REPEAT_MAX:
+    if ttr > common.REPEAT_MAX:
         return "behavioral", f"single-token dominance {ttr:.2f}"
 
     return "clean", ""

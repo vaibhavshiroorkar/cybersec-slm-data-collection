@@ -691,6 +691,24 @@ def log_tail(n: int = 40) -> list[str]:
         return []
 
 
+def full_log(log: str | None = None) -> list[str]:
+    """Full contents of a pipeline log session, newest by default."""
+    logs = _pipeline_logs()
+    if not logs:
+        return []
+    if log is None:
+        path = logs[-1]
+    else:
+        path = log if os.path.isabs(log) else os.path.join(_logs(), log)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return [ln.rstrip("\n") for ln in f.readlines()]
+    except OSError:
+        return []
+
+
 def _completed_count() -> int:
     """Number of sources finished this run (lines in the resume ledger)."""
     ledger = os.path.join(_logs(), "completed_sources.txt")
@@ -1017,9 +1035,9 @@ def _raw_on_disk_totals() -> dict:
                 if not src.is_dir() or src.name.startswith("."):
                     continue
                 sources += 1
-                ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
+                ln, _ = key_ls.get((dom.name, src.name), (0.0, 0.0))
                 lines += ln
-                size_mb += sz
+                size_mb += _dir_size_mb(src.path)
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}
@@ -1037,14 +1055,14 @@ def data_funnel() -> dict:
     man = manifest()
     rc = clean_report()
     nr = normalize_report()
-    cat = catalog_totals()
 
-    # Raw: count the source folders present (cumulative across runs); take the
-    # line/size totals from the catalog, but only claim them once raw exists.
-    raw_root = os.path.join(_root(), "data", "raw")
-    raw_sources = _count_source_dirs(raw_root)
-    raw_lines = cat["raw_lines"] if raw_sources else 0
-    raw_size_mb = cat["raw_size_mb"] if raw_sources else 0.0
+    # Raw: count the source folders present and derive line totals only for
+    # the sources actually on disk, so this metric stays live as the run writes
+    # to data/raw/ rather than relying on a stale catalog-wide sum.
+    raw_totals = _raw_on_disk_totals()
+    raw_sources = raw_totals["sources"]
+    raw_lines = raw_totals["lines"] if raw_sources else 0
+    raw_size_mb = raw_totals["size_mb"] if raw_sources else 0.0
 
     # Cleaned: prefer the clean report total when available, otherwise count the
     # actual JSONL records present under data/clean/ so the UI remains informative.

@@ -88,7 +88,8 @@ def _has_jsonl_files(folder: str) -> bool:
 
 
 def assess_source(folder: str, descriptor: dict, *,
-                  synthetic_ids: frozenset[str] | None = None) -> tuple[bool, dict]:
+                  synthetic_ids: frozenset[str] | None = None,
+                  scan_hazards: bool = True) -> tuple[bool, dict]:
     """Run the light EDA gate on one fetched source.
 
     Parameters
@@ -99,6 +100,10 @@ def assess_source(folder: str, descriptor: dict, *,
         The source descriptor from ``Sources.csv``.
     synthetic_ids : frozenset[str] | None
         Pre-loaded synthetic identities (avoids re-reading the catalog per source).
+    scan_hazards : bool
+        Whether to run the security-hazard scan (script/iframe injection, base64
+        blobs, malware TLDs). Default True; set False for a non-security corpus
+        where this check is irrelevant.
 
     Returns
     -------
@@ -186,7 +191,8 @@ def assess_source(folder: str, descriptor: dict, *,
         report["flags"]["license_risk"] = lic_reason
 
     # --- Flags: security hazards (sampled) ---
-    hazards = hazard_scan.scan_source_sample(records, max_records=SAMPLE_SIZE)
+    hazards = hazard_scan.scan_source_sample(records, max_records=SAMPLE_SIZE) \
+        if scan_hazards else []
     if hazards:
         # Summarize by type for the report (don't include full snippets at source level)
         type_counts: dict[str, int] = {}

@@ -123,36 +123,6 @@ def stat_grid(pairs, cols: int = 4) -> None:
         columns[i % cols].metric(label, value)
 
 
-def stage_run_control(stage: str, *, run_label: str = "Run this stage") -> None:
-    """Render the run control for one stage: advanced settings + Run / Stop.
-
-    Launches ``control.start(stage, settings=...)`` and stops the active run. Only
-    one stage runs at a time, so Run is disabled while any stage is live.
-    """
-    import streamlit as st
-
-    from . import control
-
-    cstat = control.status()
-    running = cstat["running"]
-    settings = advanced_settings(stage)
-    c1, c2 = st.columns(2)
-    if c1.button(run_label, disabled=running, use_container_width=True,
-                 key=f"{stage}_run"):
-        res = control.start(stage, settings=settings)
-        if res.get("ok"):
-            st.rerun()
-        else:
-            st.error(res["error"])
-    if c2.button("Stop", disabled=not running, use_container_width=True,
-                 key=f"{stage}_stop"):
-        control.stop()
-        st.rerun()
-    if running:
-        st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  "
-                   f"pid {cstat['pid']}  ·  started {cstat.get('started_at')}")
-
-
 def _html_escape(s: str) -> str:
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -300,59 +270,95 @@ def _row_selection(stage: str, base: dict, picked_domains: list, s: dict) -> Non
               height=300)
 
 
-def advanced_settings(stage: str, defaults: dict | None = None,
-                      save_extra: dict | None = None) -> dict:
-    """Render an expander of the advanced flags ``stage`` accepts; return settings.
+def _stage_widgets(stage: str, base: dict) -> dict:
+    """Render every run-configuration widget ``stage`` accepts; return the settings.
 
-    Only shows the widgets for flags that stage supports (mirrors the CLI via
-    ``control._STAGE_FLAGS``), so every page reuses one consistent panel. Widgets
-    are seeded from ``defaults`` when given, otherwise from the stage's saved
-    settings (:mod:`settings_store`), so previously-saved values are the starting
-    point and survive a restart. A "Save as defaults" button lives inside the
-    panel; it persists the current settings merged with ``save_extra`` (used by the
-    Sourcing page to also save its sub-domain / mode selection).
+    Emits a widget for each flag in ``control._STAGE_FLAGS[stage]`` (mirrors the
+    CLI), seeded from ``base`` (the stage's saved settings), and returns the
+    collected settings dict. This is the shared body behind
+    :func:`stage_config_dialog`: it renders the controls but neither wraps them in
+    an expander nor persists anything, so the dialog owns the framing and the Save
+    action. For the source stage it also renders the sub-domain / mode / caps
+    controls that used to live on the Sourcing page, so the modal configures
+    everything a run of that stage accepts.
     """
     import streamlit as st
 
-    from . import settings_store
     from .control import _STAGE_FLAGS
 
     allowed = _STAGE_FLAGS.get(stage, set())
     s: dict = {}
     if not allowed:
         return s
-    base = dict(defaults) if defaults is not None else settings_store.get_stage(stage)
 
     def _clamp(v, lo, hi):
         return max(lo, min(hi, v))
 
-    with st.expander("Advanced settings"):
-        # Selective run by Sub-Domain (ingest/clean). The source stage renders its
-        # own domain picker on the Sourcing page, so it is excluded here.
+    with st.container():
+        # Selective run by Sub-Domain. For ingest/clean this scopes the run to
+        # those Sub-Domains; for source it scopes discovery to them.
         picked_domains: list = []
-        if "domains" in allowed and stage != "source":
+        if "domains" in allowed:
             from . import data
-            opts = (data.raw_subdomains() if stage == "clean"
-                    else data.catalog_subdomains())
+            if stage == "source":
+                opts = data.catalog_subdomains()
+                label = "sub-domains to search (empty = all)"
+                help_txt = ("Discovery searches only these Sub-Domains; empty "
+                            "searches every configured Sub-Domain.")
+            else:
+                opts = (data.raw_subdomains() if stage == "clean"
+                        else data.catalog_subdomains())
+                label = "sub-domains to run (empty = all)"
+                help_txt = ("Selective run: only these Sub-Domains are processed; "
+                            "everything else is left untouched.")
             default_doms = [d for d in base.get("domains", []) if d in opts]
             picked_domains = st.multiselect(
-                "sub-domains to run (empty = all)", opts, default=default_doms,
-                key=f"{stage}_domains",
-                help="Selective run: only these Sub-Domains are processed; "
-                     "everything else is left untouched.")
+                label, opts, default=default_doms, key=f"{stage}_domains",
+                help=help_txt)
             if picked_domains:
                 s["domains"] = picked_domains
+        if "mode" in allowed:
+            from ..sourcing import catalog
+            _cur_mode = str(base.get("mode", catalog.MODES[0]))
+            _mode_idx = (catalog.MODES.index(_cur_mode)
+                         if _cur_mode in catalog.MODES else 0)
+            s["mode"] = st.selectbox(
+                "mode", catalog.MODES, index=_mode_idx, key=f"{stage}_mode",
+                help="datasets: corpora/repos · text: articles/docs · both")
+        if "target_per_domain" in allowed:
+            tpd = int(st.number_input(
+                "fill each sub-domain up to N valid rows (0 = off)", 0, 1_000_000,
+                value=_clamp(int(base.get("target_per_domain") or 0), 0, 1_000_000),
+                key=f"{stage}_targetdom",
+                help="Fill mode: top each Sub-Domain up to this many "
+                     "commercial-valid rows, filling only the deficit."))
+            if tpd:
+                s["target_per_domain"] = tpd
         # Row-level run: pick specific sources within (or across) the sub-domains.
         if "sources_only" in allowed and stage in ("ingest", "clean"):
             _row_selection(stage, base, picked_domains, s)
         if "workers" in allowed:
             _wdef = 12 if stage == "source" else 4
+            worker_help = (
+                "enrichment thread pool (license/metadata fetch)"
+                if stage == "source"
+                else "process pool size for parallel clean workers"
+                if stage == "clean"
+                else "process pool size (default: min(cpu, 8))")
+            worker_label = (
+                "clean workers" if stage == "clean"
+                else "workers")
             s["workers"] = int(st.number_input(
-                "workers", 1, 32,
+                worker_label, 1, 32,
                 value=_clamp(int(base.get("workers", _wdef)), 1, 32),
                 key=f"{stage}_workers",
-                help=("enrichment thread pool (license/metadata fetch)"
-                      if stage == "source" else None)))
+                help=worker_help))
+        if "resume" in allowed:
+            s["resume"] = st.checkbox(
+                "resume from checkpoint",
+                value=bool(base.get("resume", False)),
+                key=f"{stage}_resume",
+                help="Skip already-finished sources and continue the previous run.")
         if "source_timeout" in allowed:
             s["source_timeout"] = int(st.number_input(
                 "source timeout (s)", 30, 7200,
@@ -459,6 +465,15 @@ def advanced_settings(stage: str, defaults: dict | None = None,
                                  value=not bool(base.get("no_crawler", False)),
                                  key=f"{stage}_crawler")
             s["no_crawler"] = not enable
+        if "no_hazard_scan" in allowed:
+            enable = st.checkbox(
+                "scan for security hazards (script/iframe injection, base64 "
+                "blobs, malware TLDs)",
+                value=not bool(base.get("no_hazard_scan", False)),
+                key=f"{stage}_hazardscan",
+                help="Part of the light-EDA gate right after fetch. Turn off for "
+                     "a non-security corpus where this check is irrelevant.")
+            s["no_hazard_scan"] = not enable
         if "drop_non_english" in allowed:
             s["drop_non_english"] = st.checkbox(
                 "drop non-English records instead of translating them",
@@ -468,6 +483,49 @@ def advanced_settings(stage: str, defaults: dict | None = None,
             s["purge_raw"] = st.checkbox(
                 "delete data/raw/ after cleaning",
                 value=bool(base.get("purge_raw", False)), key=f"{stage}_purgeraw")
+        if "min_text_chars" in allowed:
+            s["min_text_chars"] = int(st.number_input(
+                "minimum text length in chars (below -> dropped)", 0, 10_000,
+                value=_clamp(int(base.get("min_text_chars", 50)), 0, 10_000),
+                key=f"{stage}_mintxt"))
+        if "max_text_chars" in allowed:
+            s["max_text_chars"] = int(st.number_input(
+                "maximum text length in chars (above -> flagged)", 1_000, 1_000_000,
+                value=_clamp(int(base.get("max_text_chars", 100_000)), 1_000, 1_000_000),
+                key=f"{stage}_maxtxt"))
+        if "garbage_max" in allowed:
+            s["garbage_max"] = float(st.number_input(
+                "max non-text char ratio before flagging", 0.0, 1.0,
+                value=_clamp(float(base.get("garbage_max", 0.30)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_garbagemax"))
+        if "repeat_max" in allowed:
+            s["repeat_max"] = float(st.number_input(
+                "max repeated-line/token ratio before flagging", 0.0, 1.0,
+                value=_clamp(float(base.get("repeat_max", 0.50)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_repeatmax"))
+        if "near_dup_threshold" in allowed:
+            s["near_dup_threshold"] = float(st.number_input(
+                "near-duplicate similarity threshold", 0.0, 1.0,
+                value=_clamp(float(base.get("near_dup_threshold", 0.85)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_neardup"))
+        if "shingle_size" in allowed:
+            s["shingle_size"] = int(st.number_input(
+                "word-shingle length for near-dup MinHash", 1, 20,
+                value=_clamp(int(base.get("shingle_size", 5)), 1, 20),
+                key=f"{stage}_shingle"))
+        if "minhash_perm" in allowed:
+            s["minhash_perm"] = int(st.number_input(
+                "MinHash permutation count", 16, 512,
+                value=_clamp(int(base.get("minhash_perm", 128)), 16, 512),
+                step=16, key=f"{stage}_minhash"))
+        if "allowed_langs" in allowed:
+            langs = st.text_input(
+                "allowed languages (comma-separated ISO codes)",
+                value=", ".join(base.get("allowed_langs", ["en"])),
+                key=f"{stage}_langs")
+            parsed = [t.strip() for t in langs.split(",") if t.strip()]
+            if parsed:
+                s["allowed_langs"] = parsed
         if "no_auto_rebalance" in allowed:
             # Auto-rebalance is off by default; the flag is passed unless enabled.
             enable = st.checkbox("enable auto-rebalance",
@@ -478,13 +536,92 @@ def advanced_settings(stage: str, defaults: dict | None = None,
             s["no_enforce"] = st.checkbox(
                 "report only (do not fail on blockers)",
                 value=bool(base.get("no_enforce", False)), key=f"{stage}_noenforce")
+        if "min_total_records" in allowed:
+            s["min_total_records"] = int(st.number_input(
+                "minimum total records (blocker below this)", 0, 10_000_000,
+                value=_clamp(int(base.get("min_total_records", 50)), 0, 10_000_000),
+                key=f"{stage}_mintotal"))
+        if "min_records_per_subdomain" in allowed:
+            s["min_records_per_subdomain"] = int(st.number_input(
+                "minimum records per sub-domain (warning below this)", 0, 1_000_000,
+                value=_clamp(int(base.get("min_records_per_subdomain", 5)), 0, 1_000_000),
+                key=f"{stage}_minpersub"))
+        if "max_source_share" in allowed:
+            s["max_source_share"] = float(st.number_input(
+                "max share of a sub-domain one source may hold", 0.0, 1.0,
+                value=_clamp(float(base.get("max_source_share", 0.60)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_maxsrcshare"))
+        if "max_drift" in allowed:
+            s["max_drift"] = float(st.number_input(
+                "max topic-mix drift vs previous run", 0.0, 1.0,
+                value=_clamp(float(base.get("max_drift", 0.25)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_maxdrift"))
+        if "max_dup_rate" in allowed:
+            s["max_dup_rate"] = float(st.number_input(
+                "max exact-duplicate rate (warning above this)", 0.0, 1.0,
+                value=_clamp(float(base.get("max_dup_rate", 0.40)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_maxduprate"))
+        if "min_avg_tokens" in allowed:
+            s["min_avg_tokens"] = float(st.number_input(
+                "minimum average tokens per record", 0.0, 1000.0,
+                value=_clamp(float(base.get("min_avg_tokens", 5.0)), 0.0, 1000.0),
+                step=1.0, key=f"{stage}_minavgtok"))
+        if "max_topic_cv" in allowed:
+            s["max_topic_cv"] = float(st.number_input(
+                "max coefficient of variation across topic sizes", 0.0, 10.0,
+                value=_clamp(float(base.get("max_topic_cv", 1.5)), 0.0, 10.0),
+                step=0.1, key=f"{stage}_maxtopiccv"))
+        if "min_subdomain_share" in allowed:
+            s["min_subdomain_share"] = float(st.number_input(
+                "minimum share of the corpus a sub-domain must hold", 0.0, 1.0,
+                value=_clamp(float(base.get("min_subdomain_share", 0.01)), 0.0, 1.0),
+                step=0.01, key=f"{stage}_minsubshare"))
+        if "owner" in allowed:
+            owner = st.text_input(
+                "team name recorded on the EDA report",
+                value=str(base.get("owner", "data-collection-team")),
+                key=f"{stage}_owner")
+            if owner.strip():
+                s["owner"] = owner.strip()
         if "fresh" in allowed:
             s["fresh"] = st.checkbox("fresh (ignore existing dataset)",
                                      value=bool(base.get("fresh", False)),
                                      key=f"{stage}_fresh")
-        save_settings_button(stage, {**s, **(save_extra or {})},
-                             key=f"{stage}_save")
     return s
+
+
+def stage_config_dialog(stage: str) -> None:
+    """Open a modal that configures every setting for one pipeline ``stage``.
+
+    Rendered from the Overview page's per-stage Advanced buttons. Seeds each widget
+    from the stage's saved settings, and a single "Save as defaults" button
+    persists the collected settings (:mod:`settings_store`) and closes the dialog.
+    The saved settings seed this dialog next time and feed the full pipeline run
+    launched from the Overview page. There is no Run action here: running is done
+    from the Overview page.
+    """
+    import streamlit as st
+
+    from . import settings_store
+
+    try:
+        label = stages.get_stage(stage).label
+    except (KeyError, AttributeError):
+        label = stage.capitalize()
+
+    @st.dialog(f"Configure {label}")
+    def _dialog() -> None:
+        st.caption("These settings are saved for this stage and used by the full "
+                   "pipeline run on this page.")
+        base = settings_store.get_stage(stage)
+        s = _stage_widgets(stage, base)
+        if st.button("Save as defaults", key=f"{stage}_modal_save",
+                     type="primary", use_container_width=True):
+            settings_store.save_stage(stage, s)
+            st.toast(f"Saved {label} settings")
+            st.rerun()
+
+    _dialog()
 
 
 def right_slot():

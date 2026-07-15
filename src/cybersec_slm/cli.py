@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="clean stage: continue a partial cross-source dedup pass")
     c.add_argument("--drop-non-english", action="store_true",
                    help="drop non-English records instead of translating them")
+    c.add_argument("--workers", type=int, default=None,
+                   help="process pool size for parallel clean workers (default: sequential)")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     c.add_argument("--domains", nargs="*", default=None,
@@ -64,6 +66,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="balance action: downsample any single source above SHARE "
                         "(e.g. 0.6) of its subdomain. Opt-in - destroys data when "
                         "secondary sources are small; prefer adding sources.")
+    c.add_argument("--min-text-chars", type=int, default=None,
+                   help="below this many chars after sanitize -> structural drop "
+                        "(default 50)")
+    c.add_argument("--max-text-chars", type=int, default=None,
+                   help="above this many chars -> behavioral flag, extreme length "
+                        "(default 100000)")
+    c.add_argument("--garbage-max", type=float, default=None,
+                   help="max fraction of non-text chars before a behavioral flag "
+                        "(default 0.30)")
+    c.add_argument("--repeat-max", type=float, default=None,
+                   help="max fraction of repeated lines/tokens before a behavioral "
+                        "flag (default 0.50)")
+    c.add_argument("--near-dup-threshold", type=float, default=None,
+                   help="Jaccard similarity threshold for near-duplicates "
+                        "(default 0.85)")
+    c.add_argument("--shingle-size", type=int, default=None,
+                   help="word-shingle length for MinHash near-dup (default 5)")
+    c.add_argument("--minhash-perm", type=int, default=None,
+                   help="MinHash permutation count (default 128)")
+    c.add_argument("--allowed-langs", nargs="*", default=None,
+                   help="language codes to keep (default: en)")
 
     # ── normalize / schema (stage 5) ──────────────────────────────────────────
     n = sub.add_parser("normalize", aliases=["schema"],
@@ -88,6 +111,25 @@ def build_parser() -> argparse.ArgumentParser:
     ed.add_argument("--profile", action="store_true",
                     help="also write a ydata-profiling HTML report (needs ydata-profiling, "
                          "which requires pandas<3 — run it in a throwaway env; see README)")
+    ed.add_argument("--min-total-records", type=int, default=None,
+                    help="sufficiency gate: minimum total records (default 50)")
+    ed.add_argument("--min-records-per-subdomain", type=int, default=None,
+                    help="sufficiency gate: minimum records per sub-domain (default 5)")
+    ed.add_argument("--max-source-share", type=float, default=None,
+                    help="max share of a sub-domain one source may hold (default 0.60)")
+    ed.add_argument("--max-drift", type=float, default=None,
+                    help="max topic-mix drift vs the previous run (default 0.25)")
+    ed.add_argument("--max-dup-rate", type=float, default=None,
+                    help="max exact-duplicate rate before a violation (default 0.40)")
+    ed.add_argument("--min-avg-tokens", type=float, default=None,
+                    help="minimum average tokens per record (default 5.0)")
+    ed.add_argument("--max-topic-cv", type=float, default=None,
+                    help="max coefficient of variation across topic sizes (default 1.5)")
+    ed.add_argument("--min-subdomain-share", type=float, default=None,
+                    help="minimum share of the corpus a sub-domain must hold (default 0.01)")
+    ed.add_argument("--owner", default=None,
+                    help="team name recorded on the EDA report (default: "
+                         "data-collection-team)")
 
     # ── validate ──────────────────────────────────────────────────────────────
     sub.add_parser("validate",
@@ -112,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "(abandon a hung source; default 1800)")
     ig.add_argument("--no-crawler", action="store_true",
                     help="skip website (crawl) sources for this run")
+    ig.add_argument("--no-hazard-scan", action="store_true",
+                    help="skip the security-hazard scan (script/iframe injection, "
+                         "base64 blobs, malware TLDs) during the light-EDA gate; "
+                         "default: scan")
     ig.add_argument("--domains", nargs="*", default=None,
                     help="fetch only these Sub-Domains (selective ingest; a fresh "
                          "run wipes only their data/raw/<domain>/ folders)")
@@ -225,6 +271,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="path to a sources .csv (default: sources/Sources.csv)")
     a.add_argument("--workers", type=int, default=None,
                    help="ingest process pool size (default: min(cpu, 8))")
+    a.add_argument("--clean-workers", type=int, default=None,
+                   help="clean-stage process pool size (default: sequential). "
+                        "Cleaning is per-source and the cross-source dedup pass "
+                        "runs once afterward, so more workers speed cleaning up "
+                        "without changing the output")
     a.add_argument("--resume", action="store_true",
                    help="skip sources already fetched in a prior run "
                         "(logs/completed_sources.txt)")
@@ -243,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "(abandon a hung source; default 1800)")
     a.add_argument("--no-crawler", action="store_true",
                    help="skip website (crawl) sources during ingest for this run")
+    a.add_argument("--no-hazard-scan", action="store_true",
+                   help="skip the security-hazard scan (script/iframe injection, "
+                        "base64 blobs, malware TLDs) during the light-EDA gate; "
+                        "default: scan")
     return p
 
 
@@ -252,12 +307,31 @@ def main(argv: list[str] | None = None) -> None:
     if args.stage == "clean":
         if args.action is None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
+            from .cleaning import common as clean_common
+            if args.min_text_chars is not None:
+                clean_common.MIN_TEXT_CHARS = args.min_text_chars
+            if args.max_text_chars is not None:
+                clean_common.MAX_TEXT_CHARS = args.max_text_chars
+            if args.garbage_max is not None:
+                clean_common.GARBAGE_MAX = args.garbage_max
+            if args.repeat_max is not None:
+                clean_common.REPEAT_MAX = args.repeat_max
+            if args.near_dup_threshold is not None:
+                clean_common.NEAR_DUP_THRESHOLD = args.near_dup_threshold
+            if args.shingle_size is not None:
+                clean_common.SHINGLE_SIZE = args.shingle_size
+            if args.minhash_perm is not None:
+                clean_common.MINHASH_PERM = args.minhash_perm
+            if args.allowed_langs:
+                clean_common.LANGS = set(args.allowed_langs)
+
             from .ingestion import parallel
             parallel.run_clean(keep_raw=not args.purge_raw, limit=args.limit,
                                resume=args.resume,
                                drop_non_english=args.drop_non_english,
                                domains=args.domains,
-                               sources_only=args.sources_only)
+                               sources_only=args.sources_only,
+                               workers=args.workers)
         elif args.action == "balance":
             from .cleaning.balance import apply_cap, apply_source_cap, check_balance
             check_balance()
@@ -280,17 +354,35 @@ def main(argv: list[str] | None = None) -> None:
                             max_source_gb=args.max_source_gb,
                             crawl=not args.no_crawler,
                             domains=args.domains,
-                            sources_only=args.sources_only)
+                            sources_only=args.sources_only,
+                            scan_hazards=not args.no_hazard_scan)
 
     elif args.stage in ("normalize", "schema"):
         from .normalize import run_normalization
         run_normalization(args.input, resume=not args.fresh, limit=args.limit)
 
     elif args.stage == "eda":
-        # Disable auto-rebalance if requested
+        from .eda import config as eda_config
         if getattr(args, "no_auto_rebalance", False):
-            from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False
+        if args.min_total_records is not None:
+            eda_config.MIN_TOTAL_RECORDS = args.min_total_records
+        if args.min_records_per_subdomain is not None:
+            eda_config.MIN_RECORDS_PER_SUBDOMAIN = args.min_records_per_subdomain
+        if args.max_source_share is not None:
+            eda_config.MAX_SOURCE_SHARE = args.max_source_share
+        if args.max_drift is not None:
+            eda_config.MAX_DRIFT = args.max_drift
+        if args.max_dup_rate is not None:
+            eda_config.MAX_DUP_RATE = args.max_dup_rate
+        if args.min_avg_tokens is not None:
+            eda_config.MIN_AVG_TOKENS = args.min_avg_tokens
+        if args.max_topic_cv is not None:
+            eda_config.MAX_TOPIC_CV = args.max_topic_cv
+        if args.min_subdomain_share is not None:
+            eda_config.MIN_SUBDOMAIN_SHARE = args.min_subdomain_share
+        if args.owner is not None:
+            eda_config.OWNER = args.owner
         from .eda import run_eda
         run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
 
@@ -361,6 +453,8 @@ def main(argv: list[str] | None = None) -> None:
             max_source_gb=args.max_source_gb,
             drop_non_english=args.drop_non_english,
             crawl=not args.no_crawler,
+            scan_hazards=not args.no_hazard_scan,
+            clean_workers=args.clean_workers,
         )
 
 

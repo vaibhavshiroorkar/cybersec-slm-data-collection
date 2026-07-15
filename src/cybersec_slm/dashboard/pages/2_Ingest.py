@@ -15,15 +15,11 @@ from cybersec_slm.dashboard import cached, charts, data, ui
 
 ui.inject_css()
 ui.page_header("ingest", data.stage_states())
-st.caption("Sources fetched to `data/raw/`, one row per source. Run the stage "
-           "below, then inspect the folder tree on disk.")
-
-# ------------------------------------------------------------------ run --------
-with ui.section("Run this stage"):
-    ui.stage_run_control("ingest", run_label="Run ingest")
+st.caption("Sources fetched to `data/raw/`, one row per source. Run this stage "
+           "from the Overview page; inspect the folder tree on disk here.")
 
 # ------------------------------------------------------------------ stats ------
-raw = data.data_funnel()["raw"]
+raw = cached.data_funnel(data.data_root())["raw"]
 prog = data.ingest_progress()
 raw_rows = cached.raw_table(data.data_root())
 raw_size = sum(r["size_mb"] for r in raw_rows)

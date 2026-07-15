@@ -66,3 +66,132 @@ def test_agent_page_shows_setup_instructions_when_not_configured(tmp_path, monke
     at.run()
     assert not at.exception
     assert any("uv sync --extra dashboard --extra agent" in info.value for info in at.info)
+
+
+def test_overview_stage_pills_default_to_all_five_lit(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
+    at.run()
+    assert not at.exception
+    pills = at.pills(key="overview_stage_pills")
+    assert pills.value == ["Sourcing", "Ingest", "Clean", "EDA", "Schema"]
+
+
+def test_reset_button_asks_to_confirm_before_deleting(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    data_dir = os.path.join(str(tmp_path), "data")
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
+    at.run()
+    reset_btn = next(b for b in at.button if b.label == "Reset")
+    reset_btn.click().run()
+    assert not at.exception
+    # Clicking Reset alone must not have deleted anything yet -- it only asks.
+    assert os.path.isdir(data_dir)
+    assert any("permanently deletes" in w.value.lower() for w in at.warning)
+
+    cancel_btn = next(b for b in at.button if b.label == "Cancel" and b.key == "cancel_reset")
+    cancel_btn.click().run()
+    assert not at.exception
+    assert os.path.isdir(data_dir)          # cancel left everything in place
+
+    # Confirming for real does delete data/.
+    reset_btn = next(b for b in at.button if b.label == "Reset")
+    reset_btn.click().run()
+    yes_btn = next(b for b in at.button if b.label == "Yes, reset")
+    yes_btn.click().run()
+    assert not at.exception
+    assert not os.path.isdir(data_dir)
+
+
+def test_sourcing_page_saves_domain_name_and_subdomain_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    from cybersec_slm.sourcing import catalog
+
+    at = AppTest.from_file(os.path.join(_DASH, "pages/1_Sourcing.py"), default_timeout=30)
+    at.run()
+    assert not at.exception
+    at.tabs[3].text_input(key="domain_name_input").set_value("MEDTECH")
+    at.button(key="domain_name_save").click().run()
+    assert not at.exception
+    assert catalog.domain_name() == "MEDTECH"
+
+    at.tabs[3].text_input(key="add_name").set_value("Physical Security")
+    at.tabs[3].text_input(key="add_code").set_value("PHYSSEC")
+    at.button(key="add_save").click().run()
+    assert not at.exception
+    cat = catalog.load()
+    assert cat["Physical Security"]["code"] == "PHYSSEC"
+    assert catalog.domain_name() == "MEDTECH"     # unaffected by the subdomain save
+
+
+def test_live_strip_shows_progress_chart_while_running(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    logs = os.path.join(str(tmp_path), "logs")
+    os.makedirs(logs, exist_ok=True)
+    with open(os.path.join(logs, "pipeline_run.json"), "w", encoding="utf-8") as f:
+        json.dump({"pid": os.getpid(), "cmd": ["x"], "stage": "all",
+                   "resume": False, "started_at": "2026-07-15 12:00:00"}, f)
+    with open(os.path.join(logs, "completed_sources.txt"), "w", encoding="utf-8") as f:
+        f.write("a\nb\n")
+    sources_dir = os.path.join(str(tmp_path), "sources")
+    os.makedirs(sources_dir, exist_ok=True)
+    with open(os.path.join(sources_dir, "Sources.csv"), "w", encoding="utf-8") as f:
+        f.write("Name,Sub-Domain\na,D\nb,D\nc,D\nd,D\n")
+
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
+    at.run()
+    assert not at.exception
+    at.run()          # a second fragment tick so the history buffer has 2+ points
+    assert not at.exception
+    assert at.session_state["_live_history"]["checked"] == [2, 2]
+
+
+def test_stage_config_modal_opens_with_stage_widgets(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
+    at.run()
+    assert not at.exception
+    # Each stage has an Advanced button on the Overview page.
+    assert at.button(key="cfg_schema") is not None
+    # Clicking it opens the stage's config modal, which exposes that stage's own
+    # widgets (schema: fresh) and a Save button. (AppTest renders a dialog only on
+    # the run its trigger fires, so the multi-step save round-trip is not testable
+    # here; settings_store persistence is covered by its own tests.)
+    at.button(key="cfg_schema").click().run()
+    assert not at.exception
+    assert at.checkbox(key="schema_fresh") is not None
+    assert at.button(key="schema_modal_save") is not None
+
+
+def test_stage_config_modal_source_exposes_domains(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
+    at.run()
+    assert not at.exception
+    # The source modal now configures everything, including sub-domains and mode
+    # that used to live on the Sourcing page.
+    at.button(key="cfg_source").click().run()
+    assert not at.exception
+    assert at.multiselect(key="source_domains") is not None
+    assert at.selectbox(key="source_mode") is not None
+    assert at.button(key="source_modal_save") is not None
+
+
+@pytest.mark.parametrize("script", ["pages/2_Ingest.py", "pages/3_Clean.py",
+                                    "pages/4_EDA.py"])
+def test_inspection_pages_have_no_run_button(script, tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    at = AppTest.from_file(os.path.join(_DASH, script), default_timeout=30)
+    at.run()
+    assert not at.exception
+    # Running moved to the Overview page; these pages are inspection only.
+    assert not any(str(b.label).lower().startswith("run") for b in at.button)

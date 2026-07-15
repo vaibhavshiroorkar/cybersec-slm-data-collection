@@ -44,7 +44,26 @@ def funnel(root: str) -> dict:
     return {"funnel": f, "progress": data.ingest_progress()}
 
 
+@st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
+def data_funnel(root: str) -> dict:
+    """Cached wrapper around :func:`data.data_funnel` (Ingest/Clean/Schema pages)."""
+    return data.data_funnel()
+
+
+@st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
+def cleaned_table(root: str) -> list[dict]:
+    """Cached per-source cleaned-folder table (:func:`data.cleaned_table`).
+
+    Walks every ``data/clean/<domain>/<source>/`` folder and opens every JSONL
+    file to count lines - expensive at hundreds of folders, so it shares the
+    funnel's short TTL rather than running uncached on every page rerun.
+    """
+    return data.cleaned_table()
+
+
 def clear_stats() -> None:
-    """Drop the cached funnel + raw-size snapshots so the next read remeasures."""
+    """Drop every cached scan snapshot so the next read remeasures."""
     funnel.clear()
     raw_table.clear()
+    data_funnel.clear()
+    cleaned_table.clear()
