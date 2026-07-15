@@ -108,6 +108,6 @@ def move_flagged(csv_path: str, *, dry_run: bool = False) -> dict:
 
     if flagged and not dry_run:
         _append_blacklist(blacklist_path(csv_path), flagged)
-        sheet.delete_rows(csv_path, links=[l for l in flagged_links if l])
+        sheet.delete_rows(csv_path, links=[link for link in flagged_links if link])
 
     return {"moved": len(flagged), "rows": report}

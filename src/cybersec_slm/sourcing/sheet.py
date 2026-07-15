@@ -84,7 +84,7 @@ def valid_counts_by_subdomain(csv_path: str) -> dict[str, int]:
     if sdcol is None or "License" not in df.columns:
         return {}
     counts: dict[str, int] = {}
-    for sub, lic in zip(df[sdcol], df["License"]):
+    for sub, lic in zip(df[sdcol], df["License"], strict=True):
         if license_verdict(lic) == "ok":
             key = str(sub).strip()
             counts[key] = counts.get(key, 0) + 1

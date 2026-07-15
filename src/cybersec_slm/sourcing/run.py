@@ -52,8 +52,7 @@ from .keywords import QUERY_QUALIFIER, default_engines
 from .quality import passes as quality_passes
 from .row import SHEET_COLUMNS, build_row, row_to_list
 from .search import SearchError, searxng_search
-from .sheet import (append_rows, existing_links, normalize_url,
-                    valid_counts_by_subdomain)
+from .sheet import append_rows, existing_links, normalize_url, valid_counts_by_subdomain
 
 # The catalog this pipeline curates (a local CSV at the repo root).
 DEFAULT_CATALOG = os.path.join(DATA_ROOT, "sources", "Sources.csv")
