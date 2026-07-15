@@ -89,6 +89,24 @@ with ui.section("Run the full pipeline"):
     settings = ui.advanced_settings("all", defaults=_saved_all)
     run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
 
+    # Per-stage toggles for the full pipeline. Skipping a stage lets the run
+    # begin later in the flow (e.g. ingest -> clean -> eda -> schema).
+    stage_keys = ["source", "ingest", "clean", "eda", "schema"]
+    stage_labels = ["Sourcing", "Ingest", "Clean", "EDA", "Schema"]
+    skips = st.columns(len(stage_keys))
+    for key, label, col in zip(stage_keys, stage_labels, skips, strict=True):
+        skip_key = f"skip_{key}"
+        checked = col.checkbox(
+            f"Skip {label}",
+            value=bool(run_settings.get(skip_key, False)),
+            key=skip_key,
+            help=f"Do not run the {label.lower()} stage during the full pipeline."
+        )
+        if checked:
+            run_settings[skip_key] = True
+        elif skip_key in run_settings:
+            run_settings.pop(skip_key)
+
     # Surface the resume ledger so saved progress is visible, and guard Start (a
     # fresh run wipes data/raw/ + the ledger) with a confirm when a checkpoint exists.
     ckpt = data.checkpoint_status()
