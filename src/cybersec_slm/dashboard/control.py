@@ -33,8 +33,7 @@ PLAN_NAME = "pipeline_plan.json"
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
 _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
-            "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english",
-            "no_crawler"},
+            "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english"},
     "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
                "max_minutes", "workers", "time_range", "no_site_scope",
                "no_quality_filter", "dry_run", "searxng_url", "language",
@@ -144,6 +143,8 @@ def build_full_plan(overrides: dict | None = None, *,
     plan: list[list[str]] = []
     for key in stages.stage_keys():
         if resume and key == "source":
+            continue
+        if over.get(f"skip_{key}"):
             continue
         effective = {**settings_store.get_stage(key), **over}
         plan.append(stage_argv(key, resume=resume, settings=effective))
