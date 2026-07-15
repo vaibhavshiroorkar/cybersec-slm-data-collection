@@ -18,8 +18,8 @@ def _wire(monkeypatch, tmp_path):
     monkeypatch.setattr(worker, "_fetch_one", lambda d, log: str(folder))
     monkeypatch.setattr(worker, "_get_synthetic_ids", lambda: frozenset())
     monkeypatch.setattr(worker.light_eda, "assess_source",
-                        lambda folder, descriptor, synthetic_ids=None:
-                        (True, {"flags": {"synthetic": False}}))
+                        lambda folder, descriptor, synthetic_ids=None,
+                        scan_hazards=True: (True, {"flags": {"synthetic": False}}))
     return str(folder)
 
 

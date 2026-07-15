@@ -20,11 +20,11 @@ location is all it takes to serve a hosted deploy later, no code change.
 |---|---|
 | `data.py` | **The read layer.** The only code that touches disk/SQLite; pure functions -> plain data, no Streamlit import, fully unit-tested. `run_phase` / `stage_states` read the canonical `cybersec_slm.stages` registry. |
 | `control.py` | The control plane: `build_command` + `start(stage, settings)` launch a stage (or `all`) as a detached subprocess; `stop` / `reset`. No Streamlit import, unit-tested. |
-| `ui.py` | Shared presentation helpers (status pill, scrollable `log_box`, `stat_grid`, `stage_run_control`, `advanced_settings`, one CSS injection). Streamlit imported lazily. |
+| `ui.py` | Shared presentation helpers (status pill, scrollable `log_box`, `stat_grid`, `stage_config_dialog` + `_stage_widgets` per-stage settings modal, one CSS injection). Streamlit imported lazily. |
 | `charts.py` | Formatting + trend-series helpers (no Streamlit). |
 | `agent_tools.py` / `agent_client.py` | Read-only tool wrappers + NVIDIA NIM client for the Agent page; no Streamlit import, unit-tested. |
-| `app.py` | Overview: all headline stats + the full-pipeline launcher. |
-| `pages/1_Sourcing.py` … `5_Schema.py` | One page per stage: run it (with stage-scoped advanced settings), a scrollable stage log, and that stage's detail. |
+| `app.py` | Overview: all headline stats, the full-pipeline launcher, and a per-stage Advanced button that opens `stage_config_dialog`. |
+| `pages/1_Sourcing.py` … `5_Schema.py` | One inspection page per stage (run settings live in the Overview page's per-stage modal; running is launched from Overview). Each shows that stage's detail and, for Sourcing, catalog management. |
 | `pages/6_Dataset.py` | Explore: filter/search/paginate the corpus + rejected/duplicate sinks. |
 | `pages/7_Agent.py` | Ask: a chat agent that answers pipeline/dataset questions via tool-calling. |
 

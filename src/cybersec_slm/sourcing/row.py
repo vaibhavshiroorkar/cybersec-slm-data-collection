@@ -41,9 +41,15 @@ def _derive_name(result: Result) -> str:
 
 
 def build_row(result: Result, default_domain: str, *,
-              today: str | None = None) -> dict[str, str]:
-    """Build one sheet row (a column->value dict) from a search result."""
-    domain = refine_domain(default_domain, result.title, result.snippet)
+              today: str | None = None,
+              domain_vocab: dict[str, set[str]] | None = None) -> dict[str, str]:
+    """Build one sheet row (a column->value dict) from a search result.
+
+    ``domain_vocab`` is the tie-break vocabulary for :func:`refine_domain`
+    (from :func:`~.classify.build_domain_vocab`); pass it in once per discovery
+    run rather than per row/result.
+    """
+    domain = refine_domain(default_domain, result.title, result.snippet, domain_vocab)
     category, fmt = infer_category_and_format(result.link)
     added = today or date.today().strftime("%d/%m/%Y")
 

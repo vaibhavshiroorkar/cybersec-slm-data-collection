@@ -43,7 +43,8 @@ def _wire(monkeypatch, tmp_path):
 
     seen_clean: list = []
 
-    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True,
+             scan_hazards=True):
         seen_clean.append(clean)
         # fetch-only: create the raw folder and leave it in place.
         folder = tmp_path / "raw" / descriptor["url"].replace("://", "_")
@@ -108,7 +109,8 @@ def test_ingest_selective_fetches_only_chosen_domains(tmp_path, monkeypatch):
 
     fetched: list = []
 
-    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True,
+             scan_hazards=True):
         fetched.append(descriptor["domain"])
         return {"status": "ok", "folder": None, "ingest_rows": [],
                 "light_eda_report": {}, "flags": {}, "clean_rows": []}
@@ -147,7 +149,8 @@ def test_ingest_row_level_fetches_only_chosen_rows_no_wipe(tmp_path, monkeypatch
 
     fetched: list = []
 
-    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True):
+    def _proc(descriptor, *, data_root=None, limit=None, clean=True, crawl=True,
+             scan_hazards=True):
         fetched.append(descriptor["url"])
         return {"status": "ok", "folder": None, "ingest_rows": [],
                 "light_eda_report": {}, "flags": {}, "clean_rows": []}

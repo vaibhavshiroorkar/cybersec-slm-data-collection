@@ -14,22 +14,21 @@ import os
 
 import streamlit as st
 
-from cybersec_slm.dashboard import cached, charts, control, data, settings_store, ui
+from cybersec_slm import stages
+from cybersec_slm.dashboard import charts, control, data, ui
 
 st.set_page_config(page_title="cybersec-slm dashboard", layout="wide")
 ui.inject_css()
 
 ui.app_header("cybersec-slm-data-collection")
-st.caption(f"Reading data root: `{data.data_root()}`  ·  run the whole pipeline "
-           "here; open a stage in the sidebar to inspect it in detail.")
 
 
 # ---------------------------------------------------------------- live strip ---
-@st.fragment(run_every=3)
+@st.fragment(run_every=1)
 def _live() -> None:
     """Run status: state, current stage, elapsed, ETA + a live sources progress bar.
 
-    Re-runs every 3s (the fragment decorator), so the bar and ETA advance during a
+    Re-runs every 1s (the fragment decorator), so the bar and ETA advance during a
     run without reflowing the rest of the page. Every value is read from ``data``;
     nothing here computes state.
     """
@@ -72,6 +71,16 @@ def _live() -> None:
         if idx and tot:
             st.caption(f"Stage {idx} of {tot}  ·  {phase.get('label', '')}")
 
+        # Rolling history of sources-checked is tracked in session state
+        # for future diagnostics or replay, but the Overview page does not
+        # render it as a chart.
+        pid = status.get("pid")
+        hist = st.session_state.get("_live_history")
+        if not hist or hist.get("pid") != pid:
+            hist = {"pid": pid, "checked": []}
+        hist["checked"] = (hist["checked"] + [checked])[-600:]
+        st.session_state["_live_history"] = hist
+
 
 with ui.section("Run status"):
     _live()
@@ -81,31 +90,35 @@ with ui.section("Run the full pipeline"):
     cstat = control.status()
     running = cstat["running"]
     # The full run executes source -> ingest -> clean -> eda -> schema in order,
-    # each stage built from its own page's saved settings. This panel seeds from
-    # those saved values and its live edits become per-run *overrides* layered on
-    # top of every stage (control.build_full_plan); build_command drops any flag a
-    # given stage does not accept.
-    _saved_all = settings_store.merged_all()
-    settings = ui.advanced_settings("all", defaults=_saved_all)
-    run_settings = {**_saved_all, **settings}   # saved fills gaps; live panel wins
-
-    # Per-stage toggles for the full pipeline. Skipping a stage lets the run
-    # begin later in the flow (e.g. ingest -> clean -> eda -> schema).
-    stage_keys = ["source", "ingest", "clean", "eda", "schema"]
+    # each stage built entirely from its own page's saved settings (control.
+    # build_full_plan); build_command drops any flag a given stage does not accept.
+    # Settings live only on each stage's own page now -- this panel is run/monitor
+    # only, so the stage toggles below are the only per-run choice made here.
+    stage_keys = stages.stage_keys()
     stage_labels = ["Sourcing", "Ingest", "Clean", "EDA", "Schema"]
-    skips = st.columns(len(stage_keys))
-    for key, label, col in zip(stage_keys, stage_labels, skips, strict=True):
-        skip_key = f"skip_{key}"
-        checked = col.checkbox(
-            f"Skip {label}",
-            value=bool(run_settings.get(skip_key, False)),
-            key=skip_key,
-            help=f"Do not run the {label.lower()} stage during the full pipeline."
-        )
-        if checked:
-            run_settings[skip_key] = True
-        elif skip_key in run_settings:
-            run_settings.pop(skip_key)
+
+    # Connected pill toggle bar: lit = will run this launch, dimmed = skipped. All
+    # five lit by default (the full pipeline).
+    selected_labels = st.pills(
+        "Stages to run", stage_labels, selection_mode="multi",
+        default=stage_labels, key="overview_stage_pills",
+        help="Lit = will run this launch. Dimmed = skipped.")
+    selected_keys = {k for k, label in zip(stage_keys, stage_labels, strict=True)
+                     if label in selected_labels}
+    run_settings = {f"skip_{k}": True for k in stage_keys if k not in selected_keys}
+
+    # Per-stage configuration. Each stage's link-style button opens a modal that
+    # configures everything that stage's run accepts; the settings are saved per
+    # stage and feed the full run below (control.build_full_plan). These are
+    # rendered as borderless (tertiary) buttons so they read as settings links,
+    # clearly distinct from the Start / Resume / Stop / Reset run actions below.
+    st.caption("Configure a stage (saved per stage, used by the run below):")
+    cfg_cols = st.columns(len(stage_keys))
+    for _col, _key, _label in zip(cfg_cols, stage_keys, stage_labels, strict=True):
+        if _col.button(f"Configure {_label}", key=f"cfg_{_key}", type="tertiary",
+                       use_container_width=True,
+                       help=f"Open {_label} run settings"):
+            ui.stage_config_dialog(_key)
 
     # Surface the resume ledger so saved progress is visible, and guard Start (a
     # fresh run wipes data/raw/ + the ledger) with a confirm when a checkpoint exists.
@@ -122,10 +135,10 @@ with ui.section("Run the full pipeline"):
 
     b = st.columns(4)
     if b[0].button("Start", disabled=running, use_container_width=True,
-                   help="Run all stages fresh, in order: source, ingest, clean, "
-                        "EDA, schema. Each stage uses the advanced settings saved "
-                        "on its page (overridden by the panel above). Wipes any "
-                        "saved checkpoint."):
+                   help="Run the lit stages fresh, in order: source, ingest, "
+                        "clean, EDA, schema. Each stage uses the advanced "
+                        "settings saved on its own page. Wipes any saved "
+                        "checkpoint."):
         # With a checkpoint present, don't wipe on a single click: ask to confirm.
         if ckpt["exists"]:
             st.session_state["_confirm_fresh_start"] = True
@@ -151,8 +164,8 @@ with ui.section("Run the full pipeline"):
     if b[2].button("Stop", disabled=not running, use_container_width=True):
         control.stop()
         st.rerun()
-    if b[3].button("Reset", disabled=running, use_container_width=True,
-                   help="Instantly delete the entire data/ folder and logs"):
+
+    def _do_reset() -> None:
         res = control.reset()
         if not res.get("ok"):
             st.error(res["error"])
@@ -165,17 +178,34 @@ with ui.section("Run the full pipeline"):
             st.toast(msg)
         st.rerun()
 
+    if b[3].button("Reset", disabled=running, use_container_width=True,
+                   help="Permanently delete the entire data/ folder and logs "
+                        "(asks to confirm first)"):
+        st.session_state["_confirm_reset"] = True
+        st.rerun()
+    if st.session_state.get("_confirm_reset") and not running:
+        st.warning("This permanently deletes the entire data/ folder and logs. "
+                   "This cannot be undone.")
+        rc = st.columns(4)
+        if rc[0].button("Yes, reset", use_container_width=True):
+            st.session_state["_confirm_reset"] = False
+            _do_reset()
+        if rc[1].button("Cancel", use_container_width=True, key="cancel_reset"):
+            st.session_state["_confirm_reset"] = False
+            st.rerun()
+
     if running:
         st.caption(f"running: {cstat.get('stage') or 'pipeline'}  ·  session (pid) "
                    f"{cstat['pid']}  ·  started {cstat.get('started_at')}")
     elif cstat.get("stale"):
         st.caption("Previous run ended without a clean stop.")
     else:
-        st.caption("Reset deletes the data/ folder with no confirmation.")
+        st.caption("Reset asks to confirm, then deletes the entire data/ folder.")
 
 # ------------------------------------------------------------------- funnel ----
-# Cached: the funnel scans data/ on every rerun, which made the Overview reload on
-# each interaction. It renders from a cached snapshot; Refresh (or a run) clears it.
+# Live: the funnel now reads corpus counts directly so the Overview updates on
+# every rerun. The counts are still expensive to measure, but users get fresh
+# data without waiting for cache expiry.
 def _funnel_row(label: str, d: dict) -> None:
     """One funnel stage as a labelled Sources / Records / Size row."""
     c = st.columns([1.6, 1, 1, 1])
@@ -185,15 +215,12 @@ def _funnel_row(label: str, d: dict) -> None:
     c[3].metric("Size", charts.fmt_size(d["size_mb"]))
 
 
-with ui.section("Corpus funnel",
-                "Records are raw rows, so large tabular datasets dominate the "
-                "ingested count. Cached for ~90s; see the Ingest page for the "
-                "per-source breakdown."):
-    if st.button("Refresh", key="funnel_refresh",
-                 help="Remeasure data/ now (otherwise cached for ~90s)"):
-        cached.clear_stats()
-        st.rerun()
-    _snap = cached.funnel(data.data_root())
+with ui.section("Corpus funnel"):
+    with st.spinner("Loading corpus funnel..."):
+        _snap = {
+            "funnel": data.data_funnel(),
+            "progress": data.ingest_progress(),
+        }
     funnel = _snap["funnel"]
     prog = _snap["progress"]
     pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
@@ -204,11 +231,19 @@ with ui.section("Corpus funnel",
     _funnel_row("Cleaned", funnel["cleaned"])
     _funnel_row("Final dataset", funnel["appended"])
 
+    import pandas as pd
+    # Keep the funnel summary lightweight by using metrics only.
+    # The per-stage counts above provide the same information without charts.
+    _ = pd.DataFrame(
+        {"records": [funnel["raw"]["lines"], funnel["cleaned"]["lines"],
+                     funnel["appended"]["lines"]]},
+        index=["Ingested (raw)", "Cleaned", "Final dataset"])
+
 # ---------------------------------------------------------------- pipeline log -
 _sess = data.run_status()
 
 
-@st.fragment(run_every=3)
+@st.fragment(run_every=1)
 def _pipeline_log() -> None:
     ui.log_box(data.log_tail(200))
 

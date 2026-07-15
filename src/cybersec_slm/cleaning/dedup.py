@@ -20,7 +20,8 @@ import json
 import os
 import re
 
-from .common import MINHASH_PERM, NEAR_DUP_THRESHOLD, SHINGLE_SIZE, logger, try_import
+from . import common
+from .common import logger, try_import
 
 _WS_RE = re.compile(r"\s+")
 _MERSENNE = (1 << 61) - 1          # large prime for hash mixing
@@ -45,7 +46,9 @@ def _exact_hash(text: str) -> str:
 class _FallbackLSH:
     """Minimal MinHash + banded LSH (no third-party deps)."""
 
-    def __init__(self, num_perm=MINHASH_PERM, threshold=NEAR_DUP_THRESHOLD):
+    def __init__(self, num_perm=None, threshold=None):
+        num_perm = num_perm if num_perm is not None else common.MINHASH_PERM
+        self.threshold = threshold if threshold is not None else common.NEAR_DUP_THRESHOLD
         self.num_perm = num_perm
         # choose bands so that ~ (1/bands)^(1/rows) ≈ threshold; simple split.
         self.bands = 16 if num_perm % 16 == 0 else 8
@@ -71,7 +74,7 @@ class _FallbackLSH:
         return sum(1 for x, y in zip(s1, s2, strict=False) if x == y) / len(s1)
 
     def add(self, text: str) -> tuple[bool, str]:
-        sh = _shingles(text, SHINGLE_SIZE)
+        sh = _shingles(text, common.SHINGLE_SIZE)
         if not sh:
             return False, ""
         sig = self._signature(sh)
@@ -84,7 +87,7 @@ class _FallbackLSH:
         for bi, key in band_keys:
             seen_ids.update(self._buckets[bi].get(key, ()))
         for idx in seen_ids:
-            if self._similarity(sig, self._sigs[idx]) >= NEAR_DUP_THRESHOLD:
+            if self._similarity(sig, self._sigs[idx]) >= self.threshold:
                 return True, "near-duplicate (minhash)"
         # not a dup -> index it
         new_id = len(self._sigs)
@@ -97,7 +100,9 @@ class _FallbackLSH:
 class _DatasketchLSH:
     """Near-dup index backed by datasketch MinHashLSH."""
 
-    def __init__(self, datasketch, num_perm=MINHASH_PERM, threshold=NEAR_DUP_THRESHOLD):
+    def __init__(self, datasketch, num_perm=None, threshold=None):
+        num_perm = num_perm if num_perm is not None else common.MINHASH_PERM
+        threshold = threshold if threshold is not None else common.NEAR_DUP_THRESHOLD
         self._ds = datasketch
         self.num_perm = num_perm
         self.lsh = datasketch.MinHashLSH(threshold=threshold, num_perm=num_perm)
@@ -105,12 +110,12 @@ class _DatasketchLSH:
 
     def _minhash(self, text: str):
         mh = self._ds.MinHash(num_perm=self.num_perm)
-        for sh in _shingles(text, SHINGLE_SIZE):
+        for sh in _shingles(text, common.SHINGLE_SIZE):
             mh.update(sh.encode("utf-8"))
         return mh
 
     def add(self, text: str) -> tuple[bool, str]:
-        sh = _shingles(text, SHINGLE_SIZE)
+        sh = _shingles(text, common.SHINGLE_SIZE)
         if not sh:
             return False, ""
         mh = self._minhash(text)

@@ -21,7 +21,8 @@ from __future__ import annotations
 import os
 import re
 
-from .common import LANGS, PKG_DIR, logger, try_import
+from . import common
+from .common import PKG_DIR, logger, try_import
 
 # fastText returns a label for *any* input, however garbled. Below this
 # probability we treat the guess as "unknown" (kept) rather than a confident
@@ -115,7 +116,7 @@ class LangFilter:
         ``is_allowed`` so callers that translate can detect once and reuse the
         label (see pipeline language step).
         """
-        if lang in LANGS:
+        if lang in common.LANGS:
             return True
         if lang == "unknown":           # uncertain -> keep (conservative)
             return True

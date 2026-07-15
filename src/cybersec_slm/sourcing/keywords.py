@@ -438,3 +438,25 @@ def keyword_sets(mode: str = "datasets") -> list[tuple[dict[str, list[str]], str
 
 # Canonical Sub-Domain labels (shared by both catalogs), exposed for CLI validation.
 DOMAINS: tuple[str, ...] = tuple(DOMAIN_KEYWORDS)
+
+# The top-level ``domain_name`` schema label for this pipeline's default corpus.
+DEFAULT_DOMAIN_NAME = "CYBERSEC"
+
+# Enum codes for the 12 built-in sub-domains, copied 1:1 from the historical
+# ``normalize.schema.CANONICAL_TO_SUBDOMAIN`` mapping (the downstream snorkel
+# LabelModel contract these codes must not silently change for). Keyed by name,
+# not position, so this stays correct regardless of any dict's insertion order.
+DOMAIN_CODES: dict[str, str] = {
+    "Application Security": "APPLICATION",
+    "Cloud Security": "CLOUD",
+    "Cryptography": "CRYPTOGRAPHY",
+    "Data Security and Privacy": "DATA_PRIVACY",
+    "Governance, Risk and Compliance": "GRC",
+    "Identity Access and Management": "IAM",
+    "Incident Response and Forensics": "INCIDENT_RESPONSE",
+    "Network Security": "NETWORK",
+    "Penetration Testing": "PENTEST",
+    "Security Operations": "SECOPS",
+    "Threat Intelligence": "THREAT_INTELLIGENCE",
+    "Vulnerability Management": "VULN_MANAGEMENT",
+}

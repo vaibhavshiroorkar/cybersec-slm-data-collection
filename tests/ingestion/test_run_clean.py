@@ -48,7 +48,10 @@ class _StubTranslator:
 
 def _wire(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
+    logs = tmp_path / "logs"
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
+    monkeypatch.setattr(parallel.core, "LOGS", str(logs))
+    monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
     monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean"))
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
@@ -83,6 +86,25 @@ def test_run_clean_cleans_and_dedups(tmp_path, monkeypatch):
     assert result["dedup"]["exact_dups"] >= 1
     # clean report written
     assert (tmp_path / "reports" / "clean_report.csv").exists()
+    pipeline.reset_cleaner_cache()
+
+
+def test_run_clean_resume_skips_already_cleaned_sources(tmp_path, monkeypatch):
+    raw, dup, distinct = _wire(monkeypatch, tmp_path)
+    # First run cleans both sources and writes the checkpoint.
+    result1 = parallel.run_clean()
+    assert result1["files"] == 2
+    assert (tmp_path / "logs" / "cleaned_sources.txt").exists()
+
+    # Add a new source and rerun with resume. The already-cleaned sources should be skipped.
+    _write_jsonl(str(raw / "Test" / "s3" / "c.jsonl"), [{"text": distinct}])
+    result2 = parallel.run_clean(resume=True)
+
+    assert result2["files"] == 1
+    cleaned = (tmp_path / "logs" / "cleaned_sources.txt").read_text(encoding="utf-8").splitlines()
+    assert "Test/s1" in cleaned
+    assert "Test/s2" in cleaned
+    assert "Test/s3" in cleaned
     pipeline.reset_cleaner_cache()
 
 

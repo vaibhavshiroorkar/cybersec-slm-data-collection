@@ -47,6 +47,7 @@ from datetime import date
 from ..core import DATA_ROOT, LOGS, logger
 from ..ingestion.license_gate import license_verdict
 from . import catalog
+from .classify import build_domain_vocab
 from .enrich import Enricher
 from .keywords import QUERY_QUALIFIER, default_engines
 from .quality import passes as quality_passes
@@ -108,7 +109,7 @@ def _enrich_and_log(enricher: Enricher, row: dict) -> None:
 
 def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
                per_domain_count, by_keyword_agg, new_rows, refill, expired,
-               quality_filter, today, enricher, pool, dry_run):
+               quality_filter, today, enricher, pool, dry_run, domain_vocab):
     """Valid-gated per-domain fill: top each selected domain up to its
     commercial-valid target.
 
@@ -147,7 +148,8 @@ def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
             if not norm or norm in seen:
                 continue
             seen.add(norm)                          # dedup within this run too
-            batch.append((keyword, build_row(res, domain, today=today)))
+            batch.append((keyword, build_row(res, domain, today=today,
+                                             domain_vocab=domain_vocab)))
         return batch
 
     while active and not expired() and not _capped():
@@ -257,6 +259,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     unknown = [d for d in selected if d not in cat]
     if unknown:
         raise ValueError(f"unknown Sub-Domain(s): {unknown}. Valid: {all_domains}")
+    # Computed once per run (not per result) and passed into every build_row call.
+    domain_vocab = build_domain_vocab(cat)
 
     logger.info(f"source: reading existing links from {csv_path}")
     seen = existing_links(csv_path)
@@ -394,7 +398,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
             appended_in_fill, fill_target_reached = _fill_loop(
                 selected, target_per_domain, target, csv_path, cursor, seen,
                 per_domain_count, by_keyword_agg, new_rows, _refill, _expired,
-                quality_filter, today, enricher, pool, dry_run)
+                quality_filter, today, enricher, pool, dry_run, domain_vocab)
         else:
             # Round-robin: each rotation takes at most one result from each domain,
             # so accepted sources stay balanced across domains right up to the cutoff.
@@ -418,7 +422,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                     if not norm or norm in seen:
                         continue
                     seen.add(norm)                 # also dedup within this run
-                    row = build_row(res, domain, today=today)
+                    row = build_row(res, domain, today=today,
+                                    domain_vocab=domain_vocab)
                     new_rows.append(row)
                     per_domain_count[domain] += 1
                     by_keyword_agg[(domain, keyword)]["new"] += 1

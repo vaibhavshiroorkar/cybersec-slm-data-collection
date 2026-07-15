@@ -6,11 +6,14 @@ import pytest
 from pydantic import ValidationError
 
 from cybersec_slm.normalize.schema import (
+    CANONICAL_DOMAINS,
+    DOMAIN_NAMES,
     SUBDOMAIN_NAMES,
     CanonicalRecord,
     normalize_domain,
     resolve_domain,
 )
+from cybersec_slm.sourcing import catalog as _catalog
 
 
 def _valid(**over):
@@ -80,3 +83,34 @@ def test_resolve_domain_cybersec_and_merged_tracks():
 def test_normalize_domain_rejects_unknown():
     with pytest.raises(ValueError):
         normalize_domain("Underwater Basket Weaving")
+
+
+def test_default_catalog_matches_legacy_order(tmp_path):
+    """On a fresh catalog (no keywords.yaml on disk), the taxonomy derived from
+    sourcing.catalog must reproduce today's exact 12-domain order, enum codes,
+    and top-level domain_name -- the downstream snorkel LabelModel contract
+    depends on this order/naming never silently reshuffling."""
+    cat = _catalog.load(str(tmp_path / "missing.yaml"))
+    names = tuple(_catalog.subdomains(cat))
+    codes = tuple(_catalog.code_for(n, cat) for n in names)
+
+    assert names == CANONICAL_DOMAINS == (
+        "Application Security",
+        "Cloud Security",
+        "Cryptography",
+        "Data Security and Privacy",
+        "Governance, Risk and Compliance",
+        "Identity Access and Management",
+        "Incident Response and Forensics",
+        "Network Security",
+        "Penetration Testing",
+        "Security Operations",
+        "Threat Intelligence",
+        "Vulnerability Management",
+    )
+    assert codes == SUBDOMAIN_NAMES == (
+        "APPLICATION", "CLOUD", "CRYPTOGRAPHY", "DATA_PRIVACY", "GRC", "IAM",
+        "INCIDENT_RESPONSE", "NETWORK", "PENTEST", "SECOPS",
+        "THREAT_INTELLIGENCE", "VULN_MANAGEMENT",
+    )
+    assert DOMAIN_NAMES == frozenset({"CYBERSEC"})
