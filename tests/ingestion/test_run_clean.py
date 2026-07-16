@@ -168,6 +168,28 @@ def test_sharded_source_is_ledgered_only_when_every_window_is_done(tmp_path,
     pipeline.reset_cleaner_cache()
 
 
+def test_work_is_ordered_by_source_so_the_ledger_advances(tmp_path, monkeypatch):
+    """Windows of one source stay together, smallest source first.
+
+    The ledger records a source only when ALL its windows finish. Ordering by
+    window size interleaves sources, so every worker chews the biggest source at
+    once and no source completes for hours - leaving no checkpoint to resume from
+    and no rate to estimate from.
+    """
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    # big: 4 records -> 4 windows. small: 1 record -> 1 window.
+    _write_jsonl(str(raw / "D" / "big" / "a.jsonl"), [{"text": f"r{i}"} for i in range(4)])
+    _write_jsonl(str(raw / "D" / "small" / "b.jsonl"), [{"text": "r"}])
+
+    work = parallel._clean_work(
+        [(str(raw / "D" / "big"), "D/big"), (str(raw / "D" / "small"), "D/small")],
+        str(raw))
+
+    assert [sid for sid, _c in work] == ["D/small", "D/big", "D/big", "D/big", "D/big"]
+
+
 def test_sharded_clean_keeps_every_record(tmp_path, monkeypatch):
     """Sharding is a scheduling change: the corpus it produces is unchanged."""
     _raw, dup, distinct = _wire(monkeypatch, tmp_path)

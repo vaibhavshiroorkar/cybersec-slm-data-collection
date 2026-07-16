@@ -164,23 +164,40 @@ def _clean_chunk(chunk: tuple, sid: str, limit: int | None,
 
 
 def _clean_work(to_clean: list[tuple[str, str]], raw_root: str) -> list[tuple]:
-    """``[(sid, chunk), ...]`` for every source to clean, biggest window first.
+    """``[(sid, chunk), ...]`` for every source to clean, smallest source first.
 
     One entry per *window*, not per source: a source whose file is over the shard
     threshold contributes several, which is what lets the pool put more than one
-    worker on a single huge file. Biggest-first so a giant window is picked up at
-    the start rather than becoming the straggler every other worker waits on.
+    worker on a single huge file.
+
+    Ordering is by SOURCE (smallest first), keeping a source's windows together,
+    because the ledger records a source only once all of its windows are done.
+    Ordering by window size instead interleaves sources, so every worker chews the
+    biggest source's windows at once and *no* source completes for hours — leaving
+    the run with no checkpoint to resume from, no rate to estimate from, and a Quick
+    finish that would discard all of it.
+
+    Smallest-first costs nothing in makespan here. The classic "biggest task first"
+    rule guards against a huge task becoming the straggler, but sharding already
+    caps every window at roughly one budget, so the windows are near-equal and a
+    big source is simply many of them — it still fills every worker when its turn
+    comes.
     """
-    work: list[tuple] = []
+    by_source: list[tuple[int, str, list]] = []
     for src_dir, sid in to_clean:
         if not os.path.isdir(src_dir):
             logger.warning(f"clean: no raw data for source {sid}")
             continue
         files = cleaning_pipeline._source_files(src_dir, raw_root)
-        for chunk in cleaning_pipeline.shard_files(files):
-            work.append((sid, chunk))
-    work.sort(key=lambda t: ((t[1][5] or 0) - (t[1][4] or 0)), reverse=True)
-    return work
+        size = 0
+        for ap, _sub, _src, _rel in files:
+            try:
+                size += os.path.getsize(ap)
+            except OSError:
+                pass
+        by_source.append((size, sid, cleaning_pipeline.shard_files(files)))
+    by_source.sort(key=lambda t: t[0])
+    return [(sid, chunk) for _size, sid, chunks in by_source for chunk in chunks]
 
 
 def _label(d) -> str:
