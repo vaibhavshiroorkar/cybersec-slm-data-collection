@@ -313,10 +313,8 @@ def _stage_activity() -> None:
                "plan skipped never logged, so they are absent rather than empty.")
 
 
-with ui.section("Stage activity",
-                "Which stage the run has been in, over time."):
-    _stage_activity()
-
+# Rendered near the bottom (just above the gate + release row) — the timeline is
+# history, read after the live strip, funnel, and log rather than before them.
 
 # ------------------------------------------------------------- live throughput --
 def _rate_chart(rows: list[dict], unit: str):
@@ -411,6 +409,11 @@ with ui.section("Pipeline log"):
                        "current": "yes" if h["current"] else ""} for h in hist])
         else:
             st.caption("No pipeline sessions yet.")
+
+# --------------------------------------------------------- stage activity ------
+with ui.section("Stage activity",
+                "Which stage the run has been in, over time."):
+    _stage_activity()
 
 # ------------------------------------------------------------ gate + release ---
 eda = data.latest_eda()
