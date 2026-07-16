@@ -658,16 +658,72 @@ def _folder_has_jsonl(folder: str) -> bool:
     return False
 
 
-def sources_without_data() -> list[dict]:
-    """Every catalogued source that produced no records, each with the reason.
+def _catalog_meta_by_folder() -> dict:
+    """Map ``(sub-domain, data/raw folder) -> {name, license, records, size_mb}``.
 
-    Reconciles the full catalog against ``data/raw/``: a source with a JSONL file
-    on disk produced data and is skipped; the rest are reported. Reasons come from
-    the commercial-license gate (the common case: non-commercial / copyleft /
-    unrecognised licenses are turned away before download) and, for sources that
-    were fetched but yielded nothing, the latest run's failure log. Each row is
-    ``{"sub-domain", "source", "type", "reason"}`` where ``type`` is ``license``,
-    ``failed``, ``timed out``, ``rejected``, or ``no records``.
+    The per-source catalog facts the Ingest table shows next to each source's
+    on-disk result. Like :func:`_catalog_lines_by_folder` this joins catalog rows
+    to their fetch folder through the ingestion descriptor loader, but carries the
+    display fields (Name, License) too. Empty when the catalog can't be read.
+    """
+    try:
+        from ..ingestion import sources as _srcs
+    except Exception:
+        return {}
+    catalog = _catalog_path()
+    if not os.path.exists(catalog):
+        return {}
+
+    by_ident: dict[str, dict] = {}
+    for r in catalog_rows():
+        ident = _srcs.source_identity(_row_link(r))
+        if ident:
+            by_ident[ident] = {
+                "name": (r.get("Name") or "").strip(),
+                "license": (r.get("License") or "").strip(),
+                "records": int(_cat_num(r.get("Total Lines"))),
+                "size_mb": _cat_num(r.get("JSONL Size (MB)")),
+            }
+    try:
+        descs = _srcs.load_descriptors(catalog, order_by_size=False)
+    except Exception:
+        return {}
+
+    out: dict[tuple[str, str], dict] = {}
+    for d in descs:
+        base = _descriptor_base(d)
+        if not base:
+            continue
+        meta = by_ident.get(_srcs.source_identity(d.get("url") or d.get("start_url")))
+        if meta is not None:
+            out[(d.get("domain", ""), base)] = meta
+    return out
+
+
+# Ingest status -> the wording the UI shows. "ingested" is the only success.
+INGEST_STATUSES = ("ingested", "license", "failed", "timed out", "rejected",
+                   "no records")
+
+
+def ingest_table(raw_rows: list[dict] | None = None) -> list[dict]:
+    """Every catalogued source joined to its ingest result — the full Ingest table.
+
+    Reconciles the whole catalog against ``data/raw/``: each source gets a
+    ``status`` (``ingested`` when a JSONL file landed on disk, otherwise why not),
+    its catalog ``records`` / ``license``, and its measured on-disk ``size_mb`` /
+    ``files``. Reasons come from the commercial-license gate (the common case:
+    non-commercial / copyleft / unrecognised licenses are turned away before
+    download) and, for sources fetched that yielded nothing, the latest run's
+    failure log.
+
+    ``raw_rows`` is :func:`raw_table` output; pass the cached copy (walking
+    ``data/raw`` is a 100+ GB scan) or omit it to measure now. A source with no
+    folder on disk reports 0 files and falls back to its catalog size, so a
+    license-blocked row still shows what it would have cost.
+
+    Each row is ``{"sub-domain", "source", "name", "status", "reason", "records",
+    "size_mb", "files", "license"}``, sorted by size (biggest first) with the
+    ingested sources ahead of the ones that produced nothing.
     """
     try:
         from ..ingestion import sources as _srcs
@@ -683,25 +739,61 @@ def sources_without_data() -> list[dict]:
         return []
 
     raw_root = os.path.join(_root(), "data", "raw")
+    disk = {(r["sub-domain"], r["source"]): r
+            for r in (raw_table() if raw_rows is None else raw_rows)}
+    meta = _catalog_meta_by_folder()
     fails = {i["source"]: i for i in ingest_outcome().get("issues", [])}
+
     out: list[dict] = []
     for d in descs:
         dom, base = d.get("domain", ""), _descriptor_base(d)
+        m = meta.get((dom, base), {})
+        on_disk = disk.get((dom, base), {})
+        row = {
+            "sub-domain": dom,
+            "source": base,
+            "name": m.get("name", "") or base,
+            "records": m.get("records", 0),
+            "size_mb": on_disk.get("size_mb", m.get("size_mb", 0.0)),
+            "files": on_disk.get("files", 0),
+            "license": m.get("license", "") or (d.get("license") or ""),
+        }
         if _folder_has_jsonl(os.path.join(raw_root, dom, base)):
+            out.append({**row, "status": "ingested", "reason": ""})
             continue
+        # Nothing on disk: report why, and don't credit it with catalog records.
+        row["records"] = 0
         licok, lreason = is_license_ok(d)
         if not licok:
-            out.append({"sub-domain": dom, "source": base,
-                        "type": "license", "reason": lreason})
+            out.append({**row, "status": "license", "reason": lreason})
             continue
         key = d.get("slug") or (d.get("ref") or "").split("/")[-1] or base
         hit = fails.get(key) or fails.get(base)
         if hit:
-            out.append({"sub-domain": dom, "source": base,
-                        "type": hit["kind"], "reason": hit["reason"]})
+            out.append({**row, "status": hit["kind"], "reason": hit["reason"]})
         else:
-            out.append({"sub-domain": dom, "source": base, "type": "no records",
-                        "reason": "fetched but produced no records (failed, timed out, or empty)"})
+            out.append({**row, "status": "no records",
+                        "reason": "fetched but produced no records "
+                                  "(failed, timed out, or empty)"})
+    out.sort(key=lambda r: (r["status"] != "ingested", -r["size_mb"],
+                            r["sub-domain"], r["source"]))
+    return out
+
+
+def sources_without_data() -> list[dict]:
+    """Every catalogued source that produced no records, each with the reason.
+
+    The non-``ingested`` rows of :func:`ingest_table`, in that table's shape:
+    ``{"sub-domain", "source", "type", "reason"}`` where ``type`` is ``license``,
+    ``failed``, ``timed out``, ``rejected``, or ``no records``.
+
+    ``raw_rows=[]`` skips the ``data/raw`` byte walk: this view drops the size /
+    files columns that walk feeds, and a source reported here has no data on disk
+    to measure anyway.
+    """
+    out = [{"sub-domain": r["sub-domain"], "source": r["source"],
+            "type": r["status"], "reason": r["reason"]}
+           for r in ingest_table(raw_rows=[]) if r["status"] != "ingested"]
     out.sort(key=lambda r: (r["type"], r["sub-domain"], r["source"]))
     return out
 
@@ -935,6 +1027,78 @@ def clean_report() -> dict:
     total = next((r for r in rows if r.get("sub_domain") == "TOTAL"), None)
     files = [r for r in rows if r.get("sub_domain") != "TOTAL"]
     return {"total": total, "files": files}
+
+
+# Every counter the cleaning pass records, as (report column, label, what it means).
+# Mirrors cleaning.pipeline.REPORT_COLS; ordered as the stages actually run, so the
+# UI reads top-to-bottom like the pipeline: map -> sanitize -> anomaly -> dedup ->
+# PII -> language.
+CLEAN_COUNTERS: tuple[tuple[str, str, str], ...] = (
+    ("in", "Records in", "Raw records read from data/raw/"),
+    ("out", "Records out", "Records written to data/clean/"),
+    ("mapped_text", "Text mapped", "Prose built from a non-`text` column"),
+    ("excluded_no_text", "No prose column",
+     "Feature-table rows with no prose to clean; excluded from the text corpus"),
+    ("sanitized", "Sanitized", "Records whose text was repaired or normalized"),
+    ("struct_fixed", "Structurally fixed",
+     "Records sanitize rescued that would otherwise have been dropped"),
+    ("struct_dropped", "Structurally dropped",
+     "Empty, under the length floor, or unparseable"),
+    ("behavioral_flagged", "Behaviorally flagged",
+     "Garbage ratio / repetition / length — routed to flagged/ for review"),
+    ("exact_dups", "Exact duplicates", "Byte-identical text already seen"),
+    ("near_dups", "Near duplicates", "Fuzzy MinHash match against a kept record"),
+    ("pii_redacted", "PII redacted",
+     "Records with at least one identifier replaced by a typed placeholder "
+     "(<EMAIL_ADDRESS>, <IP_ADDRESS>, ...)"),
+    ("translated", "Translated", "Non-English records translated into English and kept"),
+    ("non_en_dropped", "Non-English dropped",
+     "Non-English and untranslatable (or dropped by policy)"),
+)
+
+
+def clean_stats() -> dict:
+    """The cleaning pass's TOTAL counters as ints, plus derived rates.
+
+    Reads the TOTAL row of ``logs/clean_report.csv`` — every counter in
+    :data:`CLEAN_COUNTERS` (PII redacted, translated, dups, each drop mechanism)
+    rather than only the in/out the funnel shows. Returns
+    ``{"counts": {col: int}, "kept_pct": float, "files": int, "has_report": bool}``;
+    ``has_report`` is False on a fresh checkout (counts all zero), which lets the
+    UI say "no clean run yet" instead of rendering a wall of zeros.
+    """
+    rc = clean_report()
+    total = rc.get("total") or {}
+    counts = {col: _to_int(total, col) for col, _lbl, _help in CLEAN_COUNTERS}
+    kept = (100 * counts["out"] / counts["in"]) if counts["in"] else 0.0
+    return {"counts": counts, "kept_pct": round(kept, 1),
+            "files": len(rc.get("files") or []), "has_report": bool(rc.get("total"))}
+
+
+def clean_table() -> list[dict]:
+    """Per-source cleaning stats — every counter, aggregated from the clean report.
+
+    One row per ``<sub-domain>/<source>`` with each :data:`CLEAN_COUNTERS` column
+    summed over that source's files, plus ``kept_pct``. Unlike
+    :func:`cleaned_table` (which measures what is physically under ``data/clean/``)
+    this reports what the cleaning pass *did* — how many records each mechanism
+    removed — so it is empty until a clean run writes ``logs/clean_report.csv``.
+    Sorted by records-in, biggest first.
+    """
+    cols = [c for c, _l, _h in CLEAN_COUNTERS]
+    agg: dict[tuple[str, str], dict] = {}
+    for r in clean_report().get("files") or []:
+        key = (r.get("sub_domain", ""), r.get("source", ""))
+        a = agg.setdefault(key, {"sub-domain": key[0], "source": key[1],
+                                 **{c: 0 for c in cols}})
+        for c in cols:
+            a[c] += _to_int(r, c)
+    out: list[dict] = []
+    for a in agg.values():
+        kept = (100 * a["out"] / a["in"]) if a["in"] else 0.0
+        out.append({**a, "kept_pct": round(kept, 1)})
+    out.sort(key=lambda r: r["in"], reverse=True)
+    return out
 
 
 def normalize_report() -> dict | None:

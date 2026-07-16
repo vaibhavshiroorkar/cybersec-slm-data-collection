@@ -193,6 +193,7 @@ def keyword_sets(mode: str = "datasets",
 
 def add_subdomain(name: str, *, datasets: list[str] | None = None,
                   text: list[str] | None = None, code: str | None = None,
+                  vocab: list[str] | None = None,
                   path: str | None = None) -> dict:
     """Add (or replace) a sub-domain and persist; return the updated catalog.
 
@@ -207,7 +208,56 @@ def add_subdomain(name: str, *, datasets: list[str] | None = None,
     taken = {str(s.get("code") or "").strip() for s in cat.values()} - {""}
     cat[name] = {"datasets": list(datasets or []), "text": list(text or []),
                 "code": (code or "").strip() or _derive_code(name, taken),
-                "vocab": []}
+                "vocab": list(vocab or [])}
+    save(cat, path)
+    return cat
+
+
+def update_subdomain(old_name: str, *, name: str | None = None,
+                     datasets: list[str] | None = None,
+                     text: list[str] | None = None, code: str | None = None,
+                     vocab: list[str] | None = None,
+                     path: str | None = None) -> dict:
+    """Edit an existing sub-domain in place (optionally renaming it); persist.
+
+    Every field is optional and ``None`` means "leave as it is", so a caller can
+    rename without restating the keywords (or rewrite the keywords without
+    touching the name). ``name`` renames the sub-domain, keeping its existing
+    ``code`` so the schema enum value a rename produces does not silently change
+    under already-normalized records — pass ``code`` explicitly to change it too.
+
+    Raises ``KeyError`` when ``old_name`` is not in the catalog and ``ValueError``
+    when a rename would collide with another existing sub-domain (which would
+    otherwise silently overwrite it).
+
+    Note this only renames the *taxonomy* entry; catalog rows in ``Sources.csv``
+    still carry the old Sub-Domain label. See
+    :func:`cybersec_slm.sourcing.sheet.rename_subdomain` for relabelling those.
+    """
+    cat = load(path)
+    if old_name not in cat:
+        raise KeyError(f"unknown sub-domain: {old_name!r}")
+    spec = dict(cat[old_name])
+    new_name = (name or "").strip() or old_name
+    if new_name != old_name and new_name in cat:
+        raise ValueError(f"sub-domain {new_name!r} already exists")
+
+    if datasets is not None:
+        spec["datasets"] = list(datasets)
+    if text is not None:
+        spec["text"] = list(text)
+    if vocab is not None:
+        spec["vocab"] = list(vocab)
+    if code is not None:
+        # An explicitly blank code re-derives one from the (possibly new) name.
+        taken = ({str(s.get("code") or "").strip() for n, s in cat.items()
+                  if n != old_name} - {""})
+        spec["code"] = code.strip() or _derive_code(new_name, taken)
+
+    # Rebuild preserving insertion order, so a rename keeps the entry in place
+    # rather than moving it to the end of the file's subdomains block.
+    cat = {(new_name if n == old_name else n): (spec if n == old_name else s)
+           for n, s in cat.items()}
     save(cat, path)
     return cat
 

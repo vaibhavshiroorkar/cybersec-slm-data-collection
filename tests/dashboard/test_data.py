@@ -614,3 +614,165 @@ def test_bare_root_degrades_gracefully(tmp_path, monkeypatch):
                                    "total_scanned": 0}
     assert data.run_status()["state"] == "idle"
     assert data.live_progress()["completed"] == 0
+
+
+# --------------------------------------------------------------- ingest table --
+def _seed_ingest_table(tmp_path, monkeypatch):
+    """Three catalogued sources: one with data, one license-denied, one empty."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    from cybersec_slm.ingestion import license_gate
+    from cybersec_slm.ingestion import sources as srcs
+
+    descs = [
+        {"kind": "hf", "ref": "ownerA/ds", "domain": "Cloud Security",
+         "url": "https://huggingface.co/datasets/ownerA/ds", "license": "MIT"},
+        {"kind": "kaggle", "ref": "ownerB/ds", "domain": "Cryptography",
+         "url": "https://kaggle.com/datasets/ownerB/ds", "license": "CC BY-NC"},
+        {"kind": "pdf", "slug": "lonely-pdf", "domain": "Network Security",
+         "url": "https://x.test/lonely-pdf.pdf", "license": "MIT"},
+    ]
+    monkeypatch.setattr(srcs, "load_descriptors", lambda *a, **k: descs)
+    monkeypatch.setattr(license_gate, "is_license_ok",
+                        lambda d: (False, "non-commercial (nc)")
+                        if (d.get("ref") or "").startswith("ownerB") else (True, "ok"))
+
+    # A catalog file must exist for the table to build (its path is checked).
+    catalog = tmp_path / "sources" / "Sources.csv"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.write_text(
+        "Name,Sub-Domain,Dataset Link,Total Lines,JSONL Size (MB),License\n"
+        "Owner A,Cloud Security,https://huggingface.co/datasets/ownerA/ds,500,12.5,MIT\n"
+        "Owner B,Cryptography,https://kaggle.com/datasets/ownerB/ds,900,3.0,CC BY-NC\n"
+        "Lonely,Network Security,https://x.test/lonely-pdf.pdf,10,0.5,MIT\n",
+        encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_path", lambda: str(catalog))
+    monkeypatch.setattr(data, "_repo_root", lambda: str(tmp_path))
+
+    raw = tmp_path / "data" / "raw" / "Cloud Security" / "ownerA"
+    raw.mkdir(parents=True)
+    (raw / "f.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
+
+
+def test_ingest_table_joins_catalog_to_disk(tmp_path, monkeypatch):
+    _seed_ingest_table(tmp_path, monkeypatch)
+    rows = data.ingest_table()
+    by = {r["source"]: r for r in rows}
+    assert set(by) == {"ownerA", "ownerB", "lonely-pdf"}
+
+    ok = by["ownerA"]
+    assert ok["status"] == "ingested"
+    assert ok["reason"] == ""
+    assert ok["name"] == "Owner A"
+    assert ok["sub-domain"] == "Cloud Security"
+    assert ok["records"] == 500                  # from the catalog's Total Lines
+    assert ok["files"] == 1                      # measured on disk
+    assert ok["size_mb"] > 0
+    assert ok["license"] == "MIT"
+
+    assert by["ownerB"]["status"] == "license"
+    assert by["ownerB"]["reason"] == "non-commercial (nc)"
+    assert by["lonely-pdf"]["status"] == "no records"
+
+    # A source with nothing on disk is never credited with catalog records.
+    assert by["ownerB"]["records"] == 0
+    assert by["lonely-pdf"]["records"] == 0
+
+    # Ingested sources sort ahead of the ones that produced nothing.
+    assert rows[0]["status"] == "ingested"
+
+
+def test_ingest_table_uses_supplied_raw_rows_instead_of_walking(tmp_path, monkeypatch):
+    _seed_ingest_table(tmp_path, monkeypatch)
+    monkeypatch.setattr(data, "raw_table",
+                        lambda: (_ for _ in ()).throw(AssertionError("walked disk")))
+    rows = data.ingest_table(raw_rows=[{"sub-domain": "Cloud Security",
+                                        "source": "ownerA", "files": 7,
+                                        "size_mb": 99.0}])
+    by = {r["source"]: r for r in rows}
+    assert by["ownerA"]["files"] == 7
+    assert by["ownerA"]["size_mb"] == 99.0
+    # No measurement for this one -> falls back to the catalog's recorded size.
+    assert by["ownerB"]["size_mb"] == 3.0
+
+
+def test_sources_without_data_is_the_non_ingested_rows(tmp_path, monkeypatch):
+    _seed_ingest_table(tmp_path, monkeypatch)
+    missing = data.sources_without_data()
+    by = {r["source"]: r for r in missing}
+    assert "ownerA" not in by                     # produced data -> excluded
+    assert by["ownerB"]["type"] == "license"
+    assert by["lonely-pdf"]["type"] == "no records"
+    assert set(by["ownerB"]) == {"sub-domain", "source", "type", "reason"}
+
+
+def test_ingest_table_empty_without_a_catalog(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.setattr(data, "_catalog_path", lambda: str(tmp_path / "nope.csv"))
+    assert data.ingest_table() == []
+
+
+# --------------------------------------------------------------- clean stats ---
+_CLEAN_REPORT = (
+    "sub_domain,source,file,in,mapped_text,excluded_no_text,sanitized,struct_fixed,"
+    "struct_dropped,behavioral_flagged,exact_dups,near_dups,pii_redacted,translated,"
+    "non_en_dropped,out\n"
+    "Cloud Security,ownerA,a.jsonl,100,10,5,20,2,8,3,4,1,12,6,2,77\n"
+    "Cloud Security,ownerA,b.jsonl,100,0,5,10,0,2,1,0,1,8,0,0,91\n"
+    "Network Security,ownerC,c.jsonl,50,0,0,5,0,10,0,5,0,3,0,5,30\n"
+    "TOTAL,,3 files,250,10,10,35,2,20,4,9,2,23,6,7,198\n"
+)
+
+
+def test_clean_stats_reads_every_counter(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True)
+    (logs / "clean_report.csv").write_text(_CLEAN_REPORT, encoding="utf-8")
+
+    s = data.clean_stats()
+    assert s["has_report"] is True
+    assert s["files"] == 3
+    c = s["counts"]
+    assert c["in"] == 250 and c["out"] == 198
+    assert c["pii_redacted"] == 23               # the headline the Clean page shows
+    assert c["translated"] == 6
+    assert c["exact_dups"] == 9 and c["near_dups"] == 2
+    assert c["struct_dropped"] == 20
+    assert c["excluded_no_text"] == 10
+    assert s["kept_pct"] == 79.2                 # 198/250
+    # Every counter the cleaning pass records is surfaced, not just in/out.
+    assert set(c) == {col for col, _l, _h in data.CLEAN_COUNTERS}
+
+
+def test_clean_stats_empty_without_a_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    s = data.clean_stats()
+    assert s["has_report"] is False
+    assert s["kept_pct"] == 0.0
+    assert all(v == 0 for v in s["counts"].values())
+
+
+def test_clean_table_aggregates_each_source_over_its_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True)
+    (logs / "clean_report.csv").write_text(_CLEAN_REPORT, encoding="utf-8")
+
+    rows = data.clean_table()
+    by = {r["source"]: r for r in rows}
+    assert set(by) == {"ownerA", "ownerC"}
+
+    a = by["ownerA"]                             # two files, summed
+    assert a["in"] == 200 and a["out"] == 168
+    assert a["pii_redacted"] == 20               # 12 + 8
+    assert a["struct_dropped"] == 10             # 8 + 2
+    assert a["kept_pct"] == 84.0
+    assert a["sub-domain"] == "Cloud Security"
+
+    assert by["ownerC"]["in"] == 50 and by["ownerC"]["non_en_dropped"] == 5
+    assert rows[0]["source"] == "ownerA"         # biggest input first
+
+
+def test_clean_table_empty_without_a_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    assert data.clean_table() == []
