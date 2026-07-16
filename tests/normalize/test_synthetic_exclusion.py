@@ -49,7 +49,7 @@ def test_synthetic_records_excluded(tmp_path, monkeypatch):
     syn_txt = ("Synthetic fabricated record describing a made-up cloud "
                "misconfiguration used only to exercise the exclusion path.")
     cdata = tmp_path / "clean"
-    _write(str(cdata / "Application Security" / "acme" / "a.jsonl"), [
+    _write(str(cdata / "Internal Audit" / "acme" / "a.jsonl"), [
         {"source": "acme", "license": "mit", "text": real_txt,
          "url": "https://huggingface.co/datasets/acme/realset/resolve/main/f.jsonl"},
         {"source": "acme", "license": "mit", "text": syn_txt,

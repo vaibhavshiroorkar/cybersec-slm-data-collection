@@ -1,0 +1,34 @@
+# The discovery backend for the sourcing stage.
+#
+# The pipeline's `source` command is a SearXNG client; without an instance running
+# it aborts on the first query ("SearXNG discovery could not start"). This brings
+# one up preconfigured for programmatic use — see searxng/settings.yml for the two
+# settings (JSON format, limiter off) that upstream's defaults get wrong for it.
+#
+#   docker compose -f docker-compose.searxng.yml up -d
+#   curl -s "http://localhost:8080/search?q=test&format=json" | head -c 200
+#
+# Point the pipeline at it with SEARXNG_URL (default http://localhost:8080).
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+      # Session signing for a localhost instance. Override in the environment for
+      # anything shared; the default keeps a fresh clone working out of the box.
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-local-dev-not-a-shared-instance}
+      # Uvicorn workers/threads: a sourcing sweep runs ~10 concurrent queries.
+      - UWSGI_WORKERS=4
+      - UWSGI_THREADS=4
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

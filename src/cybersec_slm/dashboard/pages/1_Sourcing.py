@@ -8,8 +8,8 @@ is edited here; the run itself is launched from the Overview page.
                  them (they persist to ``pipeline_settings.json``); preview the
                  keywords those choices produce
     Sub-domains  add / edit / rename / remove sub-domains and their keywords,
-                 persisted to ``sources/keywords.yaml`` (shared with the CLI)
-    Add source   append a source to ``sources/Sources.csv`` by hand
+                 persisted to the profile's ``keywords.yaml`` (shared with the CLI)
+    Add source   append a source to the profile's ``Sources.csv`` by hand
     Licenses     resolve licenses and blacklist the confirmed-restrictive ones
     Delete rows  remove catalog rows by sub-domain, range, or individually
 
@@ -29,7 +29,7 @@ from cybersec_slm.sourcing import row as row_builder
 ui.inject_css()
 ui.page_header("source", data.stage_states())
 st.caption("Discover new sources with SearXNG (`SEARXNG_URL`, default "
-           "`http://localhost:8080`) and append them to `sources/Sources.csv`.")
+           "`http://localhost:8080`) and append them to the profile's `Sources.csv`.")
 
 cat = catalog.load()
 all_domains = catalog.subdomains(cat)
@@ -146,7 +146,7 @@ with catalog_tab:
         if by_dom:
             ui.table(by_dom, height=360)
         else:
-            st.caption("No `sources/Sources.csv` found yet.")
+            st.caption("No `Sources.csv` for this profile yet.")
 
 # =============================================================== Licenses ======
 with licenses_tab:
@@ -170,7 +170,7 @@ with licenses_tab:
                    "full GitHub coverage). The instant tools below need no run.")
 
     with ui.section("Clean up by license",
-                    "Act on `sources/Sources.csv` instantly, no run needed. Deleted "
+                    "Act on the profile's `Sources.csv` instantly, no run needed. Deleted "
                     "sources can be re-discovered; already-fetched data is untouched."):
         blank_links = data.blank_license_links()
         b1, b2 = st.columns(2)
@@ -500,7 +500,7 @@ with csv_tab:
     with ui.section("Sources.csv"):
         rows = data.catalog_rows()
         if not rows:
-            st.caption("No `sources/Sources.csv` found yet.")
+            st.caption("No `Sources.csv` for this profile yet.")
         else:
             st.caption(f"{len(rows)} rows")
             ui.table(rows, height=520)

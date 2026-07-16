@@ -2,6 +2,7 @@
 
 import json
 import os
+import pathlib
 import sqlite3
 import time
 
@@ -496,6 +497,11 @@ def test_sources_without_data_reconciles_catalog_to_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     from cybersec_slm.ingestion import license_gate
     from cybersec_slm.ingestion import sources as srcs
+    from cybersec_slm.sourcing import profiles
+
+    # ingest_table() returns [] unless a catalog file exists, so the profile's
+    # catalog has to be present even though load_descriptors is stubbed below.
+    profiles.ensure()
 
     descs = [
         {"kind": "hf", "ref": "ownerA/ds", "domain": "Cloud Security"},      # has data
@@ -637,7 +643,8 @@ def _seed_ingest_table(tmp_path, monkeypatch):
                         if (d.get("ref") or "").startswith("ownerB") else (True, "ok"))
 
     # A catalog file must exist for the table to build (its path is checked).
-    catalog = tmp_path / "sources" / "Sources.csv"
+    from cybersec_slm.sourcing import profiles
+    catalog = pathlib.Path(profiles.catalog_path())
     catalog.parent.mkdir(parents=True, exist_ok=True)
     catalog.write_text(
         "Name,Sub-Domain,Dataset Link,Total Lines,JSONL Size (MB),License\n"

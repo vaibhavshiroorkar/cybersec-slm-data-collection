@@ -15,9 +15,12 @@ Individual stages:
     cybersec-slm validate
     cybersec-slm dashboard [--port N]                        # Streamlit monitor + explorer
 
-Ingestion reads sources/Sources.csv. NVD needs no flag — set NVD_API_KEY (env) to
-raise its rate limit. Source discovery uses a self-hosted SearXNG instance — set
-SEARXNG_URL (env; default http://localhost:8080).
+Profiles (which corpus every stage works on):
+    cybersec-slm profile list | show [NAME] | use NAME | create NAME
+
+Ingestion reads the active profile's Sources.csv. NVD needs no flag — set
+NVD_API_KEY (env) to raise its rate limit. Source discovery uses a self-hosted
+SearXNG instance — set SEARXNG_URL (env; default http://localhost:8080).
 """
 
 from __future__ import annotations
@@ -167,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     ig = sub.add_parser("ingest",
                         help="fetch all sources -> data/raw/ (stage 2; no cleaning)")
     ig.add_argument("--sources", default=None,
-                    help="path to a sources .csv (default: sources/Sources.csv)")
+                    help="path to a sources .csv (default: the active profile's Sources.csv)")
     ig.add_argument("--workers", type=int, default=None,
                     help="process pool size (default: min(cpu, 8))")
     ig.add_argument("--limit", type=int, default=None,
@@ -199,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("source",
                        help="search SearXNG by keyword -> append new rows to Sources.csv")
     d.add_argument("--sources", default=None,
-                   help="catalog CSV to append to (default: sources/Sources.csv)")
+                   help="catalog CSV to append to (default: the active profile's Sources.csv)")
     d.add_argument("--domains", nargs="*", default=None,
                    help="limit to these Sub-Domains (default: all)")
     d.add_argument("--mode", choices=["datasets", "text", "both"], default="datasets",
@@ -253,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--backfill", action="store_true",
                    help="instead of discovery, deep-detect licenses for existing "
                         "catalog rows (blank/Unknown by default) and move any "
-                        "confirmed-red source to sources/Blacklist.csv")
+                        "confirmed-red source to the profile's Blacklist.csv")
     d.add_argument("--backfill-all", action="store_true",
                    help="with --backfill, re-detect every row's license, not just "
                         "the blank/Unknown ones")
@@ -268,10 +271,28 @@ def build_parser() -> argparse.ArgumentParser:
                         help="suggest which sources look synthetic (keyword scan "
                              "of Sources.csv); propose-only unless --apply")
     ss.add_argument("--sources", default=None,
-                    help="catalog CSV to scan (default: sources/Sources.csv)")
+                    help="catalog CSV to scan (default: the active profile's Sources.csv)")
     ss.add_argument("--apply", action="store_true",
                     help="write Is Synthetic?=Yes for high-confidence gaps "
                          "(review-level matches are never auto-applied)")
+
+    # ── profile (switch which corpus the pipeline builds) ─────────────────────
+    pr = sub.add_parser("profile",
+                        help="list / show / switch the pipeline profile "
+                             "(which corpus every stage works on)")
+    pr_sub = pr.add_subparsers(dest="action", required=False)
+    pr_sub.add_parser("list", help="list every known profile (default action)")
+    pr_show = pr_sub.add_parser("show", help="show one profile's taxonomy and catalog")
+    pr_show.add_argument("name", nargs="?", default=None,
+                         help="profile to show (default: the active one)")
+    pr_use = pr_sub.add_parser("use", help="switch the active profile")
+    pr_use.add_argument("name", help="profile to activate")
+    pr_new = pr_sub.add_parser("create", help="start a new, empty profile")
+    pr_new.add_argument("name", help="name for the new profile")
+    pr_new.add_argument("--domain-name", default="",
+                        help="schema domain_name label (default: NAME upper-cased)")
+    pr_new.add_argument("--use", action="store_true",
+                        help="activate the new profile straight away")
 
     # ── flow (Prefect orchestration) ──────────────────────────────────────────
     fl = sub.add_parser("flow",
@@ -296,7 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="full corpus build: ingest -> clean -> EDA -> schema "
                             "(4 stages; run `source` separately to curate first)")
     a.add_argument("--sources", default=None,
-                   help="path to a sources .csv (default: sources/Sources.csv)")
+                   help="path to a sources .csv (default: the active profile's Sources.csv)")
     a.add_argument("--workers", type=int, default=None,
                    help="ingest process pool size (default: min(cpu, 8))")
     a.add_argument("--clean-workers", type=int, default=_DEFAULT_CLEAN_WORKERS,
@@ -329,10 +350,63 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _run_profile(args) -> None:
+    """``profile list|show|use|create`` — inspect or switch the active corpus."""
+    from .sourcing import profiles
+
+    action = getattr(args, "action", None) or "list"
+
+    if action == "list":
+        active = profiles.active()
+        for name in profiles.names():
+            info = profiles.info(name)
+            mark = "*" if name == active else " "
+            kind = "built-in" if info["builtin"] else "custom"
+            print(f"{mark} {name:<12} {info['domain_name']:<20} "
+                  f"{len(info['subdomains'])} sub-domains, "
+                  f"{info['catalog_rows']} sources ({kind})")
+        print("\n* = active. Switch with: cybersec-slm profile use <name>")
+        return
+
+    if action == "show":
+        info = profiles.info(args.name or profiles.active())
+        print(f"profile     : {info['name']}{' (active)' if info['active'] else ''}")
+        print(f"domain_name : {info['domain_name']}")
+        print(f"directory   : {info['dir']}")
+        print(f"catalog rows: {info['catalog_rows']}")
+        print("sub-domains :")
+        for sub in info["subdomains"]:
+            print(f"  - {sub}")
+        return
+
+    if action == "use":
+        try:
+            name = profiles.use(args.name)
+        except (profiles.UnknownProfile, ValueError) as e:
+            raise SystemExit(str(e)) from None
+        info = profiles.info(name)
+        print(f"active profile -> {name} ({info['domain_name']}, "
+              f"{len(info['subdomains'])} sub-domains, {info['catalog_rows']} sources)")
+        return
+
+    if action == "create":
+        try:
+            d = profiles.create(args.name, domain_name=args.domain_name,
+                                use_it=args.use)
+        except (FileExistsError, ValueError) as e:
+            raise SystemExit(str(e)) from None
+        print(f"created profile {args.name!r} at {d}")
+        print("It has no sub-domains yet — add them on the dashboard's Sourcing "
+              "page, or edit keywords.yaml in that directory.")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
 
-    if args.stage == "clean":
+    if args.stage == "profile":
+        _run_profile(args)
+
+    elif args.stage == "clean":
         if args.action is None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
             from .cleaning import common as clean_common

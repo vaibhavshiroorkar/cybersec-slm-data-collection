@@ -30,7 +30,7 @@ def _corpus(tmp_path):
     cdata = tmp_path / "clean_data"
     xss = "Cross-site scripting injects script into a trusted page viewed by users."
     sql = "SQL injection concatenates untrusted input into a database query unsafely."
-    _write(str(cdata / "Application Security" / "websec" / "a.jsonl"), [
+    _write(str(cdata / "Internal Audit" / "websec" / "a.jsonl"), [
         {"source": "S", "url": "https://x/1", "license": "mit", "text": xss},
         {"source": "S", "url": "https://x/1", "license": "mit", "text": xss},   # exact dup
         {"source": "S", "url": "https://x/2", "license": "mit", "text": "tiny"},  # reject
@@ -70,7 +70,7 @@ def test_debug_flag_includes_raw_record(tmp_path, monkeypatch):
     norm = _redirect(tmp_path, monkeypatch)
     monkeypatch.setattr(pipeline, "DEBUG_REJECTS", True)
     cdata = tmp_path / "clean_data"
-    _write(str(cdata / "Application Security" / "s" / "a.jsonl"),
+    _write(str(cdata / "Internal Audit" / "s" / "a.jsonl"),
            [{"source": "S", "text": "tiny"}])     # rejected: too short
 
     pipeline.Normalizer(resume=False).run(input_dir=str(cdata))

@@ -24,6 +24,15 @@ from urllib.parse import urlparse
 from ..core import logger
 from .license_detect import detect_license, license_from_github_json, license_from_hf_info
 
+
+def _host_of(link: str) -> str:
+    """Bare, lowercased host of a link, without port or a ``www.`` prefix."""
+    try:
+        netloc = urlparse(link if "://" in link else "//" + link).netloc
+    except ValueError:
+        return ""
+    return netloc.split("@")[-1].split(":")[0].lower().removeprefix("www.")
+
 _HF_RE = re.compile(r"huggingface\.co/datasets/([^/?#]+/[^/?#]+)", re.IGNORECASE)
 _GH_RE = re.compile(r"github\.com/([^/?#]+)/([^/?#]+)", re.IGNORECASE)
 _GH_SKIP = {"orgs", "search", "topics", "about", "features", "marketplace"}
@@ -188,6 +197,18 @@ class Enricher:
         link = (row.get("Dataset Link") or "").strip()
         if not link:
             return row
+
+        # Content we own needs no licence lookup: there is no third-party grant to
+        # find, and scraping the page would only yield "unknown", which the gate
+        # (default-deny) then turns away — silently discarding the very sources the
+        # owner authorized. Stamp it instead. Keyed on the host against the
+        # profile's owned_hosts, never on anything the page says.
+        from . import keywords as _kw
+        from .taxonomies import OWNED_LICENSE
+        if _kw.is_owned(_host_of(link)):
+            row["License"] = OWNED_LICENSE
+            return row
+
         meta: dict = {}
         try:
             hf = _HF_RE.search(link)

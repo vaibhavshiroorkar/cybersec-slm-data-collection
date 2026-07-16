@@ -135,6 +135,7 @@ def page_header(key: str, states: dict | None = None) -> None:
     """
     import streamlit as st
 
+    profile_switcher()
     stage = stages.get_stage(key)
     state = ((states or {}).get(key) or {}).get("state", "idle")
     pill = ""
@@ -150,10 +151,49 @@ def app_header(title: str, subtitle: str | None = None) -> None:
     """Header for the non-stage pages (Overview, Agent): title + optional subtitle."""
     import streamlit as st
 
+    profile_switcher()
     st.markdown(f"<div class='ui-head'><h1>{_html_escape(title)}</h1></div>",
                 unsafe_allow_html=True)
     if subtitle:
         st.caption(subtitle)
+
+
+def profile_switcher() -> str:
+    """Sidebar control for the active profile; returns the active profile name.
+
+    Switching is a real, persisted change (``profiles.use``) that re-points every
+    stage — the taxonomy sourcing searches on, the catalog ingestion reads, the
+    sub-domain enum the schema validates against, and that profile's saved
+    settings. It is therefore refused while a run is in flight, which would
+    otherwise finish writing its output against a different corpus than it started
+    with. Rendered on every page via :func:`app_header` / :func:`page_header`.
+    """
+    import streamlit as st
+
+    from ..sourcing import profiles
+    from . import data
+
+    active = profiles.active()
+    with st.sidebar:
+        st.markdown("<div class='ui-eyebrow'>Profile</div>", unsafe_allow_html=True)
+        names = profiles.names()
+        running = data.run_status()["state"] == "running"
+        picked = st.selectbox(
+            "Active profile", names, index=names.index(active),
+            key="profile_pick", disabled=running,
+            label_visibility="collapsed",
+            help="Which corpus every stage works on. Switching re-points the "
+                 "taxonomy, the source catalog, and the saved settings.")
+        if running:
+            st.caption("Locked while a run is in flight.")
+        elif picked != active:
+            profiles.use(picked)
+            st.rerun()
+
+        info = profiles.info(active)
+        st.caption(f"{info['domain_name']} · {len(info['subdomains'])} sub-domains "
+                   f"· {info['catalog_rows']} sources")
+    return active
 
 
 @contextmanager

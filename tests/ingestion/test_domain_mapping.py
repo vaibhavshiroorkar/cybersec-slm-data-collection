@@ -8,6 +8,8 @@ does not define.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from cybersec_slm.ingestion import sources as srcs
@@ -24,7 +26,8 @@ def _clear_taxonomy_cache():
 
 def _use_taxonomy(tmp_path, monkeypatch, cat: dict) -> None:
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    catalog.save(cat, str(tmp_path / "sources" / "keywords.yaml"))
+    from cybersec_slm.sourcing import profiles
+    catalog.save(cat, profiles.keywords_path())
     srcs._taxonomy_cache = None
 
 
@@ -64,7 +67,7 @@ def test_legacy_hints_still_map_under_the_cybersec_taxonomy(tmp_path, monkeypatc
     """Every historical CATEGORY_TO_DOMAIN entry keeps working while the built-in
     cybersecurity taxonomy is the live one -- this generalization is not a
     behavior change for the existing catalog."""
-    _use_taxonomy(tmp_path, monkeypatch, catalog._defaults())
+    _use_taxonomy(tmp_path, monkeypatch, catalog._defaults("cybersec"))
     for category, expected in srcs.CATEGORY_TO_DOMAIN.items():
         assert srcs._domain_for({"category": category}) == expected
 
@@ -98,8 +101,9 @@ def test_taxonomy_lookup_survives_an_unreadable_catalog(tmp_path, monkeypatch):
     """A broken keywords.yaml must not take ingestion down; the row keeps its
     own category text."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    p = tmp_path / "sources" / "keywords.yaml"
-    p.parent.mkdir(parents=True)
+    from cybersec_slm.sourcing import profiles
+    p = pathlib.Path(profiles.keywords_path())
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("subdomains: [this is: not: a mapping\n", encoding="utf-8")
     srcs._taxonomy_cache = None
     assert srcs._taxonomy_lookup() == {}

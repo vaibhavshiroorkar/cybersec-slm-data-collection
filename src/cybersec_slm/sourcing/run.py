@@ -29,8 +29,10 @@ source is logged as it is found and again as its license resolves, so the run
 streams its progress one source at a time.
 
 The per-run review CSV under ``logs/discovered/`` is a safety net; a sidecar
-``summary-*.json`` records the per-keyword hit/new counts and the license fill rate
-so the dashboard can show what ran.
+``summary-*.json`` records the per-keyword hit/new counts, the license fill rate,
+and a ``funnel`` block (see :mod:`cybersec_slm.sourcing.stats`) tallying every hit
+the run turned away and why — so the dashboard can show not just what ran, but what
+it cost.
 """
 
 from __future__ import annotations
@@ -44,19 +46,25 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from ..core import DATA_ROOT, LOGS, logger
+from ..core import LOGS, logger
 from ..ingestion.license_gate import license_verdict
 from . import catalog
+from . import keywords as kw
 from .classify import build_domain_vocab
 from .enrich import Enricher
-from .keywords import QUERY_QUALIFIER, default_engines
-from .quality import passes as quality_passes
+from .keywords import default_engines
+from .quality import KEEP, reject_host
+from .quality import classify as quality_classify
 from .row import SHEET_COLUMNS, build_row, row_to_list
 from .search import SearchError, searxng_search
 from .sheet import append_rows, existing_links, normalize_url, valid_counts_by_subdomain
+from .stats import Funnel
 
-# The catalog this pipeline curates (a local CSV at the repo root).
-DEFAULT_CATALOG = os.path.join(DATA_ROOT, "sources", "Sources.csv")
+
+def default_catalog() -> str:
+    """The catalog this pipeline curates: the active profile's ``Sources.csv``."""
+    from . import profiles
+    return profiles.catalog_path()
 
 # Safety backstop on how many result pages a budgeted run will walk before giving
 # up, so an unreachable target can never loop forever. The exhaustion check (a full
@@ -93,7 +101,7 @@ def _domain_shots(selected: list[str], cat: dict, mode: str
     """
     per_domain: dict[str, list[tuple[str, str, bool]]] = {d: [] for d in selected}
     for kwdict, qualifier in catalog.keyword_sets(mode, cat):
-        is_ds = qualifier == QUERY_QUALIFIER
+        is_ds = qualifier == kw.QUERY_QUALIFIER
         for domain in selected:
             for keyword in kwdict.get(domain, []):
                 per_domain[domain].append((keyword, qualifier, is_ds))
@@ -109,7 +117,8 @@ def _enrich_and_log(enricher: Enricher, row: dict) -> None:
 
 def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
                per_domain_count, by_keyword_agg, new_rows, refill, expired,
-               quality_filter, today, enricher, pool, dry_run, domain_vocab):
+               quality_filter, today, enricher, pool, dry_run, domain_vocab,
+               funnel):
     """Valid-gated per-domain fill: top each selected domain up to its
     commercial-valid target.
 
@@ -142,12 +151,16 @@ def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
         batch: list[tuple[str, dict]] = []
         while c["buffer"]:
             keyword, res = c["buffer"].popleft()
-            if quality_filter and not quality_passes(res):
+            category, _ = quality_classify(res)
+            if quality_filter and category != KEEP:
+                funnel.drop(domain, category, reject_host(res))
                 continue
             norm = normalize_url(res.link)
             if not norm or norm in seen:
+                funnel.duplicate(domain)
                 continue
             seen.add(norm)                          # dedup within this run too
+            funnel.candidate(domain)
             batch.append((keyword, build_row(res, domain, today=today,
                                              domain_vocab=domain_vocab)))
         return batch
@@ -169,6 +182,14 @@ def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
                         fu.result()
                     except Exception as e:          # noqa: BLE001 - best-effort
                         logger.debug(f"source: enrich task failed: {e}")
+            # Every gathered row has now been enriched, so every one has reached the
+            # license gate — tally them all here rather than inside the keep loop
+            # below, which breaks early once the domain's deficit is met. Counting
+            # there would silently drop the verdicts of the tail of the batch and
+            # leave the funnel's candidates != sum(license) — i.e. not a funnel.
+            for _, row in batch:
+                funnel.verdict(license_verdict(row.get("License")))
+
             kept: list[dict] = []
             for keyword, row in batch:
                 if need[domain] <= 0 or _capped():
@@ -250,7 +271,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     "target_reached", "by_domain", "by_keyword", "elapsed_s", "max_minutes",
     "license_filled", "license_rate", "target_per_domain", "engines"}``.
     """
-    csv_path = csv_path or DEFAULT_CATALOG
+    csv_path = csv_path or default_catalog()
     started = clock()
 
     cat = catalog.load()
@@ -277,7 +298,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
 
     today = date.today().strftime("%d/%m/%Y")
     new_rows: list[dict[str, str]] = []
-    found = 0
+    funnel = Funnel()
     per_domain_count: dict[str, int] = {d: 0 for d in selected}
     by_keyword_agg: dict[tuple[str, str], dict] = {}
 
@@ -286,14 +307,20 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     deadline = started + max_minutes * 60 if max_minutes else None
     fill = target_per_domain is not None
 
-    # Route queries to reliable engines (arg > $SEARXNG_ENGINES > a GitHub-first
-    # default per mode) instead of the rate-limited general web engines. These API
-    # engines index sources directly and ignore site:/qualifier, so both are
-    # dropped while engines are in use (always, here).
+    # Route queries to reliable engines (arg > $SEARXNG_ENGINES > a per-mode
+    # default) instead of the rate-limited general web engines. These API engines
+    # index sources directly and ignore site:/qualifier, so both are dropped while
+    # engines are in use (the norm).
+    #
+    # The exception is a keyword that carries its own ``site:`` (the ubi profile's
+    # own-content dorks): the API engines ignore that operator and answer the bare
+    # terms, returning plausible results from the wrong host entirely, so those
+    # keywords are routed to a general engine that honours it. An explicit
+    # --engines override still wins over both.
     engines_override = engines or os.environ.get("SEARXNG_ENGINES") or None
 
-    def _engines_for(is_ds: bool) -> str:
-        return engines_override or default_engines(is_ds)
+    def _engines_for(is_ds: bool, keyword: str = "") -> str:
+        return engines_override or kw.engines_for_keyword(keyword, is_ds)
 
     # Fill mode floors the per-query slice so a single GitHub page (up to ~30) is
     # captured rather than truncated to the historic default of 5.
@@ -324,7 +351,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     def _search(base_query: str, is_ds: bool, page: int):
         """Run one keyword query on the targeted engines, retrying without the
         freshness filter when a timed query would return nothing."""
-        eng = _engines_for(is_ds)
+        eng = _engines_for(is_ds, base_query)
         results = searxng_search(base_query, url=base_url, num=effective_per_keyword,
                                  language=language, client=client, pageno=page,
                                  time_range=time_range, engines=eng)
@@ -342,7 +369,6 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
 
     def _refill(domain: str) -> None:
         """Search this domain's next keyword(s) until its buffer has results."""
-        nonlocal found
         c = cursor[domain]
         shots = per_domain_shots[domain]
         while not c["buffer"] and not c["exhausted"]:
@@ -374,7 +400,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                         f"search failures; last: {e}") from e
                 results = []
             for res in results:
-                found += 1
+                funnel.hit(domain)
                 agg = by_keyword_agg.setdefault(
                     (domain, keyword),
                     {"domain": domain, "keyword": keyword, "hits": 0, "new": 0})
@@ -398,7 +424,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
             appended_in_fill, fill_target_reached = _fill_loop(
                 selected, target_per_domain, target, csv_path, cursor, seen,
                 per_domain_count, by_keyword_agg, new_rows, _refill, _expired,
-                quality_filter, today, enricher, pool, dry_run, domain_vocab)
+                quality_filter, today, enricher, pool, dry_run, domain_vocab,
+                funnel)
         else:
             # Round-robin: each rotation takes at most one result from each domain,
             # so accepted sources stay balanced across domains right up to the cutoff.
@@ -416,12 +443,16 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                         continue                   # exhausted / nothing to give
                     keyword, res = c["buffer"].popleft()
                     progress = True
-                    if quality_filter and not quality_passes(res):
+                    category, _ = quality_classify(res)
+                    if quality_filter and category != KEEP:
+                        funnel.drop(domain, category, reject_host(res))
                         continue
                     norm = normalize_url(res.link)
                     if not norm or norm in seen:
+                        funnel.duplicate(domain)
                         continue
                     seen.add(norm)                 # also dedup within this run
+                    funnel.candidate(domain)
                     row = build_row(res, domain, today=today,
                                     domain_vocab=domain_vocab)
                     new_rows.append(row)
@@ -444,6 +475,10 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                     except Exception as e:         # noqa: BLE001 - best-effort
                         logger.debug(f"source: enrich task failed: {e}")
                 pool.shutdown(wait=True)
+            # Enrichment has drained, so every candidate now carries its resolved
+            # license — tally the verdicts before valid_only prunes the list.
+            for r in new_rows:
+                funnel.verdict(license_verdict(r.get("License")))
             if valid_only:
                 new_rows[:] = [r for r in new_rows
                                if license_verdict(r.get("License")) == "ok"]
@@ -480,7 +515,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     elapsed_s = round(clock() - started, 1)
     logger.info(f"source: done in {elapsed_s}s - {len(new_rows)} new, "
                 f"{license_filled} licensed")
-    summary = {"found": found, "new": len(new_rows), "appended": appended,
+    funnel.appended = appended
+    summary = {"found": funnel.found, "new": len(new_rows), "appended": appended,
+               "funnel": funnel.as_dict(),
                "csv": review_csv, "mode": mode, "domains": selected,
                "target": target, "target_per_domain": target_per_domain,
                "engines": engines_override or default_engines(True),

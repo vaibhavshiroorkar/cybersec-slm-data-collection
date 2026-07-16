@@ -65,16 +65,16 @@ def test_infer_category_and_format():
 
 def test_refine_domain_keeps_default_on_tie():
     # No distinctive terms -> stays with the keyword's domain.
-    assert refine_domain("Cloud Security", "Some title", "generic text") == "Cloud Security"
+    assert refine_domain("Internal Audit", "Some title", "generic text") == "Internal Audit"
 
 
 def test_refine_domain_reassigns_on_stronger_signal():
-    # Searched under Network Security but the text screams cryptography.
+    # Searched under Internal Audit but the text screams AML/KYC.
     domain = refine_domain(
-        "Network Security",
-        "Post-quantum key exchange",
-        "lattice-based post-quantum cryptography ml-kem certificate over tls")
-    assert domain == "Cryptography"
+        "Internal Audit",
+        "Screening politically exposed persons",
+        "customer due diligence and sanctions screening for money laundering risk")
+    assert domain == "AML-KYC"
 
 
 # ---------------------------------------------------------------- row build ---
@@ -511,9 +511,8 @@ def test_discover_quality_filter_drops_junk(tmp_path, monkeypatch):
     assert summ["new"] == 1
 
 
-def test_discover_targets_reliable_engines_without_site_clause(tmp_path, monkeypatch):
-    # The foundational engine fix: every query is routed to the reliable engines
-    # (GitHub first) and carries no `site:` clause (the API engines ignore it).
+def _spy_search(monkeypatch):
+    """Record every (query, engines) discover() issues; return the record."""
     from cybersec_slm.sourcing import run
     from cybersec_slm.sourcing.search import Result
 
@@ -522,17 +521,72 @@ def test_discover_targets_reliable_engines_without_site_clause(tmp_path, monkeyp
     def fake_search(query, *, pageno=1, engines=None, **k):
         seen["queries"].append(query)
         seen["engines"].append(engines)
-        return [Result(title="T", link=f"https://example.com/{query}/{pageno}",
+        return [Result(title="T", link=f"https://example.com/{len(seen['queries'])}",
                        snippet="s")]
 
     monkeypatch.setattr(run, "searxng_search", fake_search)
+    return seen
+
+
+def test_discover_never_appends_the_site_scope_clause(tmp_path, monkeypatch):
+    """The auto-appended ``(site:a OR site:b ...)`` scope clause is not used: the
+    API engines ignore it, so it only made queries longer. A keyword's *own*
+    ``site:`` is a different thing (see the routing test below)."""
+    from cybersec_slm.sourcing import run
+
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")   # no site: keywords
+    seen = _spy_search(monkeypatch)
 
     dom = run.catalog.subdomains(run.catalog.load())[0]
     run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=1, enrich=False)
 
     assert seen["queries"], "no searches were issued"
-    assert all("site:" not in q for q in seen["queries"])
+    assert all(" OR site:" not in q for q in seen["queries"])
     assert all(e and e.split(",")[0] == "github" for e in seen["engines"])
+
+
+def test_site_keywords_route_to_engines_that_honour_the_operator(monkeypatch):
+    """A ``site:`` dork must not run on github/arxiv: they *ignore* the operator
+    and answer the bare terms, returning confident results from the wrong host —
+    which is worse than returning nothing.
+
+    No built-in profile currently ships a ``site:`` keyword (UBI's own content is
+    reached by crawling seed rows instead, because every engine that honours
+    ``site:`` rate-limits a sweep). The routing stays because a user can add one
+    to their keywords.yaml at any time.
+    """
+    from cybersec_slm.sourcing import keywords as kw
+
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "ubi")
+    assert kw.SITE_ENGINES, "the ubi profile declares site-honouring engines"
+
+    plain = kw.engines_for_keyword("anti money laundering dataset")
+    dork = kw.engines_for_keyword('site:unionbankofindia.bank.in "Basel III"')
+
+    assert plain.split(",")[0] == "github"
+    assert dork == ",".join(kw.SITE_ENGINES)
+    assert "github" not in dork
+
+
+def test_site_routing_is_a_no_op_for_a_profile_without_site_engines(monkeypatch):
+    from cybersec_slm.sourcing import keywords as kw
+
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
+    assert not kw.SITE_ENGINES
+    assert kw.engines_for_keyword("site:example.com x") == kw.default_engines(True)
+
+
+def test_an_explicit_engines_override_wins_over_site_routing(tmp_path, monkeypatch):
+    from cybersec_slm.sourcing import run
+
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "ubi")
+    seen = _spy_search(monkeypatch)
+
+    run.discover(str(tmp_path / "S.csv"), domains=["AML-KYC"], per_keyword=1,
+                 enrich=False, engines="startpage")
+
+    assert seen["engines"], "no searches were issued"
+    assert all(e == "startpage" for e in seen["engines"])
 
 
 def test_discover_fill_reaches_per_domain_target(tmp_path, monkeypatch):

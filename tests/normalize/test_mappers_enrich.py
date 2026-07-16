@@ -30,18 +30,18 @@ def test_dispatch_prefers_prose_when_text_present():
 
 def test_origin_format_inferred_from_file_hint():
     rec = {"text": "something readable here", "_file": "rules.yar"}
-    out = mappers.ProseMapper().map(rec, domain="Threat Intelligence", source="yara")
+    out = mappers.ProseMapper().map(rec, domain="AML-KYC", source="yara")
     assert out["origin_format"] == "yara"
 
 
 def test_build_record_full_contract_validates():
     mapped = mappers.ProseMapper().map(
-        {"text": "Phishing emails impersonate trusted brands to steal credentials from victims."},
-        domain="Threat Intelligence", source="phish")
+        {"text": "Customer due diligence requires verifying the beneficial owner of an account."},
+        domain="AML-KYC", source="cdd")
     record = enrich.build_record(mapped)
     model = CanonicalRecord(**record)               # must validate
-    assert model.domain_name == "CYBERSEC"
-    assert model.subdomain_name == "THREAT_INTELLIGENCE"
+    assert model.domain_name == "BANKING_COMPLIANCE"
+    assert model.subdomain_name == "AML_KYC"
     assert model.domain_label == -1 and model.subdomain_label == -1
     assert model.content_hash == enrich.content_hash(model.text)
     assert model.char_count == len(model.text)

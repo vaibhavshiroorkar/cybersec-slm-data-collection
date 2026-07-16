@@ -69,20 +69,20 @@ def test_pre_existing_yaml_without_code_still_gets_historical_codes(tmp_path):
     built-in domain's historical enum code and vocab, not a freshly-derived
     slug -- the downstream snorkel LabelModel contract depends on this."""
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"Application Security": {"datasets": ["d"], "text": ["t"]}}, p)
+    catalog.save({"AML-KYC": {"datasets": ["d"], "text": ["t"]}}, p)
     # Emulate a file saved before this migration by stripping the keys save()
     # would have added, matching a real pre-existing keywords.yaml on disk.
     import yaml
     with open(p, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
-    del raw["subdomains"]["Application Security"]["code"]
-    del raw["subdomains"]["Application Security"]["vocab"]
+    del raw["subdomains"]["AML-KYC"]["code"]
+    del raw["subdomains"]["AML-KYC"]["vocab"]
     with open(p, "w", encoding="utf-8") as f:
         yaml.safe_dump(raw, f)
 
     cat = catalog.load(p)
-    assert cat["Application Security"]["code"] == kw.DOMAIN_CODES["Application Security"]
-    assert set(cat["Application Security"]["vocab"]) == kw.DOMAIN_VOCAB["Application Security"]
+    assert cat["AML-KYC"]["code"] == kw.DOMAIN_CODES["AML-KYC"]
+    assert set(cat["AML-KYC"]["vocab"]) == kw.DOMAIN_VOCAB["AML-KYC"]
 
 
 def test_code_for_derives_a_stable_slug_when_unset(tmp_path):
@@ -117,9 +117,9 @@ def test_add_subdomain_accepts_an_explicit_code(tmp_path):
     assert cat["Physical Security"]["code"] == "PHYSSEC"
 
 
-def test_domain_name_defaults_to_cybersec_when_unset(tmp_path):
+def test_domain_name_defaults_to_the_builtin_when_unset(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    assert catalog.domain_name(p) == "CYBERSEC"
+    assert catalog.domain_name(p) == kw.DEFAULT_DOMAIN_NAME == "BANKING_COMPLIANCE"
 
 
 def test_set_domain_name_round_trips_and_preserves_subdomains(tmp_path):

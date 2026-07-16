@@ -52,9 +52,12 @@ def test_nvd_and_cwe_detected_by_url(tmp_path):
     assert cwe["kind"] == "xml" and cwe["slug"] and cwe["title"]
 
 
-def test_real_catalog_loads_with_infra_sources():
-    # The committed Sources.csv must load and include the NVD + CWE rows.
-    descriptors = sources.load_descriptors(sources.DEFAULT_CATALOG)
+def test_real_catalog_loads_with_infra_sources(monkeypatch):
+    # The committed catalog must load and include the NVD + CWE rows. Those rows
+    # live in the cybersec profile; the ubi profile ships an empty catalog that
+    # sourcing fills, so pin the profile rather than reading whichever is active.
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
+    descriptors = sources.load_descriptors(sources.default_catalog())
     kinds = {d["kind"] for d in descriptors}
     assert len(descriptors) > 0
     assert {"api", "xml"} <= kinds
