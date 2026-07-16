@@ -76,6 +76,15 @@ orchestration = [
     "prefect-aws>=0.5.0",
 ]
 
+# Main-content extraction for the website crawl (`ingest --extractor trafilatura`).
+# Optional on purpose: the crawl falls back to the built-in extractor when it is
+# absent, so this is a quality upgrade you opt into rather than a hard dependency.
+# UPSTREAM adbar/trafilatura only -- this parses hostile input from the open
+# internet, which is not a place to run a fork of unknown divergence.
+crawl = [
+    "trafilatura>=1.12",
+]
+
 # Local-first monitoring + dataset-exploration dashboard (`cybersec-slm dashboard`).
 # Streamlit bundles Altair, so charts need no extra dependency. Opt-in because the
 # core pipeline never needs a web server:  uv sync --extra dashboard

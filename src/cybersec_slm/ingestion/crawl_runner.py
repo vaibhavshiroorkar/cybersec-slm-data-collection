@@ -22,18 +22,78 @@ MIN_TEXT = 200
 # Ancestors whose text is boilerplate, excluded from the extracted body.
 _STRIP = ("script", "style", "nav", "footer", "header", "svg", "noscript", "form")
 
+# Extractor names accepted in the crawl config (cfg["extractor"]).
+EXTRACTOR_DEFAULT = "default"
+EXTRACTOR_TRAFILATURA = "trafilatura"
+EXTRACTORS = (EXTRACTOR_DEFAULT, EXTRACTOR_TRAFILATURA)
 
-def extract(response) -> tuple[str, str]:
-    """Return (title, body-text) with boilerplate nodes excluded.
 
-    Parity with the previous selectolax extractor: drop script/style/nav/footer/
-    header/svg/noscript/form, then join visible text on newlines.
+def _title(response) -> str:
+    return (response.css("title::text").get() or "").strip()
+
+
+def extract_default(response) -> tuple[str, str]:
+    """Strip known boilerplate tags, then join every remaining visible text node.
+
+    Cheap and dependency-free, but it only knows about the eight tags in _STRIP:
+    a menu, sidebar, cookie banner, breadcrumb trail, or footer that is not marked
+    up as <footer> all survive into the body text.
     """
-    title = (response.css("title::text").get() or "").strip()
     not_ancestor = " or ".join(f"ancestor::{tag}" for tag in _STRIP)
     parts = response.xpath(f"//body//text()[not({not_ancestor})]").getall()
-    text = "\n".join(t.strip() for t in parts if t.strip())
-    return title, text
+    return _title(response), "\n".join(t.strip() for t in parts if t.strip())
+
+
+def extract_trafilatura(response) -> tuple[str, str]:
+    """Main-content extraction via trafilatura (upstream adbar/trafilatura).
+
+    Detects the article body rather than trusting tag names, so the boilerplate
+    the default extractor cannot see is dropped. Optional: the crawl still runs
+    without the dependency, falling back rather than failing a whole source.
+
+    Falling back is also what happens when trafilatura finds no main content --
+    it returns None on pages that are genuinely not articles (link indexes,
+    landing pages), and taking that as "empty" would silently lose pages the
+    default extractor would have kept.
+    """
+    try:
+        import trafilatura
+    except ImportError:
+        logger_warn("trafilatura is not installed; using the default extractor "
+                    "(install the 'crawl' extra: uv sync --extra crawl)")
+        return extract_default(response)
+    text = trafilatura.extract(response.text, url=getattr(response, "url", None),
+                               include_comments=False, include_tables=True,
+                               no_fallback=False)
+    if not text:
+        return extract_default(response)
+    return _title(response), text.strip()
+
+
+_EXTRACTORS = {EXTRACTOR_DEFAULT: extract_default,
+               EXTRACTOR_TRAFILATURA: extract_trafilatura}
+
+_warned: set = set()
+
+
+def logger_warn(msg: str) -> None:
+    """Warn once per message (this module imports only Scrapy + stdlib)."""
+    if msg not in _warned:
+        _warned.add(msg)
+        print(f"crawl: {msg}", file=sys.stderr, flush=True)
+
+
+def extract(response, extractor: str = EXTRACTOR_DEFAULT) -> tuple[str, str]:
+    """Return ``(title, body-text)`` using the named extractor.
+
+    An unknown name falls back to the default rather than raising: this runs in a
+    detached subprocess per source, so a bad setting must not take a crawl down.
+    """
+    fn = _EXTRACTORS.get(extractor)
+    if fn is None:
+        logger_warn(f"unknown extractor {extractor!r}; using {EXTRACTOR_DEFAULT}")
+        fn = extract_default
+    return fn(response)
 
 
 class SiteSpider(scrapy.Spider):
@@ -68,7 +128,8 @@ class SiteSpider(scrapy.Spider):
     def parse(self, response):
         if not isinstance(response, TextResponse):
             return
-        title, text = extract(response)
+        title, text = extract(response, self.cfg.get("extractor",
+                                                     EXTRACTOR_DEFAULT))
         if text and len(text) > MIN_TEXT:
             yield {"source": title or self.cfg["description"],
                    "url": response.url,

@@ -189,6 +189,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the security-hazard scan (script/iframe injection, "
                          "base64 blobs, malware TLDs) during the light-EDA gate; "
                          "default: scan")
+    ig.add_argument("--extractor", choices=("default", "trafilatura"),
+                    default=None,
+                    help="how a crawled page becomes text. 'default' strips known "
+                         "boilerplate tags and keeps the rest; 'trafilatura' "
+                         "detects the main content, dropping menus/sidebars/cookie "
+                         "banners the tag list cannot see (needs the 'crawl' extra; "
+                         "falls back to default if absent). Affects website sources "
+                         "only, on re-crawl.")
     ig.add_argument("--domains", nargs="*", default=None,
                     help="fetch only these Sub-Domains (selective ingest; a fresh "
                          "run wipes only their data/raw/<domain>/ folders)")
@@ -422,6 +430,13 @@ def _run_profile(args) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+
+    # The crawl extractor travels by environment, not by argument: the chain from
+    # here to the choice is run_ingest -> pool worker -> crawl subprocess, and the
+    # environment already crosses both boundaries. Same idiom as
+    # $CYBERSEC_SLM_TRANSLATE / $CYBERSEC_SLM_PII_MAX_CHARS.
+    if getattr(args, "extractor", None):
+        os.environ["CYBERSEC_SLM_EXTRACTOR"] = args.extractor
 
     if args.stage == "profile":
         _run_profile(args)
