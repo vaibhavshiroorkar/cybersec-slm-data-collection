@@ -276,6 +276,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="write Is Synthetic?=Yes for high-confidence gaps "
                          "(review-level matches are never auto-applied)")
 
+    # ── review (model-judged curation aid) ────────────────────────────────────
+    rv = sub.add_parser("review",
+                        help="judge each catalogued source against a plain-English "
+                             "condition with a model; propose-only unless --apply")
+    rv.add_argument("--condition", default=None,
+                    help='what a source must satisfy to stay, in plain English '
+                         '(e.g. "the data must concern India"). Required unless '
+                         "--apply replays an existing report.")
+    rv.add_argument("--sources", default=None,
+                    help="catalog CSV to review (default: the active profile's "
+                         "Sources.csv)")
+    rv.add_argument("--apply", action="store_true",
+                    help="move declined sources to the profile's Excluded.csv. "
+                         "With --condition it re-reviews then applies; alone it "
+                         "replays the newest report, so what you read is what is "
+                         "applied. Low-confidence and 'review' verdicts never move.")
+    rv.add_argument("--report", default=None,
+                    help="with --apply alone, the report to replay "
+                         "(default: the newest under logs/reviews/)")
+
     # ── profile (switch which corpus the pipeline builds) ─────────────────────
     pr = sub.add_parser("profile",
                         help="list / show / switch the pipeline profile "
@@ -500,6 +520,29 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "synthetic-scan":
         from .sourcing.synthetic_scan import run_scan
         run_scan(args.sources, apply=args.apply)
+
+    elif args.stage == "review":
+        from .sourcing import review as _review
+        if args.condition:
+            out = _review.run_scan(args.condition, args.sources, apply=args.apply)
+            c = out["counts"]
+            print(f"review: approve={c['approve']} decline={c['decline']} "
+                  f"review={c['review']}  ->  {out['report']}")
+            if not args.apply:
+                print(f"review: propose-only; re-run with --apply to move the "
+                      f"{c['decline']} declined source(s)")
+        elif args.apply:
+            # Replay a recorded report: no second, different set of model calls,
+            # so what was read is exactly what is applied.
+            res = _review.apply_report(args.report, spec=args.sources)
+            if not res["report"]:
+                raise SystemExit("review: no report to apply — run "
+                                 '`review --condition "..."` first')
+            print(f"review: moved {res['moved']} source(s) from "
+                  f"{os.path.basename(res['report'])}")
+        else:
+            raise SystemExit('review: pass --condition "..." to review the '
+                             "catalog, or --apply to replay the newest report")
 
     elif args.stage == "dashboard":
         from .dashboard.launch import launch

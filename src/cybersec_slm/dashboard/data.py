@@ -994,6 +994,80 @@ def _run_started_at() -> float | None:
     return _parse_log_ts(first.split("|", 1)[0] if "|" in first else first)
 
 
+def stage_timeline() -> list[dict]:
+    """When each stage of the current/last run started and stopped.
+
+    One row per stage the run actually reached::
+
+        [{"stage", "label", "start_s", "end_s", "duration_s", "running"}, ...]
+
+    ``start_s`` / ``end_s`` are seconds since the run's first log line, so the x
+    axis is "time since the run began" and needs no wall-clock conversion. A stage
+    ends where the next one begins; the furthest stage reached runs to *now* while
+    the run is live, and to its last log line once it is not.
+
+    Read from the run's own log (see :func:`_current_run_log`) using the canonical
+    markers in :mod:`cybersec_slm.stages`, so it works for a dashboard run and a
+    bare CLI run alike. Stages that were skipped (a ``--resume`` plan drops
+    ``source``) never appear, because they never logged. Empty when no run has
+    logged anything.
+    """
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+
+    # First timestamped line is t=0. A loguru line is "<ts> | LEVEL | ...".
+    stamped: list[tuple[float, str]] = []
+    for ln in lines:
+        ts = _parse_log_ts(ln.split("|", 1)[0] if "|" in ln else ln)
+        if ts is not None:
+            stamped.append((ts, ln))
+    if not stamped:
+        return []
+    t0 = stamped[0][0]
+    last_ts = stamped[-1][0]
+
+    # Earliest timestamp at which each stage's marker appears.
+    starts: dict[str, float] = {}
+    for ts, ln in stamped:
+        for stage in stages.STAGES:
+            if stage.key in starts:
+                continue
+            if any(m in ln for m in stage.markers):
+                starts[stage.key] = ts
+
+    if not starts:
+        return []
+    # Pipeline order, not first-seen order: a later stage's marker can appear in
+    # an earlier stage's chatter, and the spine is the truth about progression.
+    ordered = [(k, starts[k]) for k in stages.stage_keys() if k in starts]
+    live = run_status()["state"] == "running"
+    now = time.time()
+
+    out: list[dict] = []
+    for i, (key, start) in enumerate(ordered):
+        if i + 1 < len(ordered):
+            end = ordered[i + 1][1]           # ends where the next stage begins
+            running = False
+        else:
+            end = now if live else last_ts    # the furthest stage reached
+            running = live
+        out.append({
+            "stage": key,
+            "label": stages.get_stage(key).label,
+            "start_s": max(start - t0, 0.0),
+            "end_s": max(end - t0, 0.0),
+            "duration_s": max(end - start, 0.0),
+            "running": running,
+        })
+    return out
+
+
 def run_timing() -> dict:
     """Elapsed time since the run started, plus a rough projected total runtime.
 

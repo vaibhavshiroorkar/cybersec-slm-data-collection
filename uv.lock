@@ -751,6 +751,7 @@ agent = [
     { name = "openai" },
 ]
 dashboard = [
+    { name = "altair" },
     { name = "psutil" },
     { name = "streamlit" },
 ]
@@ -769,6 +770,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "altair", marker = "extra == 'dashboard'", specifier = ">=5" },
     { name = "datasketch", specifier = ">=1.6.0" },
     { name = "deep-translator", specifier = ">=1.11.0" },
     { name = "en-core-web-lg", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" },

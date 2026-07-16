@@ -82,6 +82,7 @@ orchestration = [
 dashboard = [
     "streamlit>=1.40",
     "psutil>=5.9",               # pipeline process control (start/stop/reset) on the Pipeline page
+    "altair>=5",                 # the stage-activity timeline on the Overview page
 ]
 
 # Q&A agent on the dashboard's Agent page (`pages/3_Agent.py`), backed by
