@@ -342,7 +342,7 @@ def _stage_widgets(stage: str, base: dict) -> dict:
             worker_help = (
                 "enrichment thread pool (license/metadata fetch)"
                 if stage == "source"
-                else "process pool size for parallel clean workers"
+                else "number of parallel worker processes (CPU cores) used to clean sources"
                 if stage == "clean"
                 else "process pool size (default: min(cpu, 8))")
             worker_label = (

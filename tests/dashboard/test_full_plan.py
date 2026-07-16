@@ -43,6 +43,21 @@ def test_full_plan_resume_skips_source_and_resumes_supported_stages(tmp_path, mo
     assert "--resume" not in by["schema"]
 
 
+def test_full_plan_start_keeps_source_but_resumes_ingest_and_clean(tmp_path, monkeypatch):
+    # Start (non-destructive): resume is passed via the override settings, not the
+    # skip-source path, so Sourcing still runs while ingest/clean skip already-done
+    # work instead of wiping and re-fetching from zero.
+    _use_root(tmp_path, monkeypatch)
+    plan = control.build_full_plan({"resume": True})
+    assert _stage_keys(plan) == ["source", "ingest", "clean", "eda", "schema"]
+    by = {argv[0]: argv for argv in plan}
+    assert "--resume" not in by["source"]      # source has no checkpoint
+    assert "--resume" in by["ingest"]          # skip already-fetched, no wipe
+    assert "--resume" in by["clean"]           # skip already-cleaned
+    assert "--resume" not in by["eda"]
+    assert "--resume" not in by["schema"]
+
+
 def test_full_plan_overrides_beat_saved_settings(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
     settings_store.save_stage("ingest", {"workers": 4})

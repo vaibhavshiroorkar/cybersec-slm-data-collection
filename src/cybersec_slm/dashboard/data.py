@@ -97,9 +97,46 @@ def _pipeline_logs() -> list[str]:
     # Skip empty stub logs: any cybersec_slm process (a test, or the dashboard
     # itself) creates a pipeline.<pid>.log on import; only a real run writes to it.
     # Filtering empties keeps those stubs from reading as "recent activity".
+    #
+    # Also skip the dashboard's OWN process log: this process logs on every rerun
+    # (the live funnel loads the source catalog each tick), so its log is not empty
+    # and is continuously the newest by mtime - which would make phase/status read
+    # the dashboard's own chatter instead of the running pipeline's log and report
+    # "Starting" forever. The pipeline runs as a separate detached process, so its
+    # log has a different pid and is never excluded here.
+    own = f"pipeline.{os.getpid()}.log"
     paths = [p for p in glob.glob(os.path.join(_logs(), "pipeline.*.log"))
-             if os.path.exists(p) and os.path.getsize(p) > 0]
+             if os.path.basename(p) != own
+             and os.path.exists(p) and os.path.getsize(p) > 0]
     return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+
+
+# Pointer file the full-run orchestrator writes with its real log path (see
+# cybersec_slm.dashboard.run_all.RUN_LOG_POINTER).
+_RUN_LOG_POINTER = "active_run_log.txt"
+
+
+def _current_run_log() -> str | None:
+    """The active (or most-recent) full run's log file.
+
+    The orchestrator records its real log path in the pointer file at startup, so
+    the dashboard follows the run's log directly. This is necessary because the
+    run's pid can differ from the launched pid (Windows launcher shim) and the
+    parallel clean workers spawn their own per-pid logs that would otherwise win
+    newest-by-mtime and leave phase detection stuck on "Starting". Falls back to
+    the newest non-own log when the pointer is absent (a run launched another way,
+    or one predating the pointer).
+    """
+    ptr = os.path.join(_logs(), _RUN_LOG_POINTER)
+    try:
+        with open(ptr, encoding="utf-8") as f:
+            p = f.read().strip()
+        if p and os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+    except OSError:
+        pass
+    logs = _pipeline_logs()
+    return logs[-1] if logs else None
 
 
 _GATE_FAILED_LABEL = "EDA gate failed - needs more / rebalanced data"
@@ -392,14 +429,32 @@ def clean_source_rows() -> list[dict]:
     order.
 
     Each entry is ``{"subdomain", "source", "label", "id"}`` where ``id`` is the
-    ``<sub-domain>/<source>`` folder path that ``run_clean`` cleans. Derived from
-    :func:`raw_table` (which is size-sorted) and re-sorted so a row-number range
-    over this list is stable and matches what the Clean page shows.
+    ``<sub-domain>/<source>`` folder path that ``run_clean`` cleans. Enumerates the
+    two-level ``data/raw/<sub-domain>/<source>`` tree with plain directory listings
+    (no per-file size walk), so opening the clean config modal is instant even when
+    ``data/raw`` is 100+ GB - unlike :func:`raw_table`, which measures on-disk bytes.
+    Only folders that actually hold a ``.jsonl`` file are listed, so the picker
+    offers the sources that have data to clean (matching the funnel's raw count) and
+    skips folders that were created during ingest but produced no records.
     """
-    rows = [{"subdomain": r["sub-domain"], "source": r["source"],
-             "label": f"{r['sub-domain']} / {r['source']}",
-             "id": f"{r['sub-domain']}/{r['source']}"}
-            for r in raw_table()]
+    raw_root = os.path.join(_root(), "data", "raw")
+    if not os.path.isdir(raw_root):
+        return []
+    rows: list[dict] = []
+    try:
+        for dom in os.scandir(raw_root):
+            if not dom.is_dir() or dom.name.startswith("."):
+                continue
+            for src in os.scandir(dom.path):
+                if not src.is_dir() or src.name.startswith("."):
+                    continue
+                if not _folder_has_jsonl(src.path):
+                    continue
+                rows.append({"subdomain": dom.name, "source": src.name,
+                             "label": f"{dom.name} / {src.name}",
+                             "id": f"{dom.name}/{src.name}"})
+    except OSError:
+        return rows
     rows.sort(key=lambda r: (r["subdomain"].lower(), r["source"].lower()))
     return rows
 
@@ -449,12 +504,14 @@ def ingest_progress() -> dict:
     ``checked`` is how many sources the ingest stage has processed (from the
     resume ledger ``completed_sources.txt``), which includes ones that were then
     skipped (license-blocked, failed fetch, or no usable content). ``with_data``
-    is how many produced a folder under ``data/raw/``. ``total`` is the catalog
-    size. So "184 checked, 149 with data, of 192" reads correctly: nearly every
-    source was tried; not all yielded a downloadable corpus. Falls back to the
-    on-disk folder count when the ledger is absent.
+    is how many actually produced records under ``data/raw/`` (a folder holding a
+    ``.jsonl`` file); a folder that was created but yielded nothing is not counted.
+    ``total`` is the catalog size. So "184 checked, 149 with data, of 192" reads
+    correctly: nearly every source was tried; not all yielded a downloadable
+    corpus. Falls back to the on-disk folder count when the ledger is absent.
     """
-    with_data = _count_source_dirs(os.path.join(_root(), "data", "raw"))
+    with_data = _count_source_dirs(os.path.join(_root(), "data", "raw"),
+                                   require_data=True)
     checked = _completed_count() or with_data
     total = _catalog_total() or 0
     return {"checked": checked, "with_data": with_data, "total": total}
@@ -923,8 +980,14 @@ def _count_jsonl_records(path: str) -> int:
     return count
 
 
-def _count_source_dirs(path: str) -> int:
-    """Count distinct source folders (domain/<source>/) that exist under path."""
+def _count_source_dirs(path: str, require_data: bool = False) -> int:
+    """Count distinct source folders (domain/<source>/) that exist under path.
+
+    With ``require_data=True`` only folders that actually hold a ``.jsonl`` file
+    are counted, so a source whose folder was created during ingest but produced
+    no records (e.g. an empty crawl) is excluded. This is what "produced data"
+    means, versus the bare on-disk folder count.
+    """
     if not os.path.exists(path):
         return 0
     count = 0
@@ -933,8 +996,11 @@ def _count_source_dirs(path: str) -> int:
             if not domain_entry.is_dir() or domain_entry.name.startswith("."):
                 continue
             for src_entry in os.scandir(domain_entry.path):
-                if src_entry.is_dir() and not src_entry.name.startswith("."):
-                    count += 1
+                if not src_entry.is_dir() or src_entry.name.startswith("."):
+                    continue
+                if require_data and not _folder_has_jsonl(src_entry.path):
+                    continue
+                count += 1
     except OSError:
         pass
     return count
@@ -1009,15 +1075,21 @@ def _catalog_lines_by_folder() -> dict:
     return out
 
 
-def _raw_on_disk_totals() -> dict:
+def _raw_on_disk_totals(measure_size: bool = True) -> dict:
     """Raw-stage totals restricted to sources physically present under ``data/raw/``.
 
     Iterates the on-disk ``<sub-domain>/<source>`` folders and joins each to its
     catalog line/size via :func:`_catalog_lines_by_folder`, so Sources, Records and
     Size all describe the same population (the data actually on this machine) rather
-    than the whole catalog. ``sources`` counts every on-disk folder; a folder the
-    catalog has no measured figures for contributes to the count but not the totals.
-    Returns ``{"sources", "lines", "size_mb"}`` (all zero when no raw tree exists).
+    than the whole catalog. Only folders that actually hold a ``.jsonl`` file are
+    counted, so a folder created during ingest that produced no records is excluded
+    (matching "produced data"); a counted folder the catalog has no measured figures
+    for contributes to the count but not the totals. Returns
+    ``{"sources", "lines", "size_mb"}`` (all zero when no raw tree exists).
+
+    ``measure_size=False`` skips the per-source ``os.walk`` byte count (the slow
+    part: raw can be 100+ GB), returning ``size_mb`` = 0.0 so the caller can render
+    live source/record counts cheaply and fill size from a cached measurement.
     """
     raw_root = os.path.join(_root(), "data", "raw")
     if not os.path.isdir(raw_root):
@@ -1034,16 +1106,21 @@ def _raw_on_disk_totals() -> dict:
             for src in os.scandir(dom.path):
                 if not src.is_dir() or src.name.startswith("."):
                     continue
+                if not _folder_has_jsonl(src.path):
+                    continue
                 sources += 1
-                ln, _ = key_ls.get((dom.name, src.name), (0.0, 0.0))
+                ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
                 lines += ln
-                size_mb += _dir_size_mb(src.path)
+                # Accurate on-disk size means an os.walk per source (raw is
+                # 100+ GB); the cheap live path uses the catalog's per-folder size
+                # instead so the funnel can refresh every second without a walk.
+                size_mb += _dir_size_mb(src.path) if measure_size else sz
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}
 
 
-def data_funnel() -> dict:
+def data_funnel(measure_size: bool = True) -> dict:
     """Aggregate Raw -> Cleaned -> Final metrics for the Overview funnel.
 
     Source counts and sizes come from what is physically on disk under the data
@@ -1051,6 +1128,12 @@ def data_funnel() -> dict:
     catalog, which is authoritative and fast (a live count of the raw tree would
     read 100+ GB). Cleaned and final counts are read directly since those trees
     are small.
+
+    ``measure_size=False`` skips the two ``os.walk`` byte counts (raw + clean) and
+    the ``data/clean`` JSONL record scan, returning those figures as 0 so the
+    Overview can refresh live source/record counts every second cheaply and pull
+    sizes from a cached snapshot. Callers that need sizes (the cached wrappers and
+    the per-stage pages) keep the default.
     """
     man = manifest()
     rc = clean_report()
@@ -1059,18 +1142,21 @@ def data_funnel() -> dict:
     # Raw: count the source folders present and derive line totals only for
     # the sources actually on disk, so this metric stays live as the run writes
     # to data/raw/ rather than relying on a stale catalog-wide sum.
-    raw_totals = _raw_on_disk_totals()
+    raw_totals = _raw_on_disk_totals(measure_size=measure_size)
     raw_sources = raw_totals["sources"]
     raw_lines = raw_totals["lines"] if raw_sources else 0
     raw_size_mb = raw_totals["size_mb"] if raw_sources else 0.0
 
     # Cleaned: prefer the clean report total when available, otherwise count the
     # actual JSONL records present under data/clean/ so the UI remains informative.
+    # The clean tree is small, so its size is always measured; only the expensive
+    # per-record JSONL scan is skipped in the cheap (live) path (the report total
+    # covers it once a clean run has produced one).
     clean_root = os.path.join(_root(), "data", "clean")
     cleaned_size_mb = _dir_size_mb(clean_root)
     cleaned_sources = _count_source_dirs(clean_root)
     cleaned_lines = int(rc.get("total", {}).get("out", 0)) if rc.get("total") else 0
-    if cleaned_lines == 0:
+    if cleaned_lines == 0 and measure_size:
         cleaned_lines = _count_jsonl_records(clean_root)
 
     # Final: manifest is the canonical source of truth.

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(dataviz)",
+      "Skill(dataviz:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/dashboard/test_control.py -q)"
+    ]
+  }
+}

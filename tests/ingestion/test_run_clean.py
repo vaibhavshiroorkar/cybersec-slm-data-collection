@@ -124,7 +124,10 @@ def test_run_clean_keep_raw_false_deletes_raw(tmp_path, monkeypatch):
 
 def _wire_two_domains(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
+    logs = tmp_path / "logs"
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
+    monkeypatch.setattr(parallel.core, "LOGS", str(logs))
+    monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
     monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean"))
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))
@@ -172,7 +175,10 @@ def test_run_clean_selective_purge_raw_deletes_only_chosen(tmp_path, monkeypatch
 
 def _wire_two_sources_one_domain(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
+    logs = tmp_path / "logs"
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
+    monkeypatch.setattr(parallel.core, "LOGS", str(logs))
+    monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
     monkeypatch.setattr(pipeline, "OUT_CLEAN_DATA", str(tmp_path / "clean"))
     monkeypatch.setattr(pipeline, "OUT_FLAGGED", str(tmp_path / "flagged"))
     monkeypatch.setattr(pipeline, "OUT_DROPPED", str(tmp_path / "dropped"))

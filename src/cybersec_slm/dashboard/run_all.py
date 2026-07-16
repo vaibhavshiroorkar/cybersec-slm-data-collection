@@ -21,9 +21,29 @@ halts the remaining stages (as the headless ``run_v2_pipeline`` does).
 from __future__ import annotations
 
 import json
+import os
 import sys
 
+from .. import core
 from ..core import logger
+
+# Pointer file naming the current full run's log. The orchestrator writes its own
+# log path here at startup so the dashboard can follow the run's log directly
+# instead of guessing from pids (which differ under the Windows launcher) or
+# newest-mtime (which the parallel clean workers' own logs would win).
+RUN_LOG_POINTER = "active_run_log.txt"
+
+
+def _record_run_log() -> None:
+    """Write this orchestrator's log path to the pointer the dashboard reads."""
+    if not core.LOG_FILE:
+        return
+    try:
+        os.makedirs(core.LOGS, exist_ok=True)
+        with open(os.path.join(core.LOGS, RUN_LOG_POINTER), "w", encoding="utf-8") as f:
+            f.write(core.LOG_FILE)
+    except OSError:
+        pass
 
 
 def _load_plan(path: str) -> list[list[str]]:
@@ -41,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
     args = list(argv if argv is not None else sys.argv[1:])
     if not args:
         raise SystemExit("run_all: expected a plan file path")
+    _record_run_log()
     plan = _load_plan(args[0])
 
     total = len(plan)

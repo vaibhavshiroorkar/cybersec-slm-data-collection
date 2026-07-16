@@ -67,9 +67,16 @@ DROPPED = os.path.join(DATA_DIR, "dropped")         # -> audit
 STAGES = os.path.join(DATA_DIR, "_stages")          # single-stage diagnostics
 LOGS = os.path.join(DATA_ROOT, "logs")              # operational logs (alongside data/)
 
+# Absolute path of this process's pipeline log file (set by _make_logger). The
+# dashboard reads it to follow the actual run's log: a run's pid can differ from
+# the launched pid (Windows launcher shims) and parallel workers spawn their own
+# per-pid logs, so neither the control pid nor newest-by-mtime reliably identifies it.
+LOG_FILE: str | None = None
+
 
 # ----------------------------------------------------------------- logging ---
 def _make_logger():
+    global LOG_FILE
     loguru = try_import("loguru")
     os.makedirs(LOGS, exist_ok=True)
     # One log file per process. With ProcessPoolExecutor under spawn (Windows),
@@ -77,6 +84,7 @@ def _make_logger():
     # path makes loguru's rotation os.rename() fail with WinError 32 because
     # other processes still hold the file open. PID-scoped paths avoid that.
     log_file = os.path.join(LOGS, f"pipeline.{os.getpid()}.log")
+    LOG_FILE = log_file
     if loguru is not None:
         lg = loguru.logger
         lg.remove()

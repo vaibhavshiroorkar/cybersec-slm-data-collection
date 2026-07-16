@@ -10,6 +10,8 @@ so only pages import it.
 
 from __future__ import annotations
 
+import os
+
 import streamlit as st
 
 from . import data
@@ -50,6 +52,19 @@ def data_funnel(root: str) -> dict:
     return data.data_funnel()
 
 
+# Live-ish cleaned record count: the clean report is only written when a clean
+# pass finishes, so during a run the funnel would show 0 (or a stale total). Count
+# the JSONL records physically under data/clean on a short TTL so the Overview shows
+# the cleaned total growing as workers write, without scanning on every 1s tick.
+_CLEAN_RECORDS_TTL_S = 20
+
+
+@st.cache_data(ttl=_CLEAN_RECORDS_TTL_S, show_spinner=False)
+def cleaned_records(root: str) -> int:
+    """Records currently under ``data/clean`` (cheap short-TTL live count)."""
+    return data._count_jsonl_records(os.path.join(root, "data", "clean"))
+
+
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
 def cleaned_table(root: str) -> list[dict]:
     """Cached per-source cleaned-folder table (:func:`data.cleaned_table`).
@@ -66,4 +81,5 @@ def clear_stats() -> None:
     funnel.clear()
     raw_table.clear()
     data_funnel.clear()
+    cleaned_records.clear()
     cleaned_table.clear()

@@ -15,7 +15,7 @@ import os
 import streamlit as st
 
 from cybersec_slm import stages
-from cybersec_slm.dashboard import charts, control, data, ui
+from cybersec_slm.dashboard import cached, charts, control, data, ui
 
 st.set_page_config(page_title="cybersec-slm dashboard", layout="wide")
 ui.inject_css()
@@ -120,45 +120,35 @@ with ui.section("Run the full pipeline"):
                        help=f"Open {_label} run settings"):
             ui.stage_config_dialog(_key)
 
-    # Surface the resume ledger so saved progress is visible, and guard Start (a
-    # fresh run wipes data/raw/ + the ledger) with a confirm when a checkpoint exists.
+    # Surface the resume ledger so saved progress is visible. Neither Start nor
+    # Resume wipes it now (only Reset does), so this is purely informational.
     ckpt = data.checkpoint_status()
     if not running and ckpt["exists"]:
         _saved = charts.fmt_int(ckpt["completed"])
         _tot = f"/{charts.fmt_int(ckpt['total'])}" if ckpt.get("total") else ""
-        st.success(f"Checkpoint: {_saved}{_tot} sources saved  ·  "
-                   '"Resume" continues from here.')
+        st.success(f"Checkpoint: {_saved}{_tot} sources fetched  ·  "
+                   'Start and Resume both keep it; only "Reset" clears it.')
 
     def _do_start() -> None:
-        res = control.start("all", settings=run_settings)
+        # Start runs the lit stages without wiping: resume is passed through to the
+        # stages so ingest/clean skip work already done (no re-fetch from zero, no
+        # checkpoint wipe). Sourcing still runs when lit. A from-scratch rebuild is
+        # reached via Reset, which clears data/ first.
+        res = control.start("all", settings={**run_settings, "resume": True})
         st.rerun() if res.get("ok") else st.error(res["error"])
 
     b = st.columns(4)
     if b[0].button("Start", disabled=running, use_container_width=True,
-                   help="Run the lit stages fresh, in order: source, ingest, "
-                        "clean, EDA, schema. Each stage uses the advanced "
-                        "settings saved on its own page. Wipes any saved "
-                        "checkpoint."):
-        # With a checkpoint present, don't wipe on a single click: ask to confirm.
-        if ckpt["exists"]:
-            st.session_state["_confirm_fresh_start"] = True
-            st.rerun()
-        else:
-            _do_start()
-    if st.session_state.get("_confirm_fresh_start") and not running:
-        _saved = charts.fmt_int(ckpt["completed"])
-        _tot = f"/{charts.fmt_int(ckpt['total'])}" if ckpt.get("total") else ""
-        st.warning(f"Start wipes the saved checkpoint ({_saved}{_tot} sources). "
-                   'Use "Resume" instead to keep it.')
-        cc = st.columns(4)
-        if cc[0].button("Yes, start fresh", use_container_width=True):
-            st.session_state["_confirm_fresh_start"] = False
-            _do_start()
-        if cc[1].button("Cancel", use_container_width=True):
-            st.session_state["_confirm_fresh_start"] = False
-            st.rerun()
+                   help="Run the lit stages in order, keeping existing data: "
+                        "ingest and clean skip sources already fetched/cleaned, so "
+                        "it never re-fetches from zero or wipes the checkpoint. "
+                        "Each stage uses the settings saved in its Configure modal. "
+                        "Use Reset for a from-scratch rebuild."):
+        _do_start()
     if b[1].button("Resume", disabled=running, use_container_width=True,
-                   help="Continue a prior run, skipping sources already fetched"):
+                   help="Continue an interrupted run from its checkpoint: skips "
+                        "Sourcing discovery and resumes ingest from where it "
+                        "stopped, skipping sources already fetched."):
         res = control.start("all", resume=True, settings=run_settings)
         st.rerun() if res.get("ok") else st.error(res["error"])
     if b[2].button("Stop", disabled=not running, use_container_width=True):
@@ -203,9 +193,6 @@ with ui.section("Run the full pipeline"):
         st.caption("Reset asks to confirm, then deletes the entire data/ folder.")
 
 # ------------------------------------------------------------------- funnel ----
-# Live: the funnel now reads corpus counts directly so the Overview updates on
-# every rerun. The counts are still expensive to measure, but users get fresh
-# data without waiting for cache expiry.
 def _funnel_row(label: str, d: dict) -> None:
     """One funnel stage as a labelled Sources / Records / Size row."""
     c = st.columns([1.6, 1, 1, 1])
@@ -215,14 +202,26 @@ def _funnel_row(label: str, d: dict) -> None:
     c[3].metric("Size", charts.fmt_size(d["size_mb"]))
 
 
-with ui.section("Corpus funnel"):
-    with st.spinner("Loading corpus funnel..."):
-        _snap = {
-            "funnel": data.data_funnel(),
-            "progress": data.ingest_progress(),
-        }
-    funnel = _snap["funnel"]
-    prog = _snap["progress"]
+@st.fragment(run_every=1)
+def _corpus_funnel() -> None:
+    """Live corpus funnel, refreshed every second in its own fragment.
+
+    Uses the cheap counts path (``data_funnel(measure_size=False)``) for live
+    source/record counts: the per-record JSONL scan and the raw ``os.walk`` are
+    skipped, so each tick is a few directory listings and small reads. The raw
+    Size is the one figure that needs a disk walk (raw is large), so it is pulled
+    from the cached measurement (:func:`cached.raw_size_mb`, a single ~1h-TTL walk
+    shared with the raw-table pages) instead of the catalog estimate, so it
+    reflects what is actually on disk. Because it is a fragment, it updates without
+    reflowing the rest of the page.
+    """
+    funnel = data.data_funnel(measure_size=False)
+    _root = data.data_root()
+    funnel["raw"]["size_mb"] = cached.raw_size_mb(_root)
+    # Cleaned records grow live as clean workers write; the clean report only lands
+    # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
+    funnel["cleaned"]["lines"] = cached.cleaned_records(_root)
+    prog = data.ingest_progress()
     pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
     st.progress(min(pct, 1.0),
                 text=f"Sources checked: {prog['checked']} of {prog['total']} "
@@ -231,13 +230,9 @@ with ui.section("Corpus funnel"):
     _funnel_row("Cleaned", funnel["cleaned"])
     _funnel_row("Final dataset", funnel["appended"])
 
-    import pandas as pd
-    # Keep the funnel summary lightweight by using metrics only.
-    # The per-stage counts above provide the same information without charts.
-    _ = pd.DataFrame(
-        {"records": [funnel["raw"]["lines"], funnel["cleaned"]["lines"],
-                     funnel["appended"]["lines"]]},
-        index=["Ingested (raw)", "Cleaned", "Final dataset"])
+
+with ui.section("Corpus funnel"):
+    _corpus_funnel()
 
 # ---------------------------------------------------------------- pipeline log -
 _sess = data.run_status()
