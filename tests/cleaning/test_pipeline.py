@@ -22,6 +22,26 @@ def _read_all(root):
     return text
 
 
+class _StubR:
+    def redact(self, text):
+        return text, 0
+
+
+class _StubL:
+    def detect(self, text):
+        return "en"
+
+    def lang_allowed(self, lang):
+        return True
+
+
+class _StubT:
+    backend = "stub"
+
+    def translate(self, text, src=None):
+        return text, True
+
+
 def _redirect_outputs(monkeypatch, tmp_path):
     """Point every cleaning output + dedup sidecar at tmp so real dirs are untouched."""
     clean_dir = str(tmp_path / "clean_data")
@@ -391,6 +411,106 @@ def test_report_rows_merge_updates_a_recleaned_source(tmp_path, monkeypatch):
     total = next(r for r in rows if r["sub_domain"] == "TOTAL")
     assert len(files) == 1 and files[0]["out"] == "6"       # the re-clean wins
     assert total["out"] == "6"                              # not 14
+
+
+def test_shard_files_leaves_small_files_whole(tmp_path):
+    """Almost every source keeps its exact current single output file."""
+    f = tmp_path / "a.jsonl"
+    f.write_bytes(b'{"t":1}\n' * 100)
+    out = pipeline.shard_files([(str(f), "Dom", "src", "Dom/src/a.jsonl")],
+                               min_bytes=10_000, target_records=10)
+    assert out == [(str(f), "Dom", "src", "Dom/src/a.jsonl", 0, None)]
+
+
+def test_shard_files_splits_a_big_file_into_windows(tmp_path):
+    f = tmp_path / "big.jsonl"
+    f.write_bytes(b'{"t":1}\n' * 25)                       # 25 records
+    out = pipeline.shard_files([(str(f), "Dom", "src", "Dom/src/big.jsonl")],
+                               min_bytes=1, target_records=10)
+    assert [(o[3], o[4], o[5]) for o in out] == [
+        ("Dom/src/big.p000.jsonl", 0, 10),
+        ("Dom/src/big.p001.jsonl", 10, 20),
+        ("Dom/src/big.p002.jsonl", 20, 25),
+    ]
+
+
+def test_shard_size_is_capped_by_bytes_for_huge_records(tmp_path):
+    """A row count alone is the wrong shard size.
+
+    This corpus has files whose records average ~400 KB, where 20k records is
+    still a multi-GB shard and one worker owns the tail again. The byte cap must
+    bite first for those, while ordinary small-record files keep using the row
+    count.
+    """
+    fat = tmp_path / "fat.jsonl"
+    fat.write_bytes(b'{"t":"' + b"x" * 994 + b'"}\n' * 1)      # 1 record ~1 KB
+    with open(fat, "wb") as f:
+        for _ in range(10):
+            f.write(b'{"t":"' + b"x" * 994 + b'"}\n')          # 10 records, ~10 KB
+    # Byte budget of 2 KB over ~1 KB records -> ~2 records per shard, not 20k.
+    monkey_target_bytes = 2 * 1024
+    import cybersec_slm.cleaning.pipeline as p
+    old = p.SHARD_TARGET_BYTES
+    p.SHARD_TARGET_BYTES = monkey_target_bytes
+    try:
+        out = p.shard_files([(str(fat), "Dom", "src", "Dom/src/fat.jsonl")],
+                            min_bytes=1, target_records=20_000)
+    finally:
+        p.SHARD_TARGET_BYTES = old
+    assert len(out) == 5                       # 10 records / 2 per shard
+    assert [(o[4], o[5]) for o in out][:2] == [(0, 2), (2, 4)]
+
+
+def test_shard_names_preserve_sorted_order(tmp_path):
+    """final_global_dedup walks data/clean sorted and keeps the FIRST copy of a
+    duplicate, so shard names must sit exactly where the original file sat -
+    otherwise sharding would silently change which source a shared record is
+    attributed to."""
+    big = tmp_path / "a.jsonl"
+    big.write_bytes(b'{"t":1}\n' * 25)
+    small = tmp_path / "b.jsonl"
+    small.write_bytes(b'{"t":1}\n')
+    out = pipeline.shard_files(
+        [(str(big), "Dom", "src", "Dom/src/a.jsonl"),
+         (str(small), "Dom", "src", "Dom/src/b.jsonl")],
+        min_bytes=10, target_records=10)
+    rels = sorted(o[3] for o in out)
+    # every shard of a.jsonl still sorts before b.jsonl, and in record order
+    assert rels == ["Dom/src/a.p000.jsonl", "Dom/src/a.p001.jsonl",
+                    "Dom/src/a.p002.jsonl", "Dom/src/b.jsonl"]
+
+
+def test_sharding_cleans_the_same_records_as_one_whole_file(tmp_path, monkeypatch):
+    """The quality guarantee: a window only selects WHICH records a worker reads,
+    so the cleaned corpus is the same set either way."""
+    monkeypatch.setattr(pipeline, "Redactor", _StubR)
+    monkeypatch.setattr(pipeline, "LangFilter", _StubL)
+    monkeypatch.setattr(pipeline, "Translator", _StubT)
+    pipeline.reset_cleaner_cache()
+
+    corpus = tmp_path / "corpus"
+    recs = [{"source": "x", "url": "", "license": "",
+             "text": f"A distinct english cleaning record number {i} long enough "
+                     "to survive the structural and anomaly gates."}
+            for i in range(25)]
+    _write_jsonl(str(corpus / "Dom" / "src" / "a.jsonl"), recs)
+    files = [(str(corpus / "Dom" / "src" / "a.jsonl"), "Dom", "src",
+              "Dom/src/a.jsonl")]
+
+    whole = str(tmp_path / "whole")
+    for chunk in pipeline.shard_files(files, min_bytes=10 ** 9, target_records=10):
+        pipeline.clean_chunk(chunk, clean_data_dir=whole)
+
+    sharded = str(tmp_path / "sharded")
+    chunks = pipeline.shard_files(files, min_bytes=1, target_records=10)
+    assert len(chunks) == 3                                  # actually sharded
+    for chunk in chunks:
+        pipeline.clean_chunk(chunk, clean_data_dir=sharded)
+
+    # Same records out, regardless of how the file was divided across workers.
+    assert sorted(_read_all(whole).splitlines()) == sorted(
+        _read_all(sharded).splitlines())
+    pipeline.reset_cleaner_cache()
 
 
 def test_resume_dedup_skips_done_files(tmp_path, monkeypatch):

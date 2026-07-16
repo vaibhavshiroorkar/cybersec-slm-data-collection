@@ -147,6 +147,42 @@ def _clean_source(src_dir: str, sid: str, raw_root: str,
     return sid, rows
 
 
+def _clean_chunk(chunk: tuple, sid: str, limit: int | None,
+                 drop_non_english: bool, out_dirs: tuple[str, str, str]
+                 ) -> tuple[str, list[dict]]:
+    """Pool worker: clean one window into the roots the PARENT resolved.
+
+    The roots are passed in, never read from this process's module globals: a
+    spawned worker rebuilds them from the real data root, so a test (or any caller)
+    that redirected them would otherwise be ignored and the live corpus written to.
+    """
+    clean_dir, flagged_dir, dropped_dir = out_dirs
+    rows = cleaning_pipeline.clean_chunk(
+        chunk, clean_data_dir=clean_dir, flagged_dir=flagged_dir,
+        dropped_dir=dropped_dir, limit=limit, drop_non_english=drop_non_english)
+    return sid, rows
+
+
+def _clean_work(to_clean: list[tuple[str, str]], raw_root: str) -> list[tuple]:
+    """``[(sid, chunk), ...]`` for every source to clean, biggest window first.
+
+    One entry per *window*, not per source: a source whose file is over the shard
+    threshold contributes several, which is what lets the pool put more than one
+    worker on a single huge file. Biggest-first so a giant window is picked up at
+    the start rather than becoming the straggler every other worker waits on.
+    """
+    work: list[tuple] = []
+    for src_dir, sid in to_clean:
+        if not os.path.isdir(src_dir):
+            logger.warning(f"clean: no raw data for source {sid}")
+            continue
+        files = cleaning_pipeline._source_files(src_dir, raw_root)
+        for chunk in cleaning_pipeline.shard_files(files):
+            work.append((sid, chunk))
+    work.sort(key=lambda t: ((t[1][5] or 0) - (t[1][4] or 0)), reverse=True)
+    return work
+
+
 def _label(d) -> str:
     return d.get("ref") or d.get("slug") or d.get("kind")
 
@@ -540,15 +576,30 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
             ledger.write(sid + "\n")
             ledger.flush()
     else:
-        workers = max(1, min(workers, len(to_clean)))
-        logger.info(f"clean: parallelizing over {workers} workers")
+        work = _clean_work(to_clean, raw_root)
+        # A source is only DONE when every one of its windows is, so the ledger
+        # keeps meaning exactly what it meant before sharding: "this source is
+        # fully cleaned, skip it on resume". Anything less would let a resume skip
+        # a source whose big file was only half done.
+        outstanding: dict[str, int] = {}
+        for sid, _chunk in work:
+            outstanding[sid] = outstanding.get(sid, 0) + 1
+        sharded = len(work) - len(outstanding)
+        workers = max(1, min(workers, len(work)))
+        logger.info(f"clean: parallelizing over {workers} workers "
+                    f"({len(work)} window(s) across {len(outstanding)} source(s)"
+                    + (f", {sharded} extra from sharding big files)" if sharded
+                       else ")"))
+        # Resolve the output roots HERE, in the parent, and hand them to the
+        # workers (see _clean_chunk).
+        out_dirs = (cleaning_pipeline.OUT_CLEAN_DATA, cleaning_pipeline.OUT_FLAGGED,
+                    cleaning_pipeline.OUT_DROPPED)
         ctx = mp.get_context("spawn")
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
             futures = {
-                pool.submit(_clean_source, src_dir, sid, raw_root, limit,
-                            drop_non_english): sid
-                for src_dir, sid in to_clean
-                if os.path.isdir(src_dir)
+                pool.submit(_clean_chunk, chunk, sid, limit, drop_non_english,
+                            out_dirs): sid
+                for sid, chunk in work
             }
             for fut in as_completed(futures):
                 sid = futures[fut]
@@ -559,8 +610,10 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
                     ledger.close()
                     raise
                 rows.extend(src_rows)
-                ledger.write(sid + "\n")
-                ledger.flush()
+                outstanding[sid] -= 1
+                if outstanding[sid] == 0:          # every window of this source done
+                    ledger.write(sid + "\n")
+                    ledger.flush()
     ledger.close()
 
     if rows:
