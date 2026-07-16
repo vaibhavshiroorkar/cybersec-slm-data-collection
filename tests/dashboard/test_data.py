@@ -321,6 +321,95 @@ def test_stage_timeline_rows_empty_for_no_timeline():
     assert charts.stage_timeline_rows([]) == []
 
 
+def test_live_rate_rows_are_deltas_over_real_elapsed_time():
+    """The sampler records totals; the chart shows how fast the total moves."""
+    rows = charts.live_rate_rows([
+        {"t": 100.0, "value": 10.0},
+        {"t": 102.0, "value": 20.0},        # +10 over 2s -> 5/s
+        {"t": 103.0, "value": 23.0},        # +3 over 1s  -> 3/s
+    ])
+    assert [r["rate"] for r in rows] == [5.0, 3.0]
+    assert [r["elapsed_s"] for r in rows] == [2.0, 3.0]
+
+
+def test_live_rate_rows_clamp_a_shrinking_total():
+    """final_global_dedup rewrites files in place, so a total can dip; a negative
+    throughput is meaningless."""
+    rows = charts.live_rate_rows([{"t": 0.0, "value": 50.0},
+                                  {"t": 1.0, "value": 40.0}])
+    assert [r["rate"] for r in rows] == [0.0]
+
+
+def test_live_rate_rows_need_two_samples():
+    assert charts.live_rate_rows([{"t": 0.0, "value": 1.0}]) == []
+    assert charts.live_rate_rows([]) == []
+
+
+def test_clean_eta_is_measured_in_bytes_not_source_count(tmp_path, monkeypatch):
+    """Sources span KB to GB, so counting them projects nonsense; and only THIS
+    run's work may set the rate, since the ledger spans every resume."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True)
+    # 4 sources of 100 bytes each; a resume already did 2 before this run began.
+    monkeypatch.setattr(data, "_raw_sizes_by_sid",
+                        lambda: {f"D/s{i}": 100 for i in range(4)})
+    (logs / "cleaned_sources.txt").write_text("D/s0\nD/s1\nD/s2\n", encoding="utf-8")
+    monkeypatch.setattr(data, "_resume_skipped", lambda: 2)   # s0, s1 were skipped
+    monkeypatch.setattr(data, "_clean_workers", lambda: 1)
+
+    # This run did s2 (100 bytes) in 10s -> 10 B/s. One source (100B) remains.
+    eta, basis = data.clean_eta(10.0)
+    assert basis == "clean-bytes"
+    assert eta == 10.0            # 100 bytes / 10 B/s, NOT a source-count guess
+
+
+def test_clean_eta_is_bounded_by_the_biggest_single_source(tmp_path, monkeypatch):
+    """One file is cleaned by one worker, so the tail cannot be parallelised away."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True)
+    # Done: 400 bytes. Remaining: one huge 1000-byte source.
+    monkeypatch.setattr(data, "_raw_sizes_by_sid",
+                        lambda: {"D/done": 400, "D/huge": 1000})
+    (logs / "cleaned_sources.txt").write_text("D/done\n", encoding="utf-8")
+    monkeypatch.setattr(data, "_resume_skipped", lambda: 0)
+    monkeypatch.setattr(data, "_clean_workers", lambda: 4)
+
+    # 400 bytes in 10s -> 40 B/s across 4 workers -> 10 B/s per worker.
+    # Linear would say 1000/40 = 25s; one worker really needs 1000/10 = 100s.
+    eta, _basis = data.clean_eta(10.0)
+    assert eta == 100.0
+
+
+def test_clean_eta_names_the_dedup_tail_rather_than_claiming_zero(tmp_path,
+                                                                  monkeypatch):
+    """Every source cleaned but still in `clean` means the cross-source dedup tail.
+
+    Its cost has nothing to do with the per-source rate, so reporting the 0 that
+    "no sources remain" implies would claim the run had finished while a long pass
+    was still running.
+    """
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir(parents=True)
+    monkeypatch.setattr(data, "_raw_sizes_by_sid", lambda: {"D/s0": 100})
+    (logs / "cleaned_sources.txt").write_text("D/s0\n", encoding="utf-8")
+    monkeypatch.setattr(data, "_resume_skipped", lambda: 0)
+
+    eta, basis = data.clean_eta(10.0)
+    assert eta is None and basis == "finalizing"
+
+
+def test_clean_eta_has_no_rate_before_the_first_source_finishes(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    (tmp_path / "logs").mkdir(parents=True)
+    monkeypatch.setattr(data, "_raw_sizes_by_sid", lambda: {"D/s0": 100})
+    monkeypatch.setattr(data, "_resume_skipped", lambda: 0)
+    eta, basis = data.clean_eta(5.0)
+    assert eta is None and basis == "clean-warmup"
+
+
 def test_run_phase_falls_back_to_newest_log_without_pointer(tmp_path, monkeypatch):
     """No pointer (a CLI run, or one predating it): newest non-empty log still wins."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))

@@ -124,6 +124,37 @@ def stage_timeline_rows(timeline: list[dict]) -> list[dict]:
     return rows
 
 
+# The live-rate line. One series, so no legend (the title names it) and no
+# categorical slot is spent: this is the same blue the timeline's running state
+# uses, because it is the same thing - the stage that is live right now.
+LIVE_RATE_COLOR = TIMELINE_RUNNING_COLOR
+
+
+def live_rate_rows(samples: list[dict]) -> list[dict]:
+    """Turn cumulative ``{"t", "value"}`` samples into per-second rate rows.
+
+    The sampler records a running total (bytes on disk, sources done); what the
+    chart shows is how fast that total is moving, so each row is the delta
+    between neighbouring samples over their real elapsed time - not over the
+    nominal tick, which a slow rerun or a paused tab would make a lie.
+
+    Negative deltas are clamped to 0: a stage's total can dip when a pass rewrites
+    a file in place (final_global_dedup does exactly this), and a negative
+    throughput is meaningless.
+    """
+    rows: list[dict] = []
+    for prev, cur in zip(samples, samples[1:], strict=False):
+        dt = cur["t"] - prev["t"]
+        if dt <= 0:
+            continue
+        rows.append({
+            "t": cur["t"],
+            "elapsed_s": cur["t"] - samples[0]["t"],
+            "rate": max(cur["value"] - prev["value"], 0.0) / dt,
+        })
+    return rows
+
+
 def eda_trend_rows(history: list[dict]) -> list[dict]:
     """Flatten EDA run history into tidy rows for the trend line charts.
 

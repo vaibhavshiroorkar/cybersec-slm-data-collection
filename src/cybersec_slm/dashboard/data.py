@@ -994,6 +994,46 @@ def _run_started_at() -> float | None:
     return _parse_log_ts(first.split("|", 1)[0] if "|" in first else first)
 
 
+def stage_progress_sample() -> dict | None:
+    """One cheap scalar of what the LIVE stage has produced so far.
+
+    ``{"stage", "label", "value", "unit", "what"}`` — or None when nothing is
+    running, or the live stage has no meaningful throughput to sample.
+
+    Each stage is measured in the unit it actually moves, which is why this is a
+    per-stage lookup rather than one number: sourcing accumulates catalog rows,
+    ingest finishes sources, clean grows ``data/clean`` on disk, and schema grows
+    the final dataset. EDA is a single scan with no incremental output, so it has
+    no sample.
+
+    Every branch must stay cheap enough to call once a second: this is sampled to
+    derive a rate, so an expensive read here would cost more than the work it
+    measures. That rules out record counts (reading every byte of data/clean) in
+    favour of bytes on disk.
+    """
+    if run_status()["state"] != "running":
+        return None
+    key = (run_phase() or {}).get("phase")
+    if key == "source":
+        return {"stage": key, "label": "Sourcing", "unit": "rows",
+                "what": "catalog rows discovered",
+                "value": float(_catalog_total() or 0)}
+    if key == "ingest":
+        return {"stage": key, "label": "Ingest", "unit": "sources",
+                "what": "sources fetched",
+                "value": float(_completed_count())}
+    if key == "clean":
+        return {"stage": key, "label": "Clean", "unit": "MB",
+                "what": "cleaned output on disk",
+                "value": _dir_size_mb(os.path.join(_root(), "data", "clean"))}
+    if key == "schema":
+        path = os.path.join(_final(), "dataset.jsonl")
+        size = os.path.getsize(path) / (1024 * 1024) if os.path.exists(path) else 0.0
+        return {"stage": key, "label": "Schema", "unit": "MB",
+                "what": "final dataset written", "value": size}
+    return None
+
+
 def stage_timeline() -> list[dict]:
     """When each stage of the current/last run started and stopped.
 
@@ -1068,6 +1108,125 @@ def stage_timeline() -> list[dict]:
     return out
 
 
+# Per-source raw .jsonl bytes, memoized: the clean ETA needs them every refresh
+# and data/raw does not change while cleaning runs.
+_RAW_SIZES_TTL_S = 60.0
+_raw_sizes_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _raw_sizes_by_sid() -> dict[str, int]:
+    """``{"<sub-domain>/<source>": jsonl_bytes}`` for every raw source with data."""
+    global _raw_sizes_cache
+    now = time.monotonic()
+    if _raw_sizes_cache is not None and now - _raw_sizes_cache[0] < _RAW_SIZES_TTL_S:
+        return _raw_sizes_cache[1]
+    raw_root = os.path.join(_root(), "data", "raw")
+    sizes: dict[str, int] = {}
+    if os.path.isdir(raw_root):
+        try:
+            for dom in os.scandir(raw_root):
+                if not dom.is_dir() or dom.name.startswith("."):
+                    continue
+                for src in os.scandir(dom.path):
+                    if not src.is_dir() or src.name.startswith("."):
+                        continue
+                    files, total = _jsonl_stats(src.path)
+                    if files:
+                        sizes[f"{dom.name}/{src.name}"] = total
+        except OSError:
+            pass
+    _raw_sizes_cache = (now, sizes)
+    return sizes
+
+
+def _cleaned_ledger_sids() -> list[str]:
+    """Sources recorded cleaned, in the order they finished (append-only)."""
+    path = os.path.join(_logs(), "cleaned_sources.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return []
+
+
+def _resume_skipped() -> int:
+    """How many sources this run's clean stage skipped as already cleaned.
+
+    The ledger spans every resume, so it cannot say what *this* run has done. The
+    run logs the skip count at startup and the ledger is append-only, so the
+    entries past that mark are exactly this run's work.
+    """
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"clean: resume skipping (\d+) already-cleaned", ln)
+                if m:
+                    return int(m.group(1))
+    except OSError:
+        pass
+    return 0
+
+
+def _clean_workers() -> int:
+    """Worker count this run's clean pass reported (1 when it did not say)."""
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return 1
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"clean: parallelizing over (\d+) workers", ln)
+                if m:
+                    return max(int(m.group(1)), 1)
+    except OSError:
+        pass
+    return 1
+
+
+def clean_eta(elapsed_s: float) -> tuple[float | None, str]:
+    """``(remaining_seconds, basis)`` for the clean stage, measured in bytes.
+
+    Source count is the wrong unit: sources span a kilobyte to twenty gigabytes,
+    so "N of M sources" projects nonsense. Cleaning cost tracks records, and raw
+    .jsonl bytes are the cheapest close proxy.
+
+    Two corrections make this honest rather than merely linear:
+
+    * Only *this* run's sources count toward the rate (see :func:`_resume_skipped`);
+      dividing every resume's work by this run's elapsed would inflate it.
+    * The tail is bounded by the single biggest remaining source, because the pool
+      parallelises per source and one file is cleaned by one worker. A purely
+      linear projection promises a finish the scheduler cannot deliver, so the
+      estimate is the larger of the two.
+    """
+    sizes = _raw_sizes_by_sid()
+    if not sizes:
+        # No per-source signal to project from (raw purged, or already consumed).
+        return None, "finalizing"
+    ledger = _cleaned_ledger_sids()
+    done_this_run = ledger[_resume_skipped():]
+    done_bytes = sum(sizes.get(s, 0) for s in done_this_run)
+    if elapsed_s <= 0 or done_bytes <= 0:
+        return None, "clean-warmup"          # nothing finished yet: no rate to use
+
+    remaining = {s: n for s, n in sizes.items() if s not in set(ledger)}
+    if not remaining:
+        # Every source is cleaned, but the phase is still `clean`: this is the
+        # cross-source dedup tail, whose cost has nothing to do with the per-source
+        # rate. Saying "0 seconds" here would claim the run is done while a long
+        # pass is still going, so name the tail instead of inventing a number.
+        return None, "finalizing"
+    rate = done_bytes / elapsed_s                       # bytes/s, all workers
+    linear = sum(remaining.values()) / rate
+    # One source cannot go faster than one worker.
+    per_worker = rate / _clean_workers()
+    tail = max(remaining.values()) / per_worker if per_worker > 0 else 0.0
+    return max(linear, tail), "clean-bytes"
+
+
 def run_timing() -> dict:
     """Elapsed time since the run started, plus a rough projected total runtime.
 
@@ -1098,7 +1257,13 @@ def run_timing() -> dict:
         eta_s = max(elapsed_s / completed * (total - completed), 0.0)
         total_s = elapsed_s + eta_s
         basis = "ingest-linear"
-    elif pkey in ("clean", "eda", "schema"):
+    elif pkey == "clean":
+        # Clean is the long pole on a large corpus, so "finalizing" was the least
+        # useful thing to say for the stage that takes the most wall-clock.
+        eta_s, basis = clean_eta(elapsed_s)
+        if eta_s is not None:
+            total_s = elapsed_s + eta_s
+    elif pkey in ("eda", "schema"):
         basis = "finalizing"
     else:
         basis = "starting"
