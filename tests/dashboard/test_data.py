@@ -262,6 +262,65 @@ def test_run_phase_follows_pointer_not_newest_log(tmp_path, monkeypatch):
     assert data.run_phase()["phase"] == "clean"
 
 
+_TIMELINE_LOG = (
+    "2026-07-16 10:00:00.000 | INFO | x - ingest: 130 sources\n"
+    "2026-07-16 10:00:30.000 | INFO | x - ingest: done ok=125\n"
+    "2026-07-16 10:10:00.000 | INFO | x - clean: /data/raw -> /data/clean\n"
+    "2026-07-16 10:40:00.000 | INFO | x - eda: scanning /data/clean\n"
+)
+
+
+def test_stage_timeline_bounds_each_stage_by_the_next(tmp_path, monkeypatch):
+    """A stage runs until the next one starts; the furthest reached runs to now."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.1.log", _TIMELINE_LOG)
+    monkeypatch.setattr(data, "run_status", lambda: {"state": "idle"})
+
+    tl = data.stage_timeline()
+    assert [r["stage"] for r in tl] == ["ingest", "clean", "eda"]   # source skipped
+    ingest, clean, eda = tl
+    assert ingest["start_s"] == 0.0 and ingest["duration_s"] == 600.0   # -> clean
+    assert clean["start_s"] == 600.0 and clean["duration_s"] == 1800.0  # -> eda
+    # Idle: the last stage stops at the final log line, not at wall-clock now.
+    assert eda["start_s"] == 2400.0 and eda["duration_s"] == 0.0
+    assert [r["running"] for r in tl] == [False, False, False]
+
+
+def test_stage_timeline_runs_the_live_stage_to_now(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.1.log", _TIMELINE_LOG)
+    monkeypatch.setattr(data, "run_status", lambda: {"state": "running"})
+    monkeypatch.setattr(data.time, "time",
+                        lambda: data._parse_log_ts("2026-07-16 11:00:00"))
+
+    eda = data.stage_timeline()[-1]
+    assert eda["stage"] == "eda" and eda["running"] is True
+    assert eda["duration_s"] == 1200.0          # 10:40 -> 11:00, still going
+
+
+def test_stage_timeline_empty_without_a_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    assert data.stage_timeline() == []
+
+
+def test_stage_timeline_rows_shape_the_chart_data():
+    """Minutes for the x axis, state for the colour, a formatted duration."""
+    rows = charts.stage_timeline_rows([
+        {"stage": "clean", "label": "Clean", "start_s": 0.0, "end_s": 600.0,
+         "duration_s": 600.0, "running": False},
+        {"stage": "eda", "label": "EDA gate", "start_s": 600.0, "end_s": 690.0,
+         "duration_s": 90.0, "running": True},
+    ])
+    assert [r["stage"] for r in rows] == ["Clean", "EDA gate"]
+    assert rows[0]["start_min"] == 0.0 and rows[0]["end_min"] == 10.0
+    assert rows[0]["state"] == "done" and rows[0]["duration"] == "10:00"
+    assert rows[1]["state"] == "running" and rows[1]["duration"] == "1:30"
+
+
+def test_stage_timeline_rows_empty_for_no_timeline():
+    assert charts.stage_timeline_rows([]) == []
+
+
 def test_run_phase_falls_back_to_newest_log_without_pointer(tmp_path, monkeypatch):
     """No pointer (a CLI run, or one predating it): newest non-empty log still wins."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))

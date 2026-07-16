@@ -257,6 +257,65 @@ def _corpus_funnel() -> None:
 with ui.section("Corpus funnel"):
     _corpus_funnel()
 
+
+# --------------------------------------------------------- stage activity ------
+def _timeline_chart(rows: list[dict]):
+    """Gantt of stage activity: stages on y, minutes since the run began on x."""
+    import altair as alt
+
+    order = [r["stage"] for r in rows]          # pipeline order, not alphabetical
+    base = alt.Chart(alt.Data(values=rows))
+    bars = base.mark_bar(cornerRadius=4, height=14).encode(
+        x=alt.X("start_min:Q", title="Minutes since the run began",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+        x2="end_min:Q",
+        y=alt.Y("stage:N", title=None, sort=order,
+                axis=alt.Axis(grid=False, domain=False, ticks=False,
+                              labelColor="#c3c2b7", labelFontSize=12)),
+        color=alt.Color("state:N", title="Stage",
+                        scale=alt.Scale(domain=list(charts.TIMELINE_STATES),
+                                        range=[charts.TIMELINE_DONE_COLOR,
+                                               charts.TIMELINE_RUNNING_COLOR]),
+                        legend=alt.Legend(orient="top", direction="horizontal",
+                                          labelColor="#c3c2b7",
+                                          titleColor="#c3c2b7")),
+        tooltip=[alt.Tooltip("stage:N", title="Stage"),
+                 alt.Tooltip("state:N", title="State"),
+                 alt.Tooltip("duration:N", title="Duration"),
+                 alt.Tooltip("start_min:Q", title="Started (min)", format=".1f")],
+    )
+    # Direct label per bar: five bars is few enough to label every one, and it
+    # keeps duration readable without a hover (and off the colour alone).
+    labels = base.mark_text(align="left", dx=6, fontSize=11,
+                            color="#c3c2b7").encode(
+        x=alt.X("end_min:Q"), y=alt.Y("stage:N", sort=order), text="duration:N")
+    return (bars + labels).properties(height=28 * len(rows) + 40).configure_view(
+        strokeWidth=0).configure_legend(labelFontSize=11, titleFontSize=11)
+
+
+@st.fragment(run_every=5)
+def _stage_activity() -> None:
+    """Live stage activity, refreshed every 5s.
+
+    Slower than the funnel's 1s tick on purpose: this reads the run's whole log
+    and only changes when a stage boundary is crossed, which is minutes apart.
+    """
+    rows = charts.stage_timeline_rows(data.stage_timeline())
+    if not rows:
+        st.caption("No stage activity yet. Start a run from the panel above.")
+        return
+    st.altair_chart(_timeline_chart(rows), use_container_width=True)
+    st.caption("Each bar spans from when a stage first logged to when the next "
+               "one began; the running stage extends to now. Stages a resumed "
+               "plan skipped never logged, so they are absent rather than empty.")
+
+
+with ui.section("Stage activity",
+                "Which stage the run has been in, over time."):
+    _stage_activity()
+
 # ---------------------------------------------------------------- pipeline log -
 _sess = data.run_status()
 
