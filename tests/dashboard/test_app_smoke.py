@@ -150,6 +150,23 @@ def test_live_strip_shows_progress_chart_while_running(tmp_path, monkeypatch):
     assert at.session_state["_live_history"]["checked"] == [2, 2]
 
 
+def test_overview_funnel_uses_legacy_data_api_without_measure_size_kwarg(monkeypatch):
+    from cybersec_slm.dashboard import app
+
+    def legacy_data_funnel():
+        return {"raw": {"sources": 1, "lines": 2, "size_mb": 3.0},
+                "cleaned": {"sources": 4, "lines": 5, "size_mb": 6.0},
+                "appended": {"sources": 7, "lines": 8, "size_mb": 9.0}}
+
+    monkeypatch.setattr(app.data, "data_funnel", legacy_data_funnel)
+
+    funnel = app._data_funnel_snapshot(measure_size=False)
+
+    assert funnel["raw"]["sources"] == 1
+    assert funnel["cleaned"]["lines"] == 5
+    assert funnel["appended"]["size_mb"] == 9.0
+
+
 def test_stage_config_modal_opens_with_stage_widgets(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
