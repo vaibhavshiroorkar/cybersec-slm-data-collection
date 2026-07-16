@@ -237,6 +237,38 @@ def test_run_phase_unknown_without_logs(tmp_path, monkeypatch):
     assert data.run_phase()["phase"] == "unknown"
 
 
+def test_run_phase_follows_pointer_not_newest_log(tmp_path, monkeypatch):
+    """Phase comes from the orchestrator's log, named by the pointer file.
+
+    During a parallel clean every worker writes its own pipeline.<pid>.log, and
+    one of them is always newer than the (quiet) orchestrator log — as are the
+    stub logs any cybersec_slm process drops into logs/. Picking newest-by-mtime
+    reads a log with no stage markers and reports "Starting..." forever while the
+    run is actually mid-clean.
+    """
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    run_log = logs / "pipeline.100.log"
+    run_log.write_text("x - ingest: done ok=125\n"
+                       "x - clean: /data/raw -> /data/clean\n", encoding="utf-8")
+    # A clean worker's log: non-empty, newer, and carrying no stage marker.
+    worker = logs / "pipeline.200.log"
+    worker.write_text("x - Dom/src/a.jsonl: in=5 out=5\n", encoding="utf-8")
+    os.utime(run_log, (1_600_000_000, 1_600_000_000))
+    os.utime(worker, (1_600_001_000, 1_600_001_000))          # newest by mtime
+    (logs / "active_run_log.txt").write_text(str(run_log), encoding="utf-8")
+
+    assert data.run_phase()["phase"] == "clean"
+
+
+def test_run_phase_falls_back_to_newest_log_without_pointer(tmp_path, monkeypatch):
+    """No pointer (a CLI run, or one predating it): newest non-empty log still wins."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _write_log(tmp_path, "pipeline.7.log", "x - clean: /data/raw -> /data/clean\n")
+    assert data.run_phase()["phase"] == "clean"
+
+
 def test_stage_states_all_done_when_artifacts_present(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     logs = tmp_path / "logs"
@@ -342,6 +374,92 @@ def test_raw_funnel_counts_disk_sources_and_catalog_lines(tmp_path, monkeypatch)
     assert funnel["raw"]["sources"] == 2                 # counted on disk
     assert funnel["raw"]["lines"] == 22_000_000          # joined from the catalog
     assert funnel["raw"]["size_mb"] == 3.0               # measured on disk (1 + 2 MB)
+
+
+def test_raw_size_measures_only_the_jsonl_corpus(tmp_path, monkeypatch):
+    """Raw size + file count describe the .jsonl corpus, not the fetch scratch.
+
+    Some sources clone a whole git repo into data/raw (millions of files beside a
+    single .jsonl). Only .jsonl is ever ingested or cleaned, so counting every
+    file both reported clone scratch as ingested data and made the walk cost
+    minutes.
+    """
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    src = raw / "Vulnerability Management" / "patrowl"
+    (src / "repo" / "nested").mkdir(parents=True)
+    (src / "data.jsonl").write_bytes(b"\0" * (2 * 1024 * 1024))
+    # Clone scratch: never cleaned, so it is not part of the corpus.
+    (src / "repo" / "README.md").write_bytes(b"\0" * (4 * 1024 * 1024))
+    (src / "repo" / "nested" / "vuln.json").write_bytes(b"\0" * (8 * 1024 * 1024))
+
+    rows = data.raw_table()
+    assert len(rows) == 1
+    assert rows[0]["files"] == 1                          # the .jsonl, not the scratch
+    assert rows[0]["size_mb"] == 2.0                      # 12 MB of scratch excluded
+
+    monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {})
+    assert data.data_funnel(measure_size=True)["raw"]["size_mb"] == 2.0
+
+
+def test_count_jsonl_records_rereads_only_changed_files(tmp_path):
+    """Counting data/clean re-reads a file only when its (mtime, size) changed.
+
+    A cleaned .jsonl is written once and left alone, but the Overview refreshes
+    its record count every 20s — and re-reading all of data/clean took 32s at
+    9.5 GB, so the dashboard could never keep up with itself during a run.
+    """
+    root = tmp_path / "clean"
+    (root / "Dom" / "src").mkdir(parents=True)
+    f = root / "Dom" / "src" / "a.jsonl"
+    fixed = 1_600_000_000                                    # pin mtime: exact identity
+    # write_bytes, not write_text: on Windows text mode turns \n into \r\n, which
+    # would change the byte length these assertions depend on.
+    f.write_bytes(b'{"a":1}\n{"a":2}\n')                     # 16 bytes, 2 records
+    os.utime(f, (fixed, fixed))
+    assert data._count_jsonl_records(str(root)) == 2
+
+    # Rewrite to 1 record at the SAME byte length and the same pinned mtime, so the
+    # file's identity is unchanged. The stale answer proves it was not re-read —
+    # exactly the work being skipped for gigabytes of already-settled output.
+    f.write_bytes(b'{"abcdefgh":123}')                       # 16 bytes, 1 record
+    os.utime(f, (fixed, fixed))
+    assert data._count_jsonl_records(str(root)) == 2
+
+    # A real append changes the size, so the memo is busted and the count is fresh.
+    with open(f, "ab") as fh:
+        fh.write(b'\n{"a":3}\n{"a":4}\n')
+    assert data._count_jsonl_records(str(root)) == 3
+
+
+def test_cleaned_funnel_counts_disk_not_the_clean_report(tmp_path, monkeypatch):
+    """Cleaned Records is what is ON DISK, never the clean report's TOTAL.
+
+    The report is a per-PASS statistic and cannot be the corpus size:
+
+    * a --resume pass only holds the sources IT cleaned (the rest are skipped via
+      the ledger), and the report is rewritten from that subset, so it understates
+      a resumed corpus;
+    * final_global_dedup deletes records from data/clean AFTER the report is
+      written, so even a clean single pass overstates what is actually there.
+    """
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    clean = tmp_path / "data" / "clean" / "Dom" / "src"
+    clean.mkdir(parents=True)
+    (clean / "a.jsonl").write_bytes(b'{"t":1}\n{"t":2}\n{"t":3}\n')      # 3 on disk
+
+    # A report claiming only 1 record out — as a resumed pass would.
+    logs = tmp_path / "logs"
+    logs.mkdir(exist_ok=True)
+    (logs / "clean_report.csv").write_text(
+        "sub_domain,source,file,in,out\n"
+        "Dom,src,Dom/src/a.jsonl,1,1\n"
+        "TOTAL,,1 files,1,1\n", encoding="utf-8")
+
+    funnel = data.data_funnel(measure_size=True)
+    assert funnel["cleaned"]["lines"] == 3          # disk wins over the report's 1
 
 
 def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
