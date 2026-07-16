@@ -139,7 +139,24 @@ with ui.section("Run the full pipeline"):
         res = control.start("all", settings={**run_settings, "resume": True})
         st.rerun() if res.get("ok") else st.error(res["error"])
 
-    b = st.columns(4)
+    def _do_quick_finish() -> None:
+        # Stop first: the snapshot must not race the clean pass it is snapshotting.
+        # The ledger is untouched by a stop, so the resume inside the plan picks up
+        # exactly where this run left off and nothing is recleaned.
+        if control.status()["running"]:
+            control.stop()
+        res = control.start("quick-finish", settings=run_settings)
+        st.rerun() if res.get("ok") else st.error(res["error"])
+
+    b = st.columns(5)
+    if b[4].button("Quick finish", use_container_width=True,
+                   help="Pause cleaning and build a dataset from what is already "
+                        "cleaned: EDA (observe only) and Schema run over data/clean "
+                        "as it stands, then cleaning resumes from its checkpoint and "
+                        "a final EDA + Schema rebuild over the fuller corpus. "
+                        "Nothing is recleaned; the snapshot's gate never blocks the "
+                        "run, because a partial corpus fails it by construction."):
+        _do_quick_finish()
     if b[0].button("Start", disabled=running, use_container_width=True,
                    help="Run the lit stages in order, keeping existing data: "
                         "ingest and clean skip sources already fetched/cleaned, so "

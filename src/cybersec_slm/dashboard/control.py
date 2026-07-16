@@ -176,6 +176,44 @@ def build_full_plan(overrides: dict | None = None, *,
     return plan
 
 
+def build_quick_finish_plan(overrides: dict | None = None) -> list[list[str]]:
+    """Snapshot the corpus cleaned so far, then carry on cleaning.
+
+    Cleaning a large corpus takes days, and until it finishes there is no dataset
+    to look at. This orders the same stages so there is::
+
+        eda --no-enforce  ->  schema  ->  clean --resume  ->  eda  ->  schema
+
+    The first eda/schema run over ``data/clean`` exactly as it stands, producing a
+    real ``data/final/dataset.jsonl`` from the sources cleaned so far. Cleaning then
+    resumes from its ledger — the snapshot never touches it, so nothing is
+    recleaned — and a final eda/schema rebuilds the dataset over the fuller corpus.
+
+    Two details make it safe rather than merely convenient:
+
+    * the snapshot's eda is ``--no-enforce``. A partial corpus fails the
+      sufficiency gate by construction, and an enforced failure would end the run
+      before it got back to cleaning — turning "snapshot and continue" into "stop".
+    * the snapshot skips ``final_global_dedup`` (that only runs at the end of a
+      clean pass), but ``normalize`` does its own exact + near dedup, so the
+      snapshot dataset is still deduplicated.
+
+    Pure and side-effect-free, like the other plan builders.
+    """
+    over = dict(overrides or {})
+    snap = {**settings_store.get_stage("eda"), **over, "no_enforce": True}
+    clean = {**settings_store.get_stage("clean"), **over}
+    final_eda = {**settings_store.get_stage("eda"), **over}
+    schema = {**settings_store.get_stage("schema"), **over}
+    return [
+        stage_argv("eda", settings=snap),                  # snapshot: observe only
+        stage_argv("schema", settings=schema),
+        stage_argv("clean", resume=True, settings=clean),  # carry on from the ledger
+        stage_argv("eda", settings=final_eda),
+        stage_argv("schema", settings=schema),
+    ]
+
+
 def _logs_dir() -> str:
     return os.path.join(core.data_root(), "logs")
 
@@ -286,11 +324,12 @@ def start(stage: str = "all", *, resume: bool = False,
     os.makedirs(logs, exist_ok=True)
     if _command is not None:
         cmd = _command
-    elif stage == "all":
-        # Full run: one detached orchestrator that runs the five stages in order,
-        # each with its own page's saved settings (overridden by ``settings``, the
-        # Overview panel). The plan is handed to it via logs/pipeline_plan.json.
-        plan = build_full_plan(settings, resume=resume)
+    elif stage in ("all", "quick-finish"):
+        # One detached orchestrator running a plan of stages in order, each with
+        # its own page's saved settings (overridden by ``settings``, the Overview
+        # panel). The plan is handed to it via logs/pipeline_plan.json.
+        plan = (build_quick_finish_plan(settings) if stage == "quick-finish"
+                else build_full_plan(settings, resume=resume))
         with open(_plan_file(), "w", encoding="utf-8") as f:
             json.dump(plan, f)
         cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
