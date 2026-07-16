@@ -159,8 +159,11 @@ def run_phase(lookback: int = 500) -> dict:
     "idle".
     """
     total = len(stages.STAGES)
-    logs = _pipeline_logs()
-    newest = logs[-1] if logs else None
+    # The RUN's log, not merely the newest one: during a parallel clean every
+    # worker writes its own pipeline.<pid>.log (and any cybersec_slm process, a
+    # test included, drops a stub in logs/), so newest-by-mtime reads a log with
+    # no stage markers and reports "Starting..." for the whole stage.
+    newest = _current_run_log()
     lines: list[str] = []
     if newest and os.path.exists(newest):
         try:
@@ -521,13 +524,44 @@ def ingest_progress() -> dict:
     return {"checked": checked, "with_data": with_data, "total": total}
 
 
+def _jsonl_stats(path: str) -> tuple[int, int]:
+    """``(.jsonl file count, total bytes)`` under a directory tree.
+
+    Measures the *corpus* — the .jsonl files ingestion produced and cleaning
+    consumes — not everything on disk. A source that unpacked an archive can
+    leave millions of files behind in its ``_z`` scratch dir (see
+    :data:`cybersec_slm.cleaning.common.SCRATCH_DIRS`); those are neither corpus
+    nor worth a ``stat`` each, and pruning them is what keeps this walk fast.
+    """
+    from ..cleaning.common import SCRATCH_DIRS
+
+    files = 0
+    total = 0
+    try:
+        for r, dirs, fs in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
+            for f in fs:
+                if not f.lower().endswith(".jsonl"):
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(r, f))
+                    files += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return files, total
+
+
 def raw_table() -> list[dict]:
-    """Per-source rows for what is physically under ``data/raw/`` (file count + size).
+    """Per-source rows for the .jsonl corpus under ``data/raw/`` (file count + size).
 
     One row per ``<sub-domain>/<source>`` folder, so the table maps the folder
-    tree exactly. Walks the whole raw tree once (100+ GB, so callers should cache
-    it), reporting on-disk bytes rather than catalog figures. Record counts are
-    omitted here because counting them means reading every JSONL line (minutes).
+    tree exactly. ``files`` / ``size_mb`` describe the .jsonl corpus (what was
+    actually ingested and will be cleaned), so they line up with the Records
+    column beside them; fetch scratch on disk is neither counted nor measured.
+    Record counts are omitted because counting them means reading every JSONL
+    line (minutes).
     """
     raw_root = os.path.join(_root(), "data", "raw")
     if not os.path.exists(raw_root):
@@ -540,14 +574,7 @@ def raw_table() -> list[dict]:
             for src in os.scandir(dom.path):
                 if not src.is_dir() or src.name.startswith("."):
                     continue
-                files, total = 0, 0
-                for r, _, fs in os.walk(src.path):
-                    for f in fs:
-                        try:
-                            total += os.path.getsize(os.path.join(r, f))
-                            files += 1
-                        except OSError:
-                            pass
+                files, total = _jsonl_stats(src.path)
                 rows.append({"sub-domain": dom.name, "source": src.name,
                              "files": files, "size_mb": total / (1024 * 1024)})
     except OSError:
@@ -601,12 +628,14 @@ def ingest_outcome() -> dict:
         except sqlite3.Error:
             pass
 
-    # Log next: fetch failures and timeouts carry the clearest reasons.
+    # Log next: fetch failures and timeouts carry the clearest reasons. Read the
+    # RUN's log (see _current_run_log) — a worker's log or a stub would carry no
+    # ingest summary at all.
     summary: dict | None = None
-    logs = _pipeline_logs()
-    if logs:
+    run_log = _current_run_log()
+    if run_log:
         try:
-            with open(logs[-1], encoding="utf-8", errors="replace") as f:
+            with open(run_log, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             lines = []
@@ -947,18 +976,18 @@ def _run_started_at() -> float | None:
     """Epoch start time of the current/last run.
 
     Prefers the dashboard control file's ``started_at`` (exact for runs launched
-    from the dashboard); falls back to the first timestamp of the newest pipeline
-    log (a CLI run has no control file). Returns None when neither is available.
+    from the dashboard); falls back to the first timestamp of the run's own log
+    (a CLI run has no control file). Returns None when neither is available.
     """
     from . import control
     ts = _parse_log_ts((control.status() or {}).get("started_at") or "")
     if ts is not None:
         return ts
-    logs = _pipeline_logs()
-    if not logs:
+    run_log = _current_run_log()
+    if not run_log:
         return None
     try:
-        with open(logs[-1], encoding="utf-8", errors="replace") as f:
+        with open(run_log, encoding="utf-8", errors="replace") as f:
             first = f.readline()
     except OSError:
         return None
@@ -1128,21 +1157,50 @@ def _dir_size_mb(path: str) -> float:
     return total / (1024 * 1024)
 
 
+# Per-file record-count memo: path -> (mtime, size, count). A cleaned .jsonl is
+# written once and then left alone, so its count cannot change while its (mtime,
+# size) identity holds. Without this, one count of data/clean re-read every byte
+# (32s at 9.5 GB, and it grows with the corpus) — on a 20s refresh the Overview
+# could never keep up with itself, which is what made the dashboard crawl during a
+# run. Bounded by the number of .jsonl files (hundreds), so it stays small.
+_JSONL_COUNT_MEMO: dict[str, tuple[float, int, int]] = {}
+
+
+def _count_file_records(path: str) -> int:
+    """Non-empty records in one .jsonl, re-read only when the file changed."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return 0
+    hit = _JSONL_COUNT_MEMO.get(path)
+    if hit is not None and hit[0] == stat.st_mtime and hit[1] == stat.st_size:
+        return hit[2]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            count = sum(1 for ln in f if ln.strip())
+    except OSError:
+        return 0
+    _JSONL_COUNT_MEMO[path] = (stat.st_mtime, stat.st_size, count)
+    return count
+
+
 def _count_jsonl_records(path: str) -> int:
-    """Count non-empty JSONL records under a directory tree."""
+    """Count non-empty JSONL records under a directory tree.
+
+    Per-file counts are memoized by (mtime, size), so a refresh during a run only
+    reads the files the workers actually touched.
+    """
     if not os.path.exists(path):
         return 0
+    from ..cleaning.common import SCRATCH_DIRS
+
     count = 0
     try:
-        for root, _, files in os.walk(path):
+        for root, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
             for name in files:
                 if name.endswith(".jsonl"):
-                    file_path = os.path.join(root, name)
-                    try:
-                        with open(file_path, encoding="utf-8", errors="replace") as f:
-                            count += sum(1 for ln in f if ln.strip())
-                    except OSError:
-                        pass
+                    count += _count_file_records(os.path.join(root, name))
     except OSError:
         pass
     return count
@@ -1279,10 +1337,11 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
                 sources += 1
                 ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
                 lines += ln
-                # Accurate on-disk size means an os.walk per source (raw is
-                # 100+ GB); the cheap live path uses the catalog's per-folder size
-                # instead so the funnel can refresh every second without a walk.
-                size_mb += _dir_size_mb(src.path) if measure_size else sz
+                # Measured size means a walk per source; the cheap live path uses
+                # the catalog's per-folder size instead so the funnel can refresh
+                # every second without touching the tree.
+                size_mb += (_jsonl_stats(src.path)[1] / (1024 * 1024)
+                            if measure_size else sz)
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}
@@ -1292,19 +1351,19 @@ def data_funnel(measure_size: bool = True) -> dict:
     """Aggregate Raw -> Cleaned -> Final metrics for the Overview funnel.
 
     Source counts and sizes come from what is physically on disk under the data
-    root (the honest per-machine state); raw line/size totals come from the
-    catalog, which is authoritative and fast (a live count of the raw tree would
-    read 100+ GB). Cleaned and final counts are read directly since those trees
-    are small.
+    root (the honest per-machine state); raw *record* totals come from the catalog,
+    which is authoritative and fast (counting them live would read every record of
+    a 100+ GB tree). Cleaned records are counted on disk — never taken from the
+    clean report, which describes one pass rather than the corpus (see the Cleaned
+    block below). Final counts come from the manifest.
 
-    ``measure_size=False`` skips the two ``os.walk`` byte counts (raw + clean) and
-    the ``data/clean`` JSONL record scan, returning those figures as 0 so the
-    Overview can refresh live source/record counts every second cheaply and pull
-    sizes from a cached snapshot. Callers that need sizes (the cached wrappers and
-    the per-stage pages) keep the default.
+    ``measure_size=False`` skips the byte counts and the ``data/clean`` record
+    scan, returning those figures as 0 so the Overview can refresh live
+    source/record counts every second cheaply and fill sizes from a cached
+    snapshot. Callers that need them (the cached wrappers and the per-stage pages)
+    keep the default.
     """
     man = manifest()
-    rc = clean_report()
     nr = normalize_report()
 
     # Raw: count the source folders present and derive line totals only for
@@ -1315,17 +1374,18 @@ def data_funnel(measure_size: bool = True) -> dict:
     raw_lines = raw_totals["lines"] if raw_sources else 0
     raw_size_mb = raw_totals["size_mb"] if raw_sources else 0.0
 
-    # Cleaned: prefer the clean report total when available, otherwise count the
-    # actual JSONL records present under data/clean/ so the UI remains informative.
-    # The clean tree is small, so its size is always measured; only the expensive
-    # per-record JSONL scan is skipped in the cheap (live) path (the report total
-    # covers it once a clean run has produced one).
+    # Cleaned: count what is physically under data/clean/. The clean report's TOTAL
+    # is a per-PASS statistic and must NOT be used as the corpus size — a --resume
+    # pass rewrites the report from only the sources it cleaned (the rest are
+    # skipped via the ledger), and final_global_dedup deletes records from
+    # data/clean after the report is written. Disk is the only figure that stays
+    # true across resumes and dedup. The per-record scan is memoized per file
+    # (see _count_file_records), so a refresh only re-reads what changed; the cheap
+    # live path still skips it and the Overview fills it from a short-TTL cache.
     clean_root = os.path.join(_root(), "data", "clean")
     cleaned_size_mb = _dir_size_mb(clean_root)
     cleaned_sources = _count_source_dirs(clean_root)
-    cleaned_lines = int(rc.get("total", {}).get("out", 0)) if rc.get("total") else 0
-    if cleaned_lines == 0 and measure_size:
-        cleaned_lines = _count_jsonl_records(clean_root)
+    cleaned_lines = _count_jsonl_records(clean_root) if measure_size else 0
 
     # Final: manifest is the canonical source of truth.
     final_file = os.path.join(_final(), "dataset.jsonl")
