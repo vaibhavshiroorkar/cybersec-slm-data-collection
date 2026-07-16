@@ -4,9 +4,43 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import Future
 
 from cybersec_slm.cleaning import pipeline
 from cybersec_slm.ingestion import parallel
+
+
+class _InlineExecutor:
+    """Synchronous stand-in for ProcessPoolExecutor: submit runs now, in-process.
+
+    A REAL pool spawns workers that re-import the package and rebuild their own
+    data-root globals, so this module's redirected output dirs would be invisible
+    to them and the test would clean straight into the live corpus. (That is not
+    hypothetical: it is what put a `Test/` tree under a real data/clean.) Running
+    inline keeps the redirection honest and the test fast.
+    """
+
+    _processes: dict = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        fut = Future()
+        try:
+            fut.set_result(fn(*args, **kwargs))
+        except Exception as e:  # noqa: BLE001
+            fut.set_exception(e)
+        return fut
+
+    def shutdown(self, *a, **k):
+        pass
 
 
 def _write_jsonl(path, records):
@@ -105,6 +139,48 @@ def test_run_clean_resume_skips_already_cleaned_sources(tmp_path, monkeypatch):
     assert "Test/s1" in cleaned
     assert "Test/s2" in cleaned
     assert "Test/s3" in cleaned
+    pipeline.reset_cleaner_cache()
+
+
+def test_sharded_source_is_ledgered_only_when_every_window_is_done(tmp_path,
+                                                                   monkeypatch):
+    """The ledger must keep meaning "fully cleaned, skip on resume".
+
+    A big file is split across workers, so a source now finishes in several
+    pieces. Recording it after the first piece would let a resume skip a source
+    whose file was only half cleaned - silently losing records from the corpus.
+    """
+    _raw, _dup, _distinct = _wire(monkeypatch, tmp_path)
+    # One record per window, so s1 (2 records) really is split in two.
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+
+    result = parallel.run_clean(workers=2)
+    cleaned = (tmp_path / "logs" / "cleaned_sources.txt").read_text(
+        encoding="utf-8").split()
+
+    # Each source appears exactly ONCE, however many windows it took.
+    assert sorted(cleaned) == ["Test/s1", "Test/s2"]
+    assert cleaned.count("Test/s1") == 1
+    # s1's 2 records became 2 windows -> 3 report rows across the 2 sources.
+    assert result["files"] == 3
+    pipeline.reset_cleaner_cache()
+
+
+def test_sharded_clean_keeps_every_record(tmp_path, monkeypatch):
+    """Sharding is a scheduling change: the corpus it produces is unchanged."""
+    _raw, dup, distinct = _wire(monkeypatch, tmp_path)
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+
+    parallel.run_clean(workers=2)
+    body = _read_all(str(tmp_path / "clean"))
+    # s1's two records survive; s2's copy of `dup` is the cross-source duplicate
+    # that final_global_dedup removes -- exactly as without sharding.
+    assert distinct in body
+    assert body.count(dup) == 1
     pipeline.reset_cleaner_cache()
 
 
