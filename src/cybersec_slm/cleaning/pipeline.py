@@ -213,6 +213,27 @@ def reset_cleaner_cache() -> None:
     _cleaner_cache.clear()
 
 
+def _source_files(source_dir: str, raw_root: str) -> list[tuple[str, str, str, str]]:
+    """One source folder's .jsonl inputs as (abs_path, sub_domain, source, rel).
+
+    Scans only `source_dir`, but names each output by its path relative to
+    `raw_root`, so data/clean mirrors data/raw. Scoping the walk is what keeps a
+    clean pass affordable: data/raw holds millions of non-.jsonl fetch artifacts
+    beside a few hundred .jsonl inputs, so walking the whole tree costs minutes —
+    a cost that would otherwise be paid once per source, in every worker.
+    """
+    source_dir = os.path.abspath(source_dir)
+    raw_root = os.path.abspath(raw_root)
+    files: list[tuple[str, str, str, str]] = []
+    for ap, _sub, _source, _rel in find_input_files(source_dir):
+        rel = os.path.relpath(ap, raw_root).replace("\\", "/")
+        parts = rel.split("/")
+        sub = parts[0] if parts else "unknown"
+        source = parts[1] if len(parts) > 2 else (parts[0] if parts else "unknown")
+        files.append((ap, sub, source, rel))
+    return files
+
+
 def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
                      clean_data_dir: str = OUT_CLEAN_DATA,
                      limit: int | None = None,
@@ -228,10 +249,7 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     they are reused from a process-local cache (`_cleaner`) rather than rebuilt for
     every source.
     """
-    source_dir = os.path.abspath(source_dir)
-    files = [t for t in find_input_files(raw_root)
-             if os.path.abspath(t[0]).startswith(source_dir + os.sep)
-             or os.path.abspath(t[0]) == source_dir]
+    files = _source_files(source_dir, raw_root)
     if not files:
         return []
     deduper = Deduper(enabled=False)
@@ -259,15 +277,7 @@ def clean_source_folder(folder: str, *, redactor, langf, translator,
     single time in the parent. Cross-source global dedup is deferred to
     `final_global_dedup`, so the deduper here is disabled. Returns report rows.
     """
-    folder = os.path.abspath(folder)
-    raw_root = os.path.abspath(raw_root)
-    files: list[tuple[str, str, str, str]] = []
-    for ap, _sub, _source, _rel in find_input_files(folder):
-        rel = os.path.relpath(ap, raw_root).replace("\\", "/")
-        parts = rel.split("/")
-        sub = parts[0] if parts else "unknown"
-        source = parts[1] if len(parts) > 2 else (parts[0] if parts else "unknown")
-        files.append((ap, sub, source, rel))
+    files = _source_files(folder, raw_root)
     if not files:
         return []
     deduper = Deduper(enabled=False)
@@ -406,9 +416,59 @@ def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
     return stats
 
 
+def _report_path() -> str:
+    return os.path.join(REPORTS, "clean_report.csv")
+
+
+def _coerce_counts(row: dict) -> dict:
+    """A report row with its counter cells as ints.
+
+    CSV gives every cell back as a string; the in-memory rows a pass produces hold
+    ints. Merging the two without this makes `_write_report`'s totalling add a str
+    to an int.
+    """
+    out = dict(row)
+    for col in REPORT_COLS[3:]:
+        try:
+            out[col] = int(float(out.get(col) or 0))
+        except (TypeError, ValueError):
+            out[col] = 0
+    return out
+
+
+def read_report_rows() -> list[dict]:
+    """Per-source rows already in the clean report (the TOTAL row excluded)."""
+    path = _report_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            return [_coerce_counts(r) for r in csv.DictReader(f)
+                    if r.get("sub_domain") != "TOTAL"]
+    except OSError:
+        return []
+
+
+def merge_report_rows(new_rows: list[dict]) -> list[dict]:
+    """``new_rows`` merged over the rows already in the report, keyed by ``file``.
+
+    A pass only holds the rows for the sources it actually cleaned: a ``--resume``
+    run skips the rest via the ledger, and a selective run only touches the chosen
+    sub-domains. Writing the report from that subset alone silently shrank it to
+    those sources, so every counter derived from it described part of the corpus
+    while claiming to describe all of it. Keying on ``file`` means a re-cleaned
+    source updates its row instead of duplicating it, which keeps the merge
+    idempotent across repeated resumes.
+    """
+    merged = {r.get("file"): r for r in read_report_rows()}
+    for r in new_rows:
+        merged[r.get("file")] = r
+    return list(merged.values())
+
+
 def _write_report(rows: list[dict]) -> str:
     os.makedirs(REPORTS, exist_ok=True)
-    path = os.path.join(REPORTS, "clean_report.csv")
+    path = _report_path()
     totals = _new_counts()
     for r in rows:
         for k in totals:
