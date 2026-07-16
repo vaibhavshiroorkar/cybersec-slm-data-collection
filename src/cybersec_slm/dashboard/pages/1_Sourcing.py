@@ -124,6 +124,55 @@ with discover_tab:
             _mm = summ.get("max_minutes")
             st.caption(f"Mode: {_mode}  ·  {charts.fmt_int(summ.get('found'))} hits"
                        + (f"  ·  budget {_mm} min" if _mm else ""))
+            fn = summ.get("funnel")
+            if not fn:
+                st.caption("This run predates the discovery funnel — re-run sourcing "
+                           "to record where its hits went.")
+            else:
+                st.markdown("**Discovery funnel** — every hit the search returned, "
+                            "and where it ended up")
+                ui.stat_grid([
+                    ("Hits found", charts.fmt_int(fn.get("found"))),
+                    ("Dropped", charts.fmt_int(fn.get("dropped_total"))),
+                    ("Duplicates", charts.fmt_int(fn.get("duplicates"))),
+                    ("Candidates", charts.fmt_int(fn.get("candidates"))),
+                ], cols=4)
+                _unproc = int(fn.get("unprocessed") or 0)
+                st.caption(
+                    "Found = dropped + duplicates + candidates"
+                    + (f" + {charts.fmt_int(_unproc)} unprocessed (the buffer tail "
+                       "left when the run hit its cap or time budget)"
+                       if _unproc else "")
+                    + ". Candidates are the hits worth enriching; only those reach "
+                      "the license gate.")
+
+                dropped = fn.get("dropped") or {}
+                if any(dropped.values()):
+                    st.markdown("**Why hits were dropped** (before enrichment)")
+                    ui.table([{"reason": c, "hits": n}
+                              for c, n in sorted(dropped.items(),
+                                                 key=lambda kv: -kv[1])], height=200)
+
+                lic = fn.get("license") or {}
+                if any(lic.values()):
+                    st.markdown("**License verdict of every candidate**")
+                    ui.stat_grid([
+                        ("Kept (ok)", charts.fmt_int(lic.get("ok"))),
+                        ("Blank / unknown", charts.fmt_int(lic.get("unknown"))),
+                        ("Red (blocked)", charts.fmt_int(lic.get("blocked"))),
+                        ("Appended", charts.fmt_int(fn.get("appended"))),
+                    ], cols=4)
+                    st.caption("Red = a positively recognised restrictive license "
+                               "(copyleft / non-commercial / proprietary); blank = "
+                               "no license found, kept for a backfill to resolve.")
+
+                rbh = fn.get("restricted_by_host") or {}
+                if rbh:
+                    st.markdown("**Restricted hosts hit** (on-topic, but their terms "
+                                "bar commercial reuse)")
+                    ui.table([{"host": h, "hits": n} for h, n in rbh.items()],
+                             height=200)
+
             bk = summ.get("by_keyword") or []
             if bk:
                 st.markdown("**Per keyword**")
@@ -163,8 +212,14 @@ with licenses_tab:
             ("Sources", charts.fmt_int(cov["total"])),
             ("Licensed", charts.fmt_int(cov["filled"])),
             ("Unknown / blank", charts.fmt_int(cov["unknown"])),
+            ("Red (still in catalog)", charts.fmt_int(cov["red"])),
             ("Blacklisted", charts.fmt_int(bl["total"])),
-        ], cols=4)
+        ], cols=5)
+        if cov["red"]:
+            st.caption(f"{charts.fmt_int(cov['red'])} source(s) carry a "
+                       "confirmed-restrictive license but are still in the catalog "
+                       "— move them with the blacklist action below. This reads 0 "
+                       "once they have been moved.")
         st.caption("Run a full license backfill from the command line: "
                    "`cybersec-slm source --backfill` (set `GITHUB_TOKEN` first for "
                    "full GitHub coverage). The instant tools below need no run.")
