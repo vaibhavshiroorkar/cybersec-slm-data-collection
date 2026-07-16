@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import time
 
 import streamlit as st
 
@@ -315,6 +316,75 @@ def _stage_activity() -> None:
 with ui.section("Stage activity",
                 "Which stage the run has been in, over time."):
     _stage_activity()
+
+
+# ------------------------------------------------------------- live throughput --
+def _rate_chart(rows: list[dict], unit: str):
+    """Per-second throughput of the live stage: one series, no legend."""
+    import altair as alt
+
+    base = alt.Chart(alt.Data(values=rows))
+    line = base.mark_line(strokeWidth=2, color=charts.LIVE_RATE_COLOR,
+                          interpolate="monotone").encode(
+        x=alt.X("elapsed_s:Q", title="Seconds watched",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+        y=alt.Y("rate:Q", title=f"{unit}/s",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+    )
+    # Crosshair + tooltip: a line chart is read by pointing at it.
+    hover = alt.selection_point(nearest=True, on="pointerover",
+                                fields=["elapsed_s"], empty=False)
+    points = base.mark_point(size=60, opacity=0, color=charts.LIVE_RATE_COLOR).encode(
+        x=alt.X("elapsed_s:Q"), y=alt.Y("rate:Q"),
+        tooltip=[alt.Tooltip("rate:Q", title=f"{unit}/s", format=".2f"),
+                 alt.Tooltip("elapsed_s:Q", title="Seconds watched", format=".0f")],
+    ).add_params(hover)
+    rule = base.mark_rule(color="#52514e").encode(x="elapsed_s:Q").transform_filter(hover)
+    return (line + rule + points).properties(height=180).configure_view(strokeWidth=0)
+
+
+@st.fragment(run_every=1)
+def _live_rate() -> None:
+    """The live stage's throughput, sampled once a second.
+
+    One slot that follows the run: the metric is whatever the current stage
+    actually moves (see data.stage_progress_sample), so the chart re-scales and
+    relabels itself at a stage boundary instead of the page growing a chart per
+    stage. Samples are per browser session and reset when the run's pid changes,
+    because a rate carried across two different runs is not a rate.
+    """
+    sample = data.stage_progress_sample()
+    if sample is None:
+        st.caption("No live stage to chart. The throughput graph follows the "
+                   "running stage.")
+        return
+
+    pid = data.run_status().get("pid")
+    buf = st.session_state.get("_rate_buf")
+    if not buf or buf.get("pid") != pid or buf.get("stage") != sample["stage"]:
+        buf = {"pid": pid, "stage": sample["stage"], "samples": []}
+    buf["samples"] = (buf["samples"] +
+                      [{"t": time.time(), "value": sample["value"]}])[-300:]
+    st.session_state["_rate_buf"] = buf
+
+    rows = charts.live_rate_rows(buf["samples"])
+    if len(rows) < 2:
+        st.caption(f"Sampling {sample['label']} ({sample['what']})… the rate needs "
+                   "a few seconds of history.")
+        return
+    st.altair_chart(_rate_chart(rows, sample["unit"]), use_container_width=True)
+    latest = rows[-1]["rate"]
+    st.caption(f"{sample['label']}  ·  {sample['what']}  ·  now "
+               f"{latest:,.2f} {sample['unit']}/s  ·  last {len(rows)}s")
+
+
+with ui.section("Live throughput",
+                "How fast the current stage is moving, sampled every second."):
+    _live_rate()
 
 # ---------------------------------------------------------------- pipeline log -
 _sess = data.run_status()
