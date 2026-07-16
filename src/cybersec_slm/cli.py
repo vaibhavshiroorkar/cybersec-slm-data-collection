@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 
+
 def _physical_cores() -> int:
     """Number of physical CPU cores (not logical/hyperthreads).
 
