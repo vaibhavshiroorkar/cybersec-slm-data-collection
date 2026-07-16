@@ -72,9 +72,11 @@ class LangFilter:
         self._model = None
         self._langdetect = None
 
+        missing_model = False
         if backend in ("auto", "fasttext"):
             ft = try_import("fasttext")
             model_path = _find_fasttext_model()
+            missing_model = ft is not None and not model_path
             if ft is not None and model_path:
                 try:
                     self._model = ft.load_model(model_path)
@@ -87,6 +89,17 @@ class LangFilter:
                 self._langdetect = ld
                 self.backend = "langdetect"
         logger.debug(f"lang: backend = {self.backend}")
+        # The model file is gitignored on purpose (a ~900 KB binary), so a fresh
+        # checkout silently lands on langdetect — which is ~265x slower per record
+        # and *less* accurate, and was measured at 17-43% of this pipeline's whole
+        # clean cost. That is far too expensive to leave as a DEBUG line nobody
+        # reads, so say it once, loudly, with the fix.
+        if backend == "auto" and missing_model and self.backend == "langdetect":
+            logger.warning(
+                "lang: no fastText model beside langfilter.py, falling back to "
+                "langdetect (~265x slower per record, and less accurate). Fetch "
+                f"lid.176.ftz into {PKG_DIR} or point $FASTTEXT_LID_MODEL at it: "
+                "https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.ftz")
 
     def detect(self, text: str) -> str:
         sample = (text or "")[:2000].replace("\n", " ").strip()
