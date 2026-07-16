@@ -23,6 +23,32 @@ SEARXNG_URL (env; default http://localhost:8080).
 from __future__ import annotations
 
 import argparse
+import os
+
+def _physical_cores() -> int:
+    """Number of physical CPU cores (not logical/hyperthreads).
+
+    Cleaning is CPU-bound (text normalization, language detection, MinHash), so
+    sizing the process pool to physical cores gives the real throughput; the extra
+    logical (hyperthread) siblings add little and can hurt via cache/ALU contention.
+    Falls back to half the logical count (the common 2-thread-per-core case), then
+    to the logical count, when physical detection is unavailable.
+    """
+    try:
+        import psutil
+        n = psutil.cpu_count(logical=False)
+        if n:
+            return int(n)
+    except Exception:
+        pass
+    logical = os.cpu_count() or 1
+    return max(1, logical // 2)
+
+
+# Clean is per-source and embarrassingly parallel (the single cross-source dedup
+# pass runs once afterward regardless), so the CLI defaults the clean pool to the
+# physical cores. Capped at 8 to bound per-worker memory; pass 1 for sequential.
+_DEFAULT_CLEAN_WORKERS = min(_physical_cores(), 8)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,8 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="clean stage: continue a partial cross-source dedup pass")
     c.add_argument("--drop-non-english", action="store_true",
                    help="drop non-English records instead of translating them")
-    c.add_argument("--workers", type=int, default=None,
-                   help="process pool size for parallel clean workers (default: sequential)")
+    c.add_argument("--workers", type=int, default=_DEFAULT_CLEAN_WORKERS,
+                   help="process pool size for parallel clean workers "
+                        "(default: physical cores, max 8; pass 1 to force sequential)")
     c.add_argument("--limit", type=int, default=None,
                    help="cap records per file (smoke test)")
     c.add_argument("--domains", nargs="*", default=None,
@@ -271,11 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="path to a sources .csv (default: sources/Sources.csv)")
     a.add_argument("--workers", type=int, default=None,
                    help="ingest process pool size (default: min(cpu, 8))")
-    a.add_argument("--clean-workers", type=int, default=None,
-                   help="clean-stage process pool size (default: sequential). "
-                        "Cleaning is per-source and the cross-source dedup pass "
-                        "runs once afterward, so more workers speed cleaning up "
-                        "without changing the output")
+    a.add_argument("--clean-workers", type=int, default=_DEFAULT_CLEAN_WORKERS,
+                   help="clean-stage process pool size (default: physical cores, "
+                        "max 8; pass 1 to force sequential). Cleaning is per-source and "
+                        "the cross-source dedup pass runs once afterward, so more "
+                        "workers speed cleaning up without changing the output")
     a.add_argument("--resume", action="store_true",
                    help="skip sources already fetched in a prior run "
                         "(logs/completed_sources.txt)")

@@ -301,6 +301,26 @@ def test_run_status_ignores_empty_stub_log(tmp_path, monkeypatch):
     assert data.run_status()["state"] == "idle"                    # not "running"
 
 
+def test_pipeline_logs_excludes_dashboard_own_log(tmp_path, monkeypatch):
+    # The dashboard process writes its own pipeline.<pid>.log on every rerun (the
+    # live funnel loads the catalog each tick), so it is non-empty and the newest
+    # by mtime. It must be excluded so phase/status follow the running pipeline's
+    # log (a separate pid) instead of the dashboard's own chatter -> "Starting".
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    own = logs / f"pipeline.{os.getpid()}.log"
+    run = logs / "pipeline.99999.log"
+    run.write_text("clean stage marker\n", encoding="utf-8")
+    # Make the dashboard's own log the newest by mtime.
+    own.write_text("loaded 1020 sources from Sources.csv\n", encoding="utf-8")
+    os.utime(run, (1, 1))
+
+    picked = data._pipeline_logs()
+    assert str(own) not in picked
+    assert picked[-1] == str(run)
+
+
 def test_raw_funnel_counts_disk_sources_and_catalog_lines(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
@@ -333,6 +353,26 @@ def test_raw_funnel_zero_when_no_raw_on_disk(tmp_path, monkeypatch):
     assert funnel["raw"]["size_mb"] == 0.0
 
 
+def test_data_funnel_cheap_path_uses_catalog_size_not_disk_walk(tmp_path, monkeypatch):
+    # The Overview funnel refreshes every second via measure_size=False: raw size
+    # must come from the catalog (cheap), while the default path walks disk.
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cloud Security" / "src-a").mkdir(parents=True)
+    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_bytes(b"\0" * (5 * 1024 * 1024))
+    monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {
+        ("Cloud Security", "src-a"): (20_000_000, 40000.0)})
+
+    cheap = data.data_funnel(measure_size=False)
+    assert cheap["raw"]["sources"] == 1
+    assert cheap["raw"]["lines"] == 20_000_000
+    assert cheap["raw"]["size_mb"] == 40000.0            # catalog size, no disk walk
+
+    full = data.data_funnel(measure_size=True)
+    assert full["raw"]["size_mb"] == 5.0                 # measured on disk (5 MB)
+
+
 def test_blank_license_links_returns_only_unresolved_rows_with_links(monkeypatch):
     monkeypatch.setattr(data, "catalog_rows", lambda: [
         {"Name": "Good", "Dataset Link": "http://good", "License": "MIT"},
@@ -362,12 +402,15 @@ def test_ingest_source_rows_keeps_file_order_and_link_less_rows(monkeypatch):
 def test_clean_source_rows_stable_sorted_with_folder_ids(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     raw = tmp_path / "data" / "raw"
-    (raw / "Cryptography" / "zeta").mkdir(parents=True)
-    (raw / "Cryptography" / "alpha").mkdir(parents=True)
-    (raw / "Cloud Security" / "beta").mkdir(parents=True)
+    for dom, src in (("Cryptography", "zeta"), ("Cryptography", "alpha"),
+                     ("Cloud Security", "beta")):
+        (raw / dom / src).mkdir(parents=True)
+        (raw / dom / src / "data.jsonl").write_text("{}\n", encoding="utf-8")
+    (raw / "Cryptography" / "empty").mkdir(parents=True)  # no data -> not offered
 
     rows = data.clean_source_rows()
-    # sorted by (sub-domain, source); id is the '<sub-domain>/<source>' folder path
+    # sorted by (sub-domain, source); id is the '<sub-domain>/<source>' folder path.
+    # The empty folder (no .jsonl) is excluded: nothing to clean there.
     assert [r["id"] for r in rows] == [
         "Cloud Security/beta", "Cryptography/alpha", "Cryptography/zeta"]
 
@@ -376,7 +419,9 @@ def test_ingest_progress_uses_completed_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     raw = tmp_path / "data" / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
+    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     (raw / "Cryptography" / "src-b").mkdir(parents=True)
+    (raw / "Cryptography" / "src-b" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     logs = tmp_path / "logs"
     logs.mkdir()
     # Ledger records more checked sources than produced folders (skips/failures).
@@ -392,10 +437,25 @@ def test_ingest_progress_falls_back_to_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     raw = tmp_path / "data" / "raw"
     (raw / "Cryptography" / "src-b").mkdir(parents=True)   # no ledger present
+    (raw / "Cryptography" / "src-b" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(data, "_catalog_total", lambda: 10)
 
     prog = data.ingest_progress()
     assert prog == {"checked": 1, "with_data": 1, "total": 10}
+
+
+def test_ingest_progress_excludes_empty_folders(tmp_path, monkeypatch):
+    # A folder created during ingest that produced no records (no .jsonl) is not
+    # counted as "produced data": with_data reflects data-bearing folders only.
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cloud Security" / "has-data").mkdir(parents=True)
+    (raw / "Cloud Security" / "has-data" / "data.jsonl").write_text("{}\n", encoding="utf-8")
+    (raw / "Cloud Security" / "empty").mkdir(parents=True)   # fetched, produced nothing
+    monkeypatch.setattr(data, "_catalog_total", lambda: 10)
+
+    prog = data.ingest_progress()
+    assert prog["with_data"] == 1
 
 
 def test_ingest_outcome_parses_log_and_ledger(tmp_path, monkeypatch):

@@ -460,6 +460,13 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     ``keep_raw=False`` deletes only those raw source folders.
 
     Cross-source dedup folds into this stage (there is no separate "dedup" stage).
+
+    ``workers`` is the process-pool size for the per-source cleaning pass; ``None``
+    or ``<= 1`` cleans sequentially. Parallelism does not change the output: each
+    source is cleaned independently in a worker and the single deterministic
+    cross-source dedup pass runs once afterward over the whole clean tree. The CLI
+    (``cybersec-slm clean`` and the full ``all`` run) defaults this to the physical
+    core count (capped at 8) so cleaning uses the real cores unless overridden.
     """
     raw_root = core.RAW_DATA
     selected = list(domains) if domains else None
@@ -680,10 +687,11 @@ def run_v2_pipeline(spec: str | None = None, *,
     normalize : bool
         Run schema normalization; False stops after EDA.
     clean_workers : int | None
-        Process-pool size for the clean stage (default: sequential). Cleaning is
-        per-source and independent, and the single deterministic cross-source
-        dedup pass runs once over the whole tree afterward regardless, so raising
-        this speeds cleaning up without changing the output.
+        Process-pool size for the clean stage (default: physical cores, max 8; pass
+        1 to force sequential). Cleaning is per-source and independent, and the single
+        deterministic cross-source dedup pass runs once over the whole tree
+        afterward regardless, so raising this speeds cleaning up without changing
+        the output.
     """
     from ..eda import SufficiencyError
 
