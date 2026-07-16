@@ -2,13 +2,19 @@
 
 from cybersec_slm.sourcing import keywords as kw
 from cybersec_slm.sourcing.classify import infer_category_and_format, refine_domain
-from cybersec_slm.sourcing.row import SHEET_COLUMNS, build_row, row_to_list
+from cybersec_slm.sourcing.row import (
+    SHEET_COLUMNS,
+    build_manual_row,
+    build_row,
+    row_to_list,
+)
 from cybersec_slm.sourcing.search import Result, _parse_items
 from cybersec_slm.sourcing.sheet import (
     append_rows,
     delete_rows,
     existing_links,
     normalize_url,
+    rename_subdomain,
 )
 
 # ----------------------------------------------------------------- keywords ---
@@ -704,3 +710,96 @@ def test_searxng_search_omits_engines_when_none():
     client = _CaptureClient(results=[])
     searxng_search("q", client=client)
     assert "engines" not in client.last_params
+
+
+# ------------------------------------------------------- rename a sub-domain ---
+def test_rename_subdomain_relabels_only_matching_rows(tmp_path):
+    csv_path = str(tmp_path / "Sources.csv")
+    append_rows(csv_path, [
+        build_row(Result(title="A", link="https://huggingface.co/datasets/a/x",
+                         snippet="s"), "Cloud Security", today="01/01/2026"),
+        build_row(Result(title="B", link="https://github.com/b/y", snippet="s"),
+                  "Cloud Security", today="01/01/2026"),
+        build_row(Result(title="C", link="https://example.com/c", snippet="s"),
+                  "Network Security", today="01/01/2026"),
+    ])
+
+    assert rename_subdomain(csv_path, "Cloud Security", "Cloud & Platform") == 2
+
+    import pandas as pd
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+    assert sorted(df["Sub-Domain"]) == ["Cloud & Platform", "Cloud & Platform",
+                                        "Network Security"]
+    # Renaming must not disturb any other column.
+    assert set(df["Dataset Link"]) == {"https://huggingface.co/datasets/a/x",
+                                       "https://github.com/b/y",
+                                       "https://example.com/c"}
+
+
+def test_rename_subdomain_no_op_cases(tmp_path):
+    csv_path = str(tmp_path / "Sources.csv")
+    append_rows(csv_path, [
+        build_row(Result(title="A", link="https://example.com/a", snippet="s"),
+                  "Cloud Security", today="01/01/2026"),
+    ])
+    assert rename_subdomain(csv_path, "Cloud Security", "Cloud Security") == 0
+    assert rename_subdomain(csv_path, "Nope", "Other") == 0
+    assert rename_subdomain(csv_path, "", "Other") == 0
+    assert rename_subdomain(csv_path, "Cloud Security", "") == 0
+    assert rename_subdomain(str(tmp_path / "missing.csv"), "a", "b") == 0
+
+
+# --------------------------------------------------- manually-added catalog row -
+def test_build_manual_row_has_the_catalog_schema_and_infers_from_the_link():
+    row = build_manual_row(name="darkknight25", subdomain="Cloud Security",
+                           link="https://huggingface.co/datasets/dk/cloud",
+                           description="Cloud vulns", license="MIT",
+                           today="18/06/2026")
+    assert set(row) == set(SHEET_COLUMNS)          # same shape as a discovered row
+    assert row["Name"] == "darkknight25"
+    assert row["Sub-Domain"] == "Cloud Security"
+    assert row["Dataset Link"] == "https://huggingface.co/datasets/dk/cloud"
+    assert row["Description"] == "Cloud vulns"
+    assert row["License"] == "MIT"
+    assert row["Category"] == "Dataset"            # inferred from the HF link
+    assert row["Date Added"] == "18/06/2026"
+    assert row["Is Synthetic?"] == ""
+
+
+def test_build_manual_row_explicit_category_and_format_win_over_inference():
+    row = build_manual_row(name="n", subdomain="d",
+                           link="https://github.com/o/r",
+                           category="Dataset", original_format="CSV")
+    assert row["Category"] == "Dataset"            # inference would say Repository
+    assert row["Original Format"] == "CSV"
+
+
+def test_build_manual_row_marks_synthetic_and_fills_extra_columns():
+    row = build_manual_row(name="n", subdomain="d", link="https://x.test/f.jsonl",
+                           is_synthetic=True,
+                           extra={"Total Lines": "1200", "Author": "me",
+                                  "Tags": "  ", "Bogus Column": "ignored"})
+    assert row["Is Synthetic?"] == "Yes"
+    assert row["Total Lines"] == "1200"
+    assert row["Author"] == "me"
+    assert row["Tags"] == ""                       # blank extras are not written
+    assert "Bogus Column" not in row               # unknown keys cannot widen it
+
+
+def test_build_manual_row_requires_name_subdomain_and_link():
+    import pytest
+    for kwargs in ({"name": "", "subdomain": "d", "link": "https://x.test"},
+                   {"name": "n", "subdomain": "  ", "link": "https://x.test"},
+                   {"name": "n", "subdomain": "d", "link": ""}):
+        with pytest.raises(ValueError, match="missing required field"):
+            build_manual_row(**kwargs)
+
+
+def test_manual_row_appends_and_is_deduped_like_a_discovered_one(tmp_path):
+    csv_path = str(tmp_path / "Sources.csv")
+    row = build_manual_row(name="n", subdomain="Cloud Security",
+                           link="https://huggingface.co/datasets/a/x")
+    append_rows(csv_path, [row])
+    # The link is now visible to the dedup path discovery uses, in normalized form.
+    assert normalize_url("http://www.huggingface.co/datasets/a/x/") in \
+        existing_links(csv_path)

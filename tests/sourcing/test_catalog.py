@@ -1,5 +1,7 @@
 """Offline tests for the persistent, editable keyword catalog."""
 
+import pytest
+
 from cybersec_slm.sourcing import catalog
 from cybersec_slm.sourcing import keywords as kw
 
@@ -134,4 +136,84 @@ def test_add_subdomain_preserves_the_saved_domain_name(tmp_path):
     catalog.save({"Keep": {"datasets": ["x"], "text": []}}, p)
     catalog.set_domain_name("MEDTECH", p)
     catalog.add_subdomain("New", path=p)
+    assert catalog.domain_name(p) == "MEDTECH"
+
+
+# ------------------------------------------------------------ update/rename ---
+def _seed_one(path: str) -> None:
+    catalog.save({"Old Name": {"datasets": ["ds1", "ds2"], "text": ["tx1"],
+                               "code": "OLD", "vocab": ["term"]},
+                  "Other": {"datasets": ["o"], "text": [], "code": "OTHER"}}, path)
+
+
+def test_update_subdomain_edits_keywords_without_renaming(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.update_subdomain("Old Name", datasets=["new1"], text=["new2"], path=p)
+    cat = catalog.load(p)
+    assert cat["Old Name"]["datasets"] == ["new1"]
+    assert cat["Old Name"]["text"] == ["new2"]
+    assert cat["Old Name"]["code"] == "OLD"          # untouched
+    assert cat["Old Name"]["vocab"] == ["term"]      # untouched
+
+
+def test_update_subdomain_renames_and_keeps_the_existing_code(tmp_path):
+    """A rename must not silently change the schema enum code: records already
+    normalized under the old code would no longer match the taxonomy."""
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.update_subdomain("Old Name", name="New Name", path=p)
+    cat = catalog.load(p)
+    assert "Old Name" not in cat
+    assert cat["New Name"]["code"] == "OLD"
+    assert cat["New Name"]["datasets"] == ["ds1", "ds2"]
+    assert cat["New Name"]["vocab"] == ["term"]
+
+
+def test_update_subdomain_none_means_leave_alone(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.update_subdomain("Old Name", path=p)          # no fields at all
+    assert catalog.load(p)["Old Name"] == {
+        "datasets": ["ds1", "ds2"], "text": ["tx1"], "code": "OLD",
+        "vocab": ["term"]}
+
+
+def test_update_subdomain_explicit_code_wins_and_blank_rederives(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.update_subdomain("Old Name", code="EXPLICIT", path=p)
+    assert catalog.load(p)["Old Name"]["code"] == "EXPLICIT"
+
+    catalog.update_subdomain("Old Name", name="Fresh Label", code="", path=p)
+    assert catalog.load(p)["Fresh Label"]["code"] == "FRESH_LABEL"
+
+
+def test_update_subdomain_rejects_a_rename_onto_an_existing_subdomain(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    with pytest.raises(ValueError, match="already exists"):
+        catalog.update_subdomain("Old Name", name="Other", path=p)
+    assert catalog.load(p)["Other"]["datasets"] == ["o"]   # not clobbered
+
+
+def test_update_subdomain_rejects_an_unknown_subdomain(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    with pytest.raises(KeyError):
+        catalog.update_subdomain("Nope", name="X", path=p)
+
+
+def test_update_subdomain_renaming_to_itself_is_a_no_op(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.update_subdomain("Old Name", name="Old Name", path=p)
+    assert catalog.subdomains(catalog.load(p)) == ["Old Name", "Other"]
+
+
+def test_update_subdomain_preserves_the_saved_domain_name(tmp_path):
+    p = str(tmp_path / "keywords.yaml")
+    _seed_one(p)
+    catalog.set_domain_name("MEDTECH", p)
+    catalog.update_subdomain("Old Name", name="New Name", path=p)
     assert catalog.domain_name(p) == "MEDTECH"

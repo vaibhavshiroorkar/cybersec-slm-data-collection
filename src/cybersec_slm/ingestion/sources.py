@@ -54,7 +54,16 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "Date Added", "Author", "Popularity", "Tags", "Note",
 )
 
-# Coarse spreadsheet categories -> the sub-domain folder names used elsewhere.
+# Coarse spreadsheet categories -> a sub-domain name. Only consulted for a foreign
+# CSV that carries a broad ``category`` column and no ``Sub-Domain`` (every row of
+# the canonical catalog has one, so this is a fallback path).
+#
+# These are hints from the original cybersecurity taxonomy, and are honored ONLY
+# when the name they map to is actually present in the live taxonomy
+# (``sources/keywords.yaml``) - see :func:`_domain_for`. That keeps the mapping
+# from hard-coding this pipeline to cybersecurity: point ``keywords.yaml`` at a
+# different data domain and these hints simply stop matching, rather than filing
+# rows under a sub-domain that domain never defined.
 CATEGORY_TO_DOMAIN = {
     "articles_news_blogs": "Threat Intelligence",
     "vulnerabilities": "Vulnerability Management",
@@ -147,12 +156,86 @@ def _size_hint(row: dict) -> float:
     return float("inf")
 
 
+def _taxonomy_key(s: str) -> str:
+    """Normalize a name/code to a comparison key.
+
+    ``"Network Security"`` and ``"network security"`` both key to
+    ``network_security``, so a category cell matches however it is spelled.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+
+# Cache for the taxonomy lookup, keyed on the catalog file's (path, mtime) so an
+# edit is picked up and a different data root never reads another's cache. Without
+# it, every catalog row would re-read and re-parse keywords.yaml.
+_taxonomy_cache: tuple[tuple[str, float], dict[str, str]] | None = None
+
+
+def _taxonomy_lookup() -> dict[str, str]:
+    """``{normalized key -> sub-domain name}`` for the live keyword taxonomy.
+
+    Keys each configured sub-domain by both its name and its schema enum code, so
+    a foreign CSV's ``category`` cell resolves whether it spells the sub-domain out
+    (``"Network Security"``, ``"network security"``) or uses the code (``NETWORK``).
+    Returns ``{}`` if the taxonomy cannot be read, which makes :func:`_domain_for`
+    fall back to the row's own category text.
+    """
+    global _taxonomy_cache
+    try:
+        # Imported lazily: sourcing.sheet imports this module for CATALOG_COLUMNS,
+        # so a module-level import here would be a cycle.
+        from ..sourcing import catalog as _catalog
+    except Exception:
+        return {}
+    try:
+        path = _catalog.catalog_path()
+        mtime = os.path.getmtime(path) if os.path.exists(path) else 0.0
+    except OSError:
+        path, mtime = "", 0.0
+    key = (path, mtime)
+    if _taxonomy_cache is not None and _taxonomy_cache[0] == key:
+        return _taxonomy_cache[1]
+    try:
+        cat = _catalog.load()
+    except Exception as ex:
+        logger.warning(f"could not read the sub-domain taxonomy ({type(ex).__name__}); "
+                       "falling back to the catalog's own category values")
+        return {}
+    lookup: dict[str, str] = {}
+    for name, spec in cat.items():
+        lookup.setdefault(_taxonomy_key(name), name)
+        code = str((spec or {}).get("code") or "").strip()
+        if code:
+            lookup.setdefault(_taxonomy_key(code), name)
+    _taxonomy_cache = (key, lookup)
+    return lookup
+
+
 def _domain_for(row: dict) -> str:
+    """The Sub-Domain a catalog row belongs to.
+
+    An explicit ``Sub-Domain`` column wins (every canonical catalog row has one).
+    Otherwise the row's coarse ``category`` is resolved against the live taxonomy
+    in ``sources/keywords.yaml`` — first directly (by sub-domain name or enum
+    code), then through the legacy :data:`CATEGORY_TO_DOMAIN` hints, which apply
+    only when the sub-domain they name is one this taxonomy actually defines.
+    Unresolvable categories are kept verbatim so nothing is silently refiled.
+    """
     explicit = _val(row, "domain", "sub_domain", "subdomain")
     if explicit:
         return explicit
-    cat = (_val(row, "category", default="") or "").lower()
-    return CATEGORY_TO_DOMAIN.get(cat, _val(row, "category", default="Uncategorized"))
+    raw_cat = _val(row, "category", default="") or ""
+    if not raw_cat.strip():
+        return "Uncategorized"
+
+    lookup = _taxonomy_lookup()
+    direct = lookup.get(_taxonomy_key(raw_cat))
+    if direct:
+        return direct
+    hinted = CATEGORY_TO_DOMAIN.get(raw_cat.strip().lower())
+    if hinted and _taxonomy_key(hinted) in lookup:
+        return hinted
+    return raw_cat
 
 
 def _feed_key(slug: str, row: dict) -> str:

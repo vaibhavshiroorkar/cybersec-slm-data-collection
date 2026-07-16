@@ -91,6 +91,40 @@ def valid_counts_by_subdomain(csv_path: str) -> dict[str, int]:
     return counts
 
 
+def rename_subdomain(csv_path: str, old: str, new: str) -> int:
+    """Relabel every catalog row whose Sub-Domain is ``old`` to ``new``; return the
+    count.
+
+    Renaming a sub-domain in ``sources/keywords.yaml`` (the taxonomy) leaves the
+    rows in ``Sources.csv`` still carrying the old label, which would strand them
+    outside the taxonomy — they would no longer match any configured sub-domain
+    for a selective run, and the schema stage would not resolve their enum code.
+    This relabels them in the same edit. Matching is exact after stripping
+    surrounding whitespace. The write is atomic (temp file + ``os.replace``).
+    """
+    old, new = (old or "").strip(), (new or "").strip()
+    if not old or not new or old == new or not os.path.exists(csv_path):
+        return 0
+    import pandas as pd
+
+    df = pd.read_csv(csv_path, dtype=str, keep_default_na=False, encoding="utf-8")
+    if df.empty:
+        return 0
+    sdcol = _subdomain_column(df.columns)
+    if sdcol is None:
+        return 0
+
+    mask = df[sdcol].map(lambda v: str(v).strip() == old)
+    changed = int(mask.sum())
+    if changed:
+        df.loc[mask, sdcol] = new
+        os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+        tmp = f"{csv_path}.tmp"
+        df.to_csv(tmp, index=False, encoding="utf-8")
+        os.replace(tmp, csv_path)
+    return changed
+
+
 def delete_rows(csv_path: str, *, links: list[str] | None = None,
                 subdomains: list[str] | None = None,
                 positions: list[int] | None = None) -> int:

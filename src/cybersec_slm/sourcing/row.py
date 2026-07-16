@@ -64,6 +64,54 @@ def build_row(result: Result, default_domain: str, *,
     return row
 
 
+# Sheet values the Category / Original Format columns take, matching what
+# :func:`~.classify.infer_category_and_format` writes for a discovered source, so
+# a hand-added row is indistinguishable from a crawled one.
+CATEGORIES: tuple[str, ...] = ("Dataset", "Repository", "Document", "Website")
+FORMATS: tuple[str, ...] = ("JSONL", "JSON", "CSV", "PARQUET", "XLSX", "TXT",
+                            "PDF", "XML", "HTML")
+
+
+def build_manual_row(*, name: str, subdomain: str, link: str,
+                     description: str = "", category: str = "",
+                     original_format: str = "", license: str = "",
+                     is_synthetic: bool = False,
+                     extra: dict[str, str] | None = None,
+                     today: str | None = None) -> dict[str, str]:
+    """Build one catalog row for a source added by hand (the dashboard's form).
+
+    Mirrors :func:`build_row` — same columns, same ``Date Added`` format — but
+    takes the fields from a human instead of a search result, and infers
+    ``Category`` / ``Original Format`` from the link when they are left blank, so
+    a hand-added row lands in the catalog identical in shape to a discovered one.
+    ``extra`` fills any other catalog column (sizes, line counts, Author, Tags,
+    Note); unknown keys are ignored so a caller cannot widen the schema.
+
+    Raises ``ValueError`` when a required field (name / sub-domain / link) is blank.
+    """
+    name, subdomain, link = name.strip(), subdomain.strip(), link.strip()
+    missing = [label for label, val in (("Name", name), ("Sub-Domain", subdomain),
+                                        ("Dataset Link", link)) if not val]
+    if missing:
+        raise ValueError(f"missing required field(s): {', '.join(missing)}")
+
+    inferred_cat, inferred_fmt = infer_category_and_format(link)
+    row = {c: _BLANK for c in SHEET_COLUMNS}
+    row["Name"] = name
+    row["Sub-Domain"] = subdomain
+    row["Description"] = description.strip()
+    row["Dataset Link"] = link
+    row["Category"] = category.strip() or inferred_cat
+    row["Original Format"] = original_format.strip() or inferred_fmt
+    row["License"] = license.strip()
+    row["Is Synthetic?"] = "Yes" if is_synthetic else _BLANK
+    row["Date Added"] = today or date.today().strftime("%d/%m/%Y")
+    for col, val in (extra or {}).items():
+        if col in row and str(val).strip():
+            row[col] = str(val).strip()
+    return row
+
+
 def row_to_list(row: dict[str, str]) -> list[str]:
     """Flatten a row dict to a values list in :data:`SHEET_COLUMNS` order."""
     return [row.get(c, _BLANK) for c in SHEET_COLUMNS]

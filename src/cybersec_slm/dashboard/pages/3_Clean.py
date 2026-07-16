@@ -25,21 +25,65 @@ with ui.section("Cleaned"):
     c[1].metric("Records", charts.fmt_int(cleaned["lines"]))
     c[2].metric("Size", charts.fmt_size(cleaned["size_mb"]))
 
-    rc = data.clean_report()
-    if rc.get("total"):
-        t = rc["total"]
-        with st.expander("Cleaning breakdown"):
-            st.write({k: t.get(k) for k in
-                      ("in", "out", "struct_dropped", "behavioral_flagged",
-                       "exact_dups", "near_dups", "pii_redacted", "translated",
-                       "non_en_dropped") if k in t})
+# ------------------------------------------------------- what cleaning did -----
+stats = data.clean_stats()
+with ui.section("What cleaning did",
+                "Every counter the cleaning pass records, in the order the stages "
+                "run: map text -> sanitize -> anomaly check -> dedup -> PII "
+                "redaction -> language filter."):
+    if not stats["has_report"]:
+        st.caption("No `logs/clean_report.csv` yet. Run the clean stage to see "
+                   "what each mechanism removed, redacted, or repaired.")
+    else:
+        counts = stats["counts"]
+        ui.stat_grid([
+            ("Records in", charts.fmt_int(counts["in"])),
+            ("Records out", charts.fmt_int(counts["out"])),
+            ("Kept", f"{stats['kept_pct']:.1f}%"),
+            ("PII redacted", charts.fmt_int(counts["pii_redacted"])),
+        ], cols=4)
+        st.caption(f"Across {charts.fmt_int(stats['files'])} file(s). "
+                   "PII redacted counts *records* with at least one identifier "
+                   "replaced by a typed placeholder, not the number of identifiers.")
+
+        # Every remaining counter as a labelled table, so each mechanism's meaning
+        # is on the row rather than hidden behind a column name from the CSV.
+        detail = [
+            {"stage": label, "records": counts[col],
+             "% of input": (f"{100 * counts[col] / counts['in']:.2f}%"
+                            if counts["in"] else "-"),
+             "what it means": help_txt}
+            for col, label, help_txt in data.CLEAN_COUNTERS
+            if col not in ("in", "out")
+        ]
+        ui.table(detail, height=380)
+
+# ----------------------------------------------------- per-source clean table --
+with ui.section("Per-source cleaning stats",
+                "What the cleaning pass did to each source: how many records went "
+                "in and out, and how many each mechanism removed or changed."):
+    ct = data.clean_table()
+    if not ct:
+        st.caption("No clean report yet. Run the clean stage above.")
+    else:
+        st.caption(f"{len(ct)} sources in `logs/clean_report.csv`.")
+        ui.table([{"source": r["source"], "sub-domain": r["sub-domain"],
+                   "in": r["in"], "out": r["out"], "kept %": r["kept_pct"],
+                   "pii": r["pii_redacted"], "exact dups": r["exact_dups"],
+                   "near dups": r["near_dups"], "struct": r["struct_dropped"],
+                   "flagged": r["behavioral_flagged"],
+                   "no prose": r["excluded_no_text"],
+                   "translated": r["translated"],
+                   "non-en dropped": r["non_en_dropped"],
+                   "sanitized": r["sanitized"]} for r in ct], height=420)
 
 # ----------------------------------------------------------- cleaned table -----
-with ui.section("Cleaned sources"):
-    ct = cached.cleaned_table(data.data_root())
-    if ct:
-        st.caption(f"{len(ct)} sources under `data/clean/`.")
-        ui.table(ct, height=340)
+with ui.section("Cleaned sources", "What is physically under `data/clean/` now, "
+                                   "measured on disk."):
+    ct_disk = cached.cleaned_table(data.data_root())
+    if ct_disk:
+        st.caption(f"{len(ct_disk)} sources under `data/clean/`.")
+        ui.table(ct_disk, height=340)
     else:
         st.caption("Nothing cleaned yet. Run the clean stage above.")
 

@@ -33,15 +33,27 @@ location is all it takes to serve a hosted deploy later, no code change.
   stage, elapsed/ETA) with a five-stage status strip, the corpus funnel, the EDA
   gate summary, the release headline, and the full-pipeline launcher (Start /
   Resume / Stop / Reset + advanced settings).
-- **Sourcing / Ingest / Clean / EDA / Schema** - one page per stage. Each has a
-  `Run this stage` control with only that stage's advanced flags, a fixed-height
-  scrollable stage log, and the stage's inputs/outputs (catalog, raw ledger, clean
-  + loss breakdown, sufficiency gate + trends, normalize report + manifest). The
-  Sourcing page also runs SearXNG discovery on its own: pick sub-domains, preview
-  every keyword that will run, set per-domain and total caps, and add or remove
-  sub-domains and keywords (persisted to `sources/keywords.yaml`). Ingest and Clean
-  can run selectively: the advanced settings hold a sub-domain multiselect (empty =
-  all), so a run touches only the chosen sub-domains and leaves the rest in place.
+- **Sourcing / Ingest / Clean / EDA / Schema** - one page per stage, showing that
+  stage's inputs/outputs (catalog, raw ledger, clean + loss breakdown, sufficiency
+  gate + trends, normalize report + manifest). Running is launched from the Overview
+  page; these pages are inspection and curation only.
+  - **Sourcing** curates what discovery searches and what the catalog holds. Its
+    *Discover* tab picks the sub-domains + mode and **Apply**s them to the saved
+    Sourcing settings; *Sub-domains* adds, edits, renames, and removes sub-domains
+    and their keywords (persisted to `sources/keywords.yaml`) - a rename can relabel
+    that sub-domain's `Sources.csv` rows in the same edit, so they are not stranded
+    outside the taxonomy; *Add source* appends a source by hand; *Licenses* and
+    *Delete rows* clean the catalog up.
+  - **Ingest** reconciles the whole catalog against `data/raw/`: one row per source
+    with its status (ingested, or why not), records, size, files, and license,
+    filterable by status and sub-domain.
+  - **Clean** shows every counter the cleaning pass records - PII redacted,
+    translated, sanitized, each drop mechanism - as a headline, an explained
+    per-mechanism table, and a per-source breakdown.
+
+  Ingest and Clean can run selectively: their Configure modals hold a sub-domain
+  multiselect (empty = all), so a run touches only the chosen sub-domains and leaves
+  the rest in place.
 - **Dataset** - filter by domain/subdomain/source/type/lang (facets from the
   manifest), full-text substring search, a paginated results table with a full
   record detail, and previews of what was rejected or de-duplicated.

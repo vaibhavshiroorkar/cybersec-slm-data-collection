@@ -76,6 +76,18 @@ def cleaned_table(root: str) -> list[dict]:
     return data.cleaned_table()
 
 
+@st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
+def ingest_table(root: str) -> list[dict]:
+    """Cached full per-source ingest table (:func:`data.ingest_table`).
+
+    Parses the catalog into descriptors and reconciles each against ``data/raw/``,
+    so it shares the funnel's TTL rather than rerunning on every interaction. The
+    on-disk byte figures come from the already-cached :func:`raw_table` walk, so
+    this adds no second scan of the raw tree.
+    """
+    return data.ingest_table(raw_rows=raw_table(root))
+
+
 def clear_stats() -> None:
     """Drop every cached scan snapshot so the next read remeasures."""
     funnel.clear()
@@ -83,3 +95,4 @@ def clear_stats() -> None:
     data_funnel.clear()
     cleaned_records.clear()
     cleaned_table.clear()
+    ingest_table.clear()
