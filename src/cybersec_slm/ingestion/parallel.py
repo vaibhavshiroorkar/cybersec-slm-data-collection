@@ -564,7 +564,11 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     ledger.close()
 
     if rows:
-        cleaning_pipeline._write_report(rows)
+        # Merge over whatever the report already holds: this pass only carries the
+        # sources it cleaned (a resume skips the rest via the ledger, a selective
+        # run touches only its own), so writing `rows` alone would shrink the
+        # report to that subset.
+        cleaning_pipeline._write_report(cleaning_pipeline.merge_report_rows(rows))
 
     dedup = cleaning_pipeline.final_global_dedup(
         cleaning_pipeline.OUT_CLEAN_DATA, resume=resume)
