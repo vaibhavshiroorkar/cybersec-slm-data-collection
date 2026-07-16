@@ -10,6 +10,7 @@ src/cybersec_slm/dashboard/app.py`` (after ``uv sync --extra dashboard``).
 
 from __future__ import annotations
 
+import inspect
 import os
 
 import streamlit as st
@@ -193,6 +194,28 @@ with ui.section("Run the full pipeline"):
         st.caption("Reset asks to confirm, then deletes the entire data/ folder.")
 
 # ------------------------------------------------------------------- funnel ----
+def _data_funnel_snapshot(measure_size: bool = True) -> dict:
+    """Call the dashboard data funnel with compatibility for legacy signatures."""
+    data_funnel = getattr(data, "data_funnel", None)
+    if not callable(data_funnel):
+        return {}
+
+    try:
+        sig = inspect.signature(data_funnel)
+    except (TypeError, ValueError):
+        return data_funnel()
+
+    accepts_measure_size = any(
+        p.name == "measure_size" for p in sig.parameters.values()
+    )
+    accepts_var_kw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+    )
+    if accepts_measure_size or accepts_var_kw:
+        return data_funnel(measure_size=measure_size)
+    return data_funnel()
+
+
 def _funnel_row(label: str, d: dict) -> None:
     """One funnel stage as a labelled Sources / Records / Size row."""
     c = st.columns([1.6, 1, 1, 1])
@@ -215,7 +238,7 @@ def _corpus_funnel() -> None:
     reflects what is actually on disk. Because it is a fragment, it updates without
     reflowing the rest of the page.
     """
-    funnel = data.data_funnel(measure_size=False)
+    funnel = _data_funnel_snapshot(measure_size=False)
     _root = data.data_root()
     funnel["raw"]["size_mb"] = cached.raw_size_mb(_root)
     # Cleaned records grow live as clean workers write; the clean report only lands
