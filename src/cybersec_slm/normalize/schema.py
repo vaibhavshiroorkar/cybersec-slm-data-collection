@@ -13,7 +13,7 @@ placeholders for the fields owned downstream —
     ``reviewed_by``) -> ``None``.
 
 ``domain_name`` / ``subdomain_name`` are *not* placeholders — they are derived
-from the pipeline's existing 12-domain routing (see :func:`resolve_domain`).
+from the live taxonomy in ``sources/keywords.yaml`` (see :func:`resolve_domain`).
 
 Invalid records raise ``pydantic.ValidationError`` and are routed to the
 metadata-only rejected sink by the pipeline.
@@ -36,10 +36,11 @@ def _load_taxonomy() -> tuple[tuple[str, ...], tuple[str, ...], str]:
     """``(CANONICAL_DOMAINS, SUBDOMAIN_NAMES, domain_name)`` from the live catalog.
 
     Sub-domain order is alphabetical (``catalog.subdomains()`` is
-    ``sorted(keys())``), which for the original 12 built-in domains reproduces
-    today's exact ``SUBDOMAIN_NAMES`` order — the order the downstream
-    ``snorkel_subdomain.py`` LabelModel depends on (pinned by
-    ``tests/normalize/test_schema.py::test_default_catalog_matches_legacy_order``).
+    ``sorted(keys())``), which fixes the ``SUBDOMAIN_NAMES`` order the downstream
+    ``snorkel_subdomain.py`` LabelModel keys on (pinned by
+    ``tests/normalize/test_schema.py::test_default_catalog_matches_taxonomy``).
+    Adding or renaming a sub-domain reshuffles those indices, so any already-
+    trained LabelModel must be re-fit against the new order.
     Read once at import time: a catalog edit made mid-run only takes effect the
     next time a fresh process imports this module, which is a non-issue for the
     dashboard's full-run flow (schema runs last, in its own subprocess, after any
@@ -51,29 +52,39 @@ def _load_taxonomy() -> tuple[tuple[str, ...], tuple[str, ...], str]:
     return names, codes, _catalog.domain_name()
 
 
-# The canonical sub-domains the corpus is organised around (default: the 12
-# built-in cybersecurity domains).
+# The canonical sub-domains the corpus is organised around (default: the four
+# built-in banking regulatory-compliance domains).
 CANONICAL_DOMAINS, SUBDOMAIN_NAMES, _DOMAIN_NAME = _load_taxonomy()
 ALLOWED_DOMAINS: frozenset[str] = frozenset(CANONICAL_DOMAINS)
 
 # Folder/spelling variants seen in the wild -> canonical domain. Keeps real data
-# from being rejected over a directory typo (e.g. "Forsenics"), and folds the
-# retired Quantum and Malware Analysis tracks onto their merge targets. Specific
-# to the historical 12-domain cybersecurity taxonomy; a harmless no-op for any
-# other domain (nothing in a different taxonomy will match these keys).
+# from being rejected over a directory typo or a punctuation variant. Specific to
+# the banking regulatory-compliance taxonomy; a harmless no-op for any other
+# domain (nothing in a different taxonomy will match these keys).
 DOMAIN_ALIASES: dict[str, str] = {
-    "incident response and forsenics": "Incident Response and Forensics",
-    "incident response and forensics": "Incident Response and Forensics",
-    "governance risk and compliance": "Governance, Risk and Compliance",
-    "iam": "Identity Access and Management",
-    "grc": "Governance, Risk and Compliance",
-    "appsec": "Application Security",
-    # Retired domains folded into their merge targets.
-    "quantum": "Cryptography",
-    "post-quantum cryptography": "Cryptography",
-    "malware analysis": "Threat Intelligence",
-    # Old combined domain, now split; legacy label falls back to Penetration Testing.
-    "penetration testing and vulnerability management": "Penetration Testing",
+    # The canonical name is "AML-KYC" (no slash — it has to be safe as a directory
+    # component; see the ubi taxonomy's docstring). Everything people actually
+    # write for it folds onto that.
+    "aml/kyc": "AML-KYC",
+    "aml kyc": "AML-KYC",
+    "aml & kyc": "AML-KYC",
+    "aml and kyc": "AML-KYC",
+    "aml": "AML-KYC",
+    "kyc": "AML-KYC",
+    "anti money laundering": "AML-KYC",
+    "know your customer": "AML-KYC",
+    # Compliance and Risk Management.
+    "compliance": "Compliance and Risk Management",
+    "risk management": "Compliance and Risk Management",
+    "compliance and risk": "Compliance and Risk Management",
+    "compliance & risk management": "Compliance and Risk Management",
+    # Corporate Governance (the team also calls this "Board Secretariat").
+    "board secretariat": "Corporate Governance",
+    "corporate governance and board secretariat": "Corporate Governance",
+    "governance": "Corporate Governance",
+    # Internal Audit.
+    "audit": "Internal Audit",
+    "internal audit and inspection": "Internal Audit",
 }
 
 # ----------------------------------------------- subdomain enum (schema names) -
@@ -85,7 +96,8 @@ CANONICAL_TO_SUBDOMAIN: dict[str, str] = dict(
     zip(CANONICAL_DOMAINS, SUBDOMAIN_NAMES, strict=True))
 ALLOWED_SUBDOMAINS: frozenset[str] = frozenset(SUBDOMAIN_NAMES)
 
-# domain_name (top-level) enum (the schema's domain_label space); default "CYBERSEC".
+# domain_name (top-level) enum (the schema's domain_label space); default
+# "BANKING_COMPLIANCE".
 DOMAIN_NAMES: frozenset[str] = frozenset({_DOMAIN_NAME})
 
 # Record-type enum (schema examples: cve / article / log). Open-ish but closed to
@@ -118,12 +130,15 @@ def normalize_domain(value: str) -> str:
 def resolve_domain(value: str) -> tuple[str, str]:
     """Raw domain -> ``(domain_name, subdomain_name)`` schema enum values.
 
-    The 12 cybersecurity domains -> (CYBERSEC, <their subdomain>). Retired tracks
-    (Quantum, Malware Analysis) fold onto their merge targets via DOMAIN_ALIASES.
+    The top-level label is the live catalog's ``domain_name`` (default
+    ``BANKING_COMPLIANCE``) rather than a literal, so that re-pointing
+    ``sources/keywords.yaml`` at a different corpus does not emit a
+    ``domain_name`` this module's own validator would then reject. Spelling and
+    punctuation variants fold onto a canonical sub-domain via DOMAIN_ALIASES.
     Raises ``ValueError`` for an unknown domain.
     """
     canonical = normalize_domain(value)
-    return "CYBERSEC", CANONICAL_TO_SUBDOMAIN[canonical]
+    return _DOMAIN_NAME, CANONICAL_TO_SUBDOMAIN[canonical]
 
 
 # --------------------------------------------------------------- canonical model
@@ -158,9 +173,9 @@ class CanonicalRecord(BaseModel):
     source_file: str = Field(..., description="routing key for the source")
     record_type: str = Field(default="article")
     domain_label: int = Field(default=ABSTAIN, description="downstream snorkel; -1 ABSTAIN")
-    domain_name: str = Field(..., description="CYBERSEC")
+    domain_name: str = Field(..., description="the corpus label, e.g. BANKING_COMPLIANCE")
     subdomain_label: int = Field(default=ABSTAIN, description="downstream snorkel; -1 ABSTAIN")
-    subdomain_name: str = Field(..., description="one of the 12 subdomain names")
+    subdomain_name: str = Field(..., description="one of the taxonomy's subdomain codes")
 
     # 7) Annotation (downstream-owned; null placeholders)
     safe_unsafe: str | None = Field(default=None, description="SAFE / UNSAFE")

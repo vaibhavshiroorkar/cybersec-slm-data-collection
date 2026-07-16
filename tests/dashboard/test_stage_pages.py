@@ -6,6 +6,7 @@ script ran. Skips unless the `dashboard` extra is installed.
 """
 
 import os
+import pathlib
 
 import pytest
 
@@ -124,7 +125,8 @@ def ingest_page(tmp_path, monkeypatch):
                         lambda d: (False, "non-commercial (nc)")
                         if (d.get("ref") or "").startswith("ownerB") else (True, "ok"))
 
-    catalog = tmp_path / "sources" / "Sources.csv"
+    from cybersec_slm.sourcing import profiles
+    catalog = pathlib.Path(profiles.catalog_path())
     catalog.parent.mkdir(parents=True, exist_ok=True)
     catalog.write_text(
         "Name,Sub-Domain,Dataset Link,Total Lines,JSONL Size (MB),License\n"

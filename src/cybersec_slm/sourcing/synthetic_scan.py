@@ -27,11 +27,11 @@ import re
 from ..core import LOGS, logger
 from ..ingestion.sources import (
     CATALOG_COLUMNS,
-    DEFAULT_CATALOG,
     _bool,
     _norm_headers,
     _resolve,
     _val,
+    default_catalog,
 )
 
 # Strong terms: a source that says any of these is almost certainly synthetic.
@@ -79,7 +79,7 @@ def scan(spec: str | None = None) -> list[dict]:
     """Classify every catalog row against the keyword lists (read-only)."""
     import pandas as pd
 
-    path = _resolve(spec or DEFAULT_CATALOG)
+    path = _resolve(spec or default_catalog())
     df = _norm_headers(pd.read_csv(path, dtype=str, keep_default_na=False,
                                    encoding="utf-8"))
     rows: list[dict] = []
@@ -115,7 +115,7 @@ def apply_suggestions(spec: str | None, rows: list[dict]) -> list[str]:
     """
     import pandas as pd
 
-    path = _resolve(spec or DEFAULT_CATALOG)
+    path = _resolve(spec or default_catalog())
     targets = {r["dataset_link"] for r in rows if r["gap"]}
     if not targets:
         return []

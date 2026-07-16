@@ -59,7 +59,13 @@ _ALLOW = re.compile(
     r"public domain|us[- ]gov|u\.s\. gov|government work|"
     r"mitre|ietf|cc[- ]by[- ]?4\.0|open access|"
     r"free for commercial|commercial use permitted|commercial use allowed|"
-    r"royalty[- ]free|free to use|free of charge|free for any|free for all"
+    r"royalty[- ]free|free to use|free of charge|free for any|free for all|"
+    # First-party content: we own it, or hold the owner's authorization for it.
+    # Stamped by enrichment for a profile's ``owned_hosts`` (see
+    # sourcing.taxonomies.OWNED_LICENSE) and never scraped off a page, so a
+    # third-party source cannot talk its way past the gate by printing these words
+    # — the host has to be on the profile's owned list for the stamp to be applied.
+    r"first[- ]party|owner[- ]authori[sz]ed"
     r")\b"
 )
 

@@ -25,8 +25,8 @@ def _valid(**over):
         lang="en", token_count=5, char_count=30,
         pipeline_version="0.1.0", collected_at="2026-01-01T00:00:00Z",
         source_file="src", record_type="article",
-        domain_label=-1, domain_name="CYBERSEC",
-        subdomain_label=-1, subdomain_name="APPLICATION",
+        domain_label=-1, domain_name="BANKING_COMPLIANCE",
+        subdomain_label=-1, subdomain_name="AML_KYC",
         safe_unsafe=None, confidence=None, instruction=None, reviewed_by=None,
     )
     base.update(over)
@@ -40,8 +40,9 @@ def test_valid_record_roundtrips():
     assert d["domain_label"] == -1 and d["safe_unsafe"] is None
 
 
-def test_subdomain_enum_has_12():
-    assert len(SUBDOMAIN_NAMES) == 12
+def test_subdomain_enum_matches_taxonomy():
+    assert len(SUBDOMAIN_NAMES) == 4
+    assert len(SUBDOMAIN_NAMES) == len(CANONICAL_DOMAINS)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -68,16 +69,33 @@ def test_unknown_record_type_coerced_to_other():
     assert m.record_type == "other"
 
 
-def test_resolve_domain_cybersec_and_merged_tracks():
-    assert resolve_domain("Application Security") == ("CYBERSEC", "APPLICATION")
-    # Retired tracks fold onto their merge targets.
-    assert resolve_domain("Quantum") == ("CYBERSEC", "CRYPTOGRAPHY")
-    assert resolve_domain("Malware Analysis") == ("CYBERSEC", "THREAT_INTELLIGENCE")
-    # The old combined domain split into two.
-    assert resolve_domain("Penetration Testing") == ("CYBERSEC", "PENTEST")
-    assert resolve_domain("Vulnerability Management") == ("CYBERSEC", "VULN_MANAGEMENT")
-    # alias / case-insensitive folder name
-    assert resolve_domain("appsec")[1] == "APPLICATION"
+def test_resolve_domain_and_aliases():
+    D = "BANKING_COMPLIANCE"
+    assert resolve_domain("AML-KYC") == (D, "AML_KYC")
+    assert resolve_domain("Compliance and Risk Management") == (D, "COMPLIANCE_RISK")
+    assert resolve_domain("Internal Audit") == (D, "INTERNAL_AUDIT")
+    assert resolve_domain("Corporate Governance") == (D, "CORP_GOVERNANCE")
+    # Punctuation / spelling variants fold onto the canonical sub-domain.
+    # The slash spelling is what people write; it must still resolve, even
+    # though the canonical name avoids it (directory-name safety).
+    assert resolve_domain("AML/KYC")[1] == "AML_KYC"
+    assert resolve_domain("aml kyc")[1] == "AML_KYC"
+    assert resolve_domain("Know Your Customer")[1] == "AML_KYC"
+    # The team's own name for the governance track.
+    assert resolve_domain("Board Secretariat")[1] == "CORP_GOVERNANCE"
+    # Case-insensitive folder name.
+    assert resolve_domain("internal audit")[1] == "INTERNAL_AUDIT"
+
+
+def test_resolve_domain_uses_catalog_label_not_a_literal():
+    """The top-level label must come from the live catalog's domain_name.
+
+    resolve_domain used to return a hard-coded "CYBERSEC" while DOMAIN_NAMES was
+    read from the catalog, so re-pointing the taxonomy emitted a domain_name the
+    schema's own validator then rejected. Guard that they agree."""
+    domain_name, _ = resolve_domain("Internal Audit")
+    assert domain_name in DOMAIN_NAMES
+    CanonicalRecord(**_valid(domain_name=domain_name))
 
 
 def test_normalize_domain_rejects_unknown():
@@ -85,32 +103,23 @@ def test_normalize_domain_rejects_unknown():
         normalize_domain("Underwater Basket Weaving")
 
 
-def test_default_catalog_matches_legacy_order(tmp_path):
+def test_default_catalog_matches_taxonomy(tmp_path):
     """On a fresh catalog (no keywords.yaml on disk), the taxonomy derived from
-    sourcing.catalog must reproduce today's exact 12-domain order, enum codes,
-    and top-level domain_name -- the downstream snorkel LabelModel contract
-    depends on this order/naming never silently reshuffling."""
+    sourcing.catalog must reproduce the exact sub-domain order, enum codes, and
+    top-level domain_name -- the downstream snorkel LabelModel contract depends
+    on this order/naming never silently reshuffling."""
     cat = _catalog.load(str(tmp_path / "missing.yaml"))
     names = tuple(_catalog.subdomains(cat))
     codes = tuple(_catalog.code_for(n, cat) for n in names)
 
+    # Alphabetical by sub-domain name -- this is the LabelModel index order.
     assert names == CANONICAL_DOMAINS == (
-        "Application Security",
-        "Cloud Security",
-        "Cryptography",
-        "Data Security and Privacy",
-        "Governance, Risk and Compliance",
-        "Identity Access and Management",
-        "Incident Response and Forensics",
-        "Network Security",
-        "Penetration Testing",
-        "Security Operations",
-        "Threat Intelligence",
-        "Vulnerability Management",
+        "AML-KYC",
+        "Compliance and Risk Management",
+        "Corporate Governance",
+        "Internal Audit",
     )
     assert codes == SUBDOMAIN_NAMES == (
-        "APPLICATION", "CLOUD", "CRYPTOGRAPHY", "DATA_PRIVACY", "GRC", "IAM",
-        "INCIDENT_RESPONSE", "NETWORK", "PENTEST", "SECOPS",
-        "THREAT_INTELLIGENCE", "VULN_MANAGEMENT",
+        "AML_KYC", "COMPLIANCE_RISK", "CORP_GOVERNANCE", "INTERNAL_AUDIT",
     )
-    assert DOMAIN_NAMES == frozenset({"CYBERSEC"})
+    assert DOMAIN_NAMES == frozenset({"BANKING_COMPLIANCE"})

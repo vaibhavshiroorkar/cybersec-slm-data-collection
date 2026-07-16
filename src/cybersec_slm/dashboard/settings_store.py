@@ -11,9 +11,24 @@ and ``logs/`` but outside them, so a Reset (which wipes ``data/`` and ``logs/``)
 never clears saved settings. Streamlit-free and side-effect-light, so it is
 unit-testable directly.
 
-Shape::
+Settings are **per profile**: the cybersecurity corpus and the banking-compliance
+one want different worker counts, caps, and sourcing knobs, so switching profiles
+switches the whole settings set with it (see
+:mod:`cybersec_slm.sourcing.profiles`).
 
-    {"ingest": {"workers": 8, ...}, "clean": {...}, "source": {...}, "all": {...}}
+On-disk shape::
+
+    {"profiles": {"ubi":      {"ingest": {"workers": 8}, "clean": {...}},
+                  "cybersec": {"ingest": {"workers": 4}, ...}}}
+
+A legacy flat file (``{"ingest": {...}, ...}``, written before profiles existed)
+is read as belonging to the active profile and re-nested on the next write, so an
+existing install keeps its saved settings rather than silently reverting to
+defaults.
+
+:func:`load` and :func:`get_stage` return the *active profile's* map, so callers
+that predate profiles keep working unchanged; :func:`load_file` exposes the raw
+file for anything that needs every profile at once.
 """
 
 from __future__ import annotations
@@ -33,12 +48,21 @@ FILE_NAME = "pipeline_settings.json"
 _ALL_FEED_ORDER = ("schema", "eda", "clean", "ingest", "source", "all")
 
 
+# Top-level key holding the per-profile settings maps.
+_PROFILES_KEY = "profiles"
+
+
 def settings_path(path: str | None = None) -> str:
     return path or os.path.join(core.data_root(), FILE_NAME)
 
 
-def load(path: str | None = None) -> dict:
-    """Load the whole settings map (``{stage: {key: value}}``); {} if absent."""
+def _active_profile() -> str:
+    from ..sourcing import profiles
+    return profiles.active()
+
+
+def load_file(path: str | None = None) -> dict:
+    """The raw settings file (``{"profiles": {name: {stage: {...}}}}``); {} if absent."""
     p = settings_path(path)
     try:
         with open(p, encoding="utf-8") as f:
@@ -48,33 +72,71 @@ def load(path: str | None = None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def get_stage(stage: str, path: str | None = None) -> dict:
-    """Saved settings for one stage (empty dict if none)."""
-    val = load(path).get(stage)
+def _split(data: dict) -> tuple[dict, dict]:
+    """``(profiles_map, legacy_flat_map)`` from a raw file of either shape."""
+    nested = data.get(_PROFILES_KEY)
+    if isinstance(nested, dict):
+        return {k: v for k, v in nested.items() if isinstance(v, dict)}, {}
+    # Legacy flat file: every top-level dict value is a stage's settings.
+    legacy = {k: v for k, v in data.items() if isinstance(v, dict)}
+    return {}, legacy
+
+
+def load(path: str | None = None, *, profile: str | None = None) -> dict:
+    """The active (or named) profile's settings map (``{stage: {key: value}}``).
+
+    A legacy flat file is attributed to the active profile — see the module
+    docstring.
+    """
+    name = profile or _active_profile()
+    nested, legacy = _split(load_file(path))
+    if nested:
+        val = nested.get(name)
+        return dict(val) if isinstance(val, dict) else {}
+    return dict(legacy) if name == _active_profile() else {}
+
+
+def get_stage(stage: str, path: str | None = None, *,
+              profile: str | None = None) -> dict:
+    """Saved settings for one stage of the active (or named) profile."""
+    val = load(path, profile=profile).get(stage)
     return dict(val) if isinstance(val, dict) else {}
 
 
-def save_stage(stage: str, settings: dict, path: str | None = None) -> str:
-    """Persist ``settings`` as the saved defaults for ``stage``; return the path."""
+def save_stage(stage: str, settings: dict, path: str | None = None, *,
+               profile: str | None = None) -> str:
+    """Persist ``settings`` as ``stage``'s defaults for one profile; return the path.
+
+    Writing always emits the nested shape, which is what migrates a legacy flat
+    file: its stages are carried over as the active profile's, then the new value
+    is applied on top.
+    """
+    name = profile or _active_profile()
     p = settings_path(path)
-    data = load(path)
-    data[stage] = dict(settings or {})
+    nested, legacy = _split(load_file(path))
+    if legacy and not nested:
+        nested = {_active_profile(): legacy}
+    stages = dict(nested.get(name) or {})
+    stages[stage] = dict(settings or {})
+    nested[name] = stages
+
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     tmp = f"{p}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        json.dump({_PROFILES_KEY: nested}, f, indent=2)
     os.replace(tmp, p)
     return p
 
 
-def merged_all(path: str | None = None) -> dict:
+def merged_all(path: str | None = None, *,
+               profile: str | None = None) -> dict:
     """Saved settings merged for a full ``all`` run.
 
     Combines every stage's saved settings (ingest/clean/eda/schema) plus any saved
     under ``all``; ``build_command('all', ...)`` later drops any flag ``all`` does
     not accept, so per-stage-only flags (e.g. ``domains``) fall away harmlessly.
     """
-    data = load(path)
+    data = load(path, profile=profile)
     out: dict = {}
     for stage in _ALL_FEED_ORDER:
         val = data.get(stage)

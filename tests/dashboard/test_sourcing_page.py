@@ -29,13 +29,17 @@ def page(tmp_path, monkeypatch):
     from cybersec_slm.dashboard import data
 
     monkeypatch.setattr(data, "_repo_root", lambda: str(tmp_path))
-    os.makedirs(os.path.join(str(tmp_path), "sources"), exist_ok=True)
+    from cybersec_slm.sourcing import profiles
+    profiles.ensure()
     return AppTest.from_file(_PAGE, default_timeout=30)
 
 
 @pytest.fixture
-def catalog_csv(tmp_path):
-    return os.path.join(str(tmp_path), "sources", "Sources.csv")
+def catalog_csv(tmp_path, monkeypatch):
+    """The active profile's Sources.csv under the tmp data root."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    from cybersec_slm.sourcing import profiles
+    return profiles.catalog_path()
 
 
 def _taxonomy(**subdomains):
@@ -178,6 +182,9 @@ def test_add_source_appends_a_row_to_the_catalog(page, catalog_csv):
 
     import pandas as pd
     df = pd.read_csv(catalog_csv, dtype=str, keep_default_na=False)
+    # The active profile seeds its own-content rows, so assert on the row this
+    # test added rather than on the catalog's total length.
+    df = df[df["Name"] == "darkknight25"].reset_index(drop=True)
     assert len(df) == 1
     row = df.iloc[0]
     assert row["Name"] == "darkknight25"
@@ -203,10 +210,11 @@ def test_add_source_is_ingestable(page, catalog_csv):
     page.button(key="ms_add").click().run()
     assert not page.exception
 
-    descs = srcs.load_descriptors(catalog_csv, order_by_size=False)
+    # The profile's seeded own-content rows load too; pick out the one added here.
+    descs = [d for d in srcs.load_descriptors(catalog_csv, order_by_size=False)
+             if d.get("ref") == "dk/cloud"]
     assert len(descs) == 1
     assert descs[0]["kind"] == "hf"
-    assert descs[0]["ref"] == "dk/cloud"
     assert descs[0]["domain"] == "Cloud Security"
     assert descs[0]["license"] == "MIT"
 

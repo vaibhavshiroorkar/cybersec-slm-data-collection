@@ -1,0 +1,40 @@
+# SearXNG config for the sourcing stage's discovery backend.
+#
+# Two settings here are load-bearing and the upstream defaults get both wrong for
+# this use:
+#
+#   search.formats  must include `json` — the pipeline talks to the JSON API
+#                   (`/search?...&format=json`). Upstream ships `[html]` only, and
+#                   the client just gets a 403 without this.
+#   server.limiter  must be false — the bot-detection limiter rejects programmatic
+#                   requests (no browser headers, no cookies), which is exactly
+#                   what the sourcing client is.
+#
+# Start with:  docker compose -f docker-compose.searxng.yml up -d
+# Verify with: curl -s "http://localhost:8080/search?q=test&format=json"
+
+use_default_settings: true
+
+server:
+  # Injected from $SEARXNG_SECRET by the compose file, so no key is committed —
+  # this is only session signing for a localhost instance, but a literal
+  # "secret_key" in a repo is a habit worth not forming (and trips secret
+  # scanners).
+  secret_key: !!str "@SEARXNG_SECRET"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  # The pipeline asks for English results; leave the rest at upstream defaults.
+  default_lang: "en"
+  # Be gentle with upstream engines during a long sweep.
+  max_page: 20
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 20.0
+  pool_connections: 100
+  pool_maxsize: 20

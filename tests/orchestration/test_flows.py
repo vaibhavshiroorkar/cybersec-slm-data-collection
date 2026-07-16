@@ -11,8 +11,10 @@ def test_module_imports_without_prefect():
     assert callable(flows.build_corpus)
 
 
-def test_load_descriptors_returns_catalog():
-    # No spec -> defaults to sources/Sources.csv (the single catalog).
+def test_load_descriptors_returns_catalog(monkeypatch):
+    # No spec -> defaults to the active profile's Sources.csv. Pin a profile whose
+    # catalog is populated (ubi ships empty until sourcing runs).
+    monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
     ds = flows._load_descriptors()
     assert isinstance(ds, list) and len(ds) > 0
     assert all("kind" in d for d in ds)

@@ -286,13 +286,14 @@ def run_status() -> dict:
 
 def _catalog_total() -> int | None:
     """Best-effort count of sources in the repo catalog (the run's denominator)."""
-    path = os.path.join(_repo_root(), "sources", "Sources.csv")
-    rows = _read_csv(path)
+    rows = _read_csv(_catalog_path())
     return len(rows) if rows else None
 
 
 def _catalog_path() -> str:
-    return os.path.join(_repo_root(), "sources", "Sources.csv")
+    """The active profile's Sources.csv — follows a profile switch."""
+    from ..sourcing import profiles
+    return profiles.catalog_path()
 
 
 def catalog_path() -> str:
@@ -301,15 +302,16 @@ def catalog_path() -> str:
 
 
 def catalog_rows() -> list[dict]:
-    """Every row of the source catalog (``sources/Sources.csv``), as read."""
+    """Every row of the active profile's source catalog, as read."""
     return _read_csv(_catalog_path())
 
 
 def catalog_summary() -> dict:
     """Source catalog overview: total rows + per-Sub-Domain counts.
 
-    Read straight from ``sources/Sources.csv`` so the landing page has a
-    meaningful distribution to show even before any run has produced a manifest.
+    Read straight from the active profile's ``Sources.csv`` so the landing page
+    has a meaningful distribution to show even before any run has produced a
+    manifest.
     Returns ``{"total": int, "by_domain": {name: count}}`` (empty when absent).
     """
     rows = catalog_rows()
@@ -326,11 +328,13 @@ def catalog_subdomains() -> list[str]:
 
 
 def _blacklist_path() -> str:
-    return os.path.join(_repo_root(), "sources", "Blacklist.csv")
+    """The active profile's Blacklist.csv — follows a profile switch."""
+    from ..sourcing import profiles
+    return profiles.blacklist_path()
 
 
 def blacklist_rows() -> list[dict]:
-    """Every row of the license blacklist (``sources/Blacklist.csv``), as read."""
+    """Every row of the license blacklist (the active profile's ``Blacklist.csv``), as read."""
     return _read_csv(_blacklist_path())
 
 
@@ -1448,6 +1452,122 @@ def loss_breakdown() -> dict:
 
     return {"raw_in": raw_in, "clean_out": clean_out, "final_written": final_written,
             "stages": stages, "per_source": per_source}
+
+
+# -------------------------------------------------------------- stage funnels -
+def sourcing_funnel() -> dict:
+    """What the last sourcing run pulled back, and what it kept — a strict funnel.
+
+    Reads the ``funnel`` block of the newest ``summary-*.json`` (written by
+    :func:`cybersec_slm.sourcing.run.discover`) and turns it into display rows::
+
+        {"ran": bool, "found": int,
+         "rows": [{"stage", "detail", "count", "pct"} ...],   # the funnel, in order
+         "restricted_hosts": [{"host", "count"} ...],         # legal-scope cost
+         "by_domain": [{"sub-domain", "found", "dropped", "candidates", "kept_pct"}]}
+
+    ``ran`` is False on a fresh checkout, or when the newest summary predates the
+    funnel block (an older run) — the caller shows a hint rather than a table of
+    zeros that looks like a run which found nothing.
+    """
+    summ = latest_source_summary() or {}
+    f = summ.get("funnel") or {}
+    if not f:
+        return {"ran": False, "found": 0, "rows": [], "restricted_hosts": [],
+                "by_domain": []}
+
+    found = _to_int(f, "found")
+
+    def pct(n: int) -> float:
+        return round(100 * n / found, 1) if found else 0.0
+
+    dropped = f.get("dropped") or {}
+    lic = f.get("license") or {}
+    rows = [{"stage": "search hits", "detail": "returned by SearXNG",
+             "count": found, "pct": 100.0 if found else 0.0}]
+    rows += [{"stage": f"dropped: {cat}",
+              "detail": _DROP_DETAIL.get(cat, ""),
+              "count": _to_int(dropped, cat), "pct": pct(_to_int(dropped, cat))}
+             for cat in dropped]
+    rows += [
+        {"stage": "dropped: duplicate", "detail": "already in the catalog, or seen this run",
+         "count": _to_int(f, "duplicates"), "pct": pct(_to_int(f, "duplicates"))},
+        {"stage": "candidates", "detail": "survived the filters, licence resolved",
+         "count": _to_int(f, "candidates"), "pct": pct(_to_int(f, "candidates"))},
+        {"stage": "  licence ok", "detail": "clearly commercial -> keepable",
+         "count": _to_int(lic, "ok"), "pct": pct(_to_int(lic, "ok"))},
+        {"stage": "  licence unknown", "detail": "blank or unrecognised -> needs a human",
+         "count": _to_int(lic, "unknown"), "pct": pct(_to_int(lic, "unknown"))},
+        {"stage": "  licence blocked", "detail": "confirmed red (copyleft / NC / ARR)",
+         "count": _to_int(lic, "blocked"), "pct": pct(_to_int(lic, "blocked"))},
+        {"stage": "appended", "detail": "written to the catalog",
+         "count": _to_int(f, "appended"), "pct": pct(_to_int(f, "appended"))},
+    ]
+    unprocessed = _to_int(f, "unprocessed")
+    if unprocessed:
+        rows.insert(-4, {
+            "stage": "unprocessed",
+            "detail": "fetched, but the run hit its cap/budget before examining them",
+            "count": unprocessed, "pct": pct(unprocessed)})
+
+    by_domain = []
+    for dom, d in sorted((f.get("by_domain") or {}).items()):
+        dfound = _to_int(d, "found")
+        by_domain.append({
+            "sub-domain": dom, "found": dfound, "dropped": _to_int(d, "dropped"),
+            "candidates": _to_int(d, "candidates"),
+            "kept_pct": (round(100 * _to_int(d, "candidates") / dfound, 1)
+                         if dfound else 0.0),
+        })
+
+    hosts = [{"host": h, "count": n}
+             for h, n in (f.get("restricted_by_host") or {}).items()]
+    return {"ran": True, "found": found, "rows": rows,
+            "restricted_hosts": hosts, "by_domain": by_domain}
+
+
+# Drop category -> the one-line explanation shown next to it.
+_DROP_DETAIL = {
+    "bad link": "empty or host-less URL",
+    "junk host": "social / video / Q&A host",
+    "restricted host": "licence bars commercial reuse (see docs/sources/legal_scope.md)",
+    "listing page": "a search / tag / topic page, not a single source",
+}
+
+# Ingest status -> (display label, why). Mirrors ingest_table()'s `status` values.
+_INGEST_STATUS = {
+    "ingested": ("ingested", "produced records under data/raw/"),
+    "license": ("blocked: licence", "the commercial-licence gate turned it away"),
+    "failed": ("failed", "the fetch errored"),
+    "timed out": ("timed out", "the fetch exceeded its budget"),
+    "rejected": ("rejected", "fetched but rejected before writing"),
+    "no records": ("no records", "fetched but produced nothing usable"),
+}
+
+
+def ingest_funnel(rows: list[dict] | None = None) -> dict:
+    """Catalog -> ingested, with every source that fell out and why.
+
+    Aggregates :func:`ingest_table` by ``status``. ``rows`` accepts a cached
+    ``ingest_table()`` result (it walks ``data/raw``); omit to compute now.
+    Returns ``{"total", "ingested", "rows": [{"outcome","detail","sources","pct"}]}``
+    ordered ingested-first, then by size of the loss.
+    """
+    rows = ingest_table() if rows is None else rows
+    total = len(rows)
+    by_status: dict[str, int] = {}
+    for r in rows:
+        by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+
+    def pct(n: int) -> float:
+        return round(100 * n / total, 1) if total else 0.0
+
+    out = []
+    for status, n in by_status.items():
+        label, detail = _INGEST_STATUS.get(status, (status, ""))
+        out.append({"outcome": label, "detail": detail, "sources": n, "pct": pct(n)})
+    out.sort(key=lambda r: (r["outcome"] != "ingested", -r["sources"]))
+    return {"total": total, "ingested": by_status.get("ingested", 0), "rows": out}
 
 
 # ---------------------------------------------------------------- dataset view -

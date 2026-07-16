@@ -137,7 +137,8 @@ def test_live_strip_shows_progress_chart_while_running(tmp_path, monkeypatch):
                    "resume": False, "started_at": "2026-07-15 12:00:00"}, f)
     with open(os.path.join(logs, "completed_sources.txt"), "w", encoding="utf-8") as f:
         f.write("a\nb\n")
-    sources_dir = os.path.join(str(tmp_path), "sources")
+    from cybersec_slm.sourcing import profiles
+    sources_dir = profiles.profile_dir()
     os.makedirs(sources_dir, exist_ok=True)
     with open(os.path.join(sources_dir, "Sources.csv"), "w", encoding="utf-8") as f:
         f.write("Name,Sub-Domain\na,D\nb,D\nc,D\nd,D\n")

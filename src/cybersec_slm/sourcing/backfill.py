@@ -22,12 +22,16 @@ import os
 from datetime import date
 from urllib.parse import urlparse
 
-from ..core import DATA_ROOT, LOGS, logger
+from ..core import LOGS, logger
 from . import blacklist
 from .license_detect import detect_license
 from .sheet import _link_column
 
-DEFAULT_CATALOG = os.path.join(DATA_ROOT, "sources", "Sources.csv")
+
+def default_catalog() -> str:
+    """The active profile's ``Sources.csv``."""
+    from . import profiles
+    return profiles.catalog_path()
 
 # Licenses that count as "not yet resolved" and so are (re)detected by default.
 _UNRESOLVED = {"", "unknown", "to-verify", "n/a", "none", "tbd"}
@@ -64,7 +68,7 @@ def backfill_licenses(csv_path: str | None = None, *, only_blank: bool = True,
     Returns ``{"scanned", "detected", "still_unknown", "blacklisted", "csv",
     "summary", "by_host", "dry_run"}``.
     """
-    csv_path = csv_path or DEFAULT_CATALOG
+    csv_path = csv_path or default_catalog()
     token = github_token or os.getenv("GITHUB_TOKEN") or None
     if not os.path.exists(csv_path):
         logger.info(f"source: backfill: no catalog at {csv_path}")

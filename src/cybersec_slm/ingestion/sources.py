@@ -39,9 +39,24 @@ from .common import GOV_US, logger
 
 # The catalog lives in the repo's ``sources/`` dir (curated, version-controlled),
 # not the relocatable data root — resolve it relative to this package, like
-# allowlist.py does for allowlist.yaml.
+# allowlist.py does for allowlist.yaml. Which catalog, though, depends on the
+# active *profile* (cybersec / ubi / ...), so this is resolved per call rather
+# than bound once at import — see cybersec_slm.sourcing.profiles.
 _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-DEFAULT_CATALOG = os.path.join(_PKG_ROOT, "sources", "Sources.csv")
+
+
+def default_catalog() -> str:
+    """Path to the active profile's ``Sources.csv``."""
+    # Imported lazily: sourcing.profiles -> sourcing.catalog -> this module.
+    from ..sourcing import profiles
+    return profiles.catalog_path()
+
+
+def __getattr__(name: str):
+    """Back-compat: ``sources.DEFAULT_CATALOG`` still resolves (now per-profile)."""
+    if name == "DEFAULT_CATALOG":
+        return default_catalog()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Canonical catalog schema — the columns of ``sources/Sources.csv`` (in order).
 # Shared by the sourcing crawler (which appends rows) and the cleaning driver
@@ -426,7 +441,7 @@ def synthetic_identities(spec: str | None = None) -> frozenset[str]:
     """
     import pandas as pd
 
-    path = _resolve(spec or DEFAULT_CATALOG)
+    path = _resolve(spec or default_catalog())
     df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
     ids: set[str] = set()
