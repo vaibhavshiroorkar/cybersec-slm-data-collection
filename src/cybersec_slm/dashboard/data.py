@@ -23,6 +23,7 @@ import sqlite3
 import time
 
 from .. import core, stages
+from . import final_stats
 
 # A per-PID pipeline log touched within this window means a run is in progress.
 # Heuristic (a long download can be quiet): the UI labels it "recent activity".
@@ -1607,16 +1608,16 @@ def data_funnel(measure_size: bool = True) -> dict:
     honest per-machine state). Raw *and* cleaned records are counted, never taken
     from the catalog (whose ``Total Lines`` understated the live corpus by 149%)
     nor from the clean report (which describes one pass rather than the corpus —
-    see the Cleaned block below). Final counts come from the manifest.
+    see the Cleaned block below), nor from the manifest (which only exists once a
+    normalize pass has finished — see the Final block below).
 
-    ``measure_size=False`` skips the byte counts and BOTH record scans, returning
+    ``measure_size=False`` skips the byte counts and every record scan, returning
     those figures as 0 so the Overview can refresh live *source* counts every
     second cheaply and fill records/sizes from cached snapshots
     (:func:`cached.raw_records`, :func:`cached.cleaned_records`,
-    :func:`cached.raw_size_mb`). Callers that need them (the cached wrappers and
-    the per-stage pages) keep the default.
+    :func:`cached.raw_size_mb`, :func:`cached.final_stats`). Callers that need
+    them (the cached wrappers and the per-stage pages) keep the default.
     """
-    man = manifest()
     nr = normalize_report()
 
     # Raw: count the source folders present and derive line totals only for
@@ -1640,12 +1641,19 @@ def data_funnel(measure_size: bool = True) -> dict:
     cleaned_sources = _count_source_dirs(clean_root)
     cleaned_lines = _count_jsonl_records(clean_root) if measure_size else 0
 
-    # Final: manifest is the canonical source of truth.
+    # Final: counted from dataset.jsonl, NOT from the manifest. The manifest is
+    # only written when a whole normalize pass finishes, so during a run (and
+    # after any interrupted one) it is absent while the dataset is large and
+    # growing: the row read 0 sources / 0 records beside a multi-GB Size. Same
+    # rule as Raw and Cleaned above - disk is the only figure that survives a
+    # resume. The scan is incremental (see final_stats), so the cost is paid once.
     final_file = os.path.join(_final(), "dataset.jsonl")
     appended_size_mb = (os.path.getsize(final_file) / (1024 * 1024)
                         if os.path.exists(final_file) else 0.0)
-    appended_lines = man.get("record_count", 0) if man else 0
-    appended_sources = len(man.get("sources", {})) if man else 0
+    fs = final_stats.scan(final_file) if measure_size else final_stats.FinalStats()
+    appended_lines = fs.records
+    appended_sources = fs.sources
+    appended_tokens = fs.tokens
 
     # Normalization losses - shown in the funnel so the cleaned→final drop is explained.
     norm_counts = (nr or {}).get("counts", {})
@@ -1660,6 +1668,7 @@ def data_funnel(measure_size: bool = True) -> dict:
         "appended": {
             "sources": appended_sources,
             "lines": appended_lines,
+            "tokens": appended_tokens,
             "size_mb": appended_size_mb,
             "synthetic_excluded": synthetic_excluded,
             "near_dups": near_dups,

@@ -58,17 +58,12 @@ def _live() -> None:
                   "finished": "done"}.get(t.get("basis"), "—")
         top[3].metric("Est. total", _basis if running else "—")
 
-    # Live sources bar + "Stage N of 5" caption, shown only while a run is active.
+    # "Stage N of 5" caption, shown only while a run is active. The sources-checked
+    # bar that used to sit here is gone: the corpus funnel renders the same figure
+    # from the same ingest_progress() a few hundred pixels below, so the Overview
+    # showed one progress bar twice.
     if running:
-        ip = data.ingest_progress()
-        total = ip.get("total") or 0
-        checked = ip.get("checked") or 0
-        pct = (checked / total) if total else 0.0
-        st.progress(min(pct, 1.0),
-                    text=f"Ingest  ·  {charts.fmt_int(checked)} / "
-                         f"{charts.fmt_int(total)} sources ({pct * 100:.0f}%)"
-                         if total else
-                         f"Ingest  ·  {charts.fmt_int(checked)} sources")
+        checked = data.ingest_progress().get("checked") or 0
         idx, tot = phase.get("index"), phase.get("total")
         if idx and tot:
             st.caption(f"Stage {idx} of {tot}  ·  {phase.get('label', '')}")
@@ -267,6 +262,10 @@ def _corpus_funnel() -> None:
     # Cleaned records grow live as clean workers write; the clean report only lands
     # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
     funnel["cleaned"]["lines"] = cached.cleaned_records(_root)
+    # Same treatment for the final dataset, which grows live as normalize appends
+    # and whose manifest only lands when the pass finishes. Reading it from the
+    # manifest showed 0 records beside a multi-GB Size for the whole run.
+    funnel["appended"].update(cached.final_stats(_root))
     prog = data.ingest_progress()
     pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
     st.progress(min(pct, 1.0),

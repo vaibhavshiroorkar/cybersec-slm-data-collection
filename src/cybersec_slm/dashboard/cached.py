@@ -15,6 +15,7 @@ import os
 import streamlit as st
 
 from . import data
+from . import final_stats as _final_stats
 
 # Long TTL: the raw tree only changes when ingestion runs, so one measurement
 # per dashboard session is plenty. The user can hard-refresh to remeasure.
@@ -85,6 +86,26 @@ def cleaned_records(root: str) -> int:
     return data._count_jsonl_records(os.path.join(root, "data", "clean"))
 
 
+@st.cache_data(ttl=_CLEAN_RECORDS_TTL_S,
+               show_spinner="Counting data/final records (one-time)...")
+def final_stats(root: str) -> dict:
+    """Records / sources / tokens / size of ``data/final/dataset.jsonl``.
+
+    Shares the cleaned count's short TTL for the same reason: the final dataset
+    grows live as normalize appends to it, and its manifest only lands when the
+    pass finishes. Returned as a plain dict because ``st.cache_data`` pickles its
+    values, and callers only read fields.
+
+    The scan underneath is incremental, so this TTL bounds how often a tick pays
+    for the few MB appended since the last one, not a re-read of the whole corpus.
+    Only the very first scan reads the lot (about 17s at 5 GB), which is why this
+    one shows a spinner while the short-TTL refreshes stay silent.
+    """
+    fs = _final_stats.scan(os.path.join(root, "data", "final", "dataset.jsonl"))
+    return {"sources": fs.sources, "lines": fs.records, "tokens": fs.tokens,
+            "size_mb": fs.size_mb}
+
+
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
 def cleaned_table(root: str) -> list[dict]:
     """Cached per-source cleaned-folder table (:func:`data.cleaned_table`).
@@ -115,5 +136,10 @@ def clear_stats() -> None:
     raw_records.clear()
     data_funnel.clear()
     cleaned_records.clear()
+    final_stats.clear()
     cleaned_table.clear()
     ingest_table.clear()
+    # The scan memo is keyed on byte offsets in dataset.jsonl, so a Reset that
+    # deletes data/ must drop it too; otherwise the next scan would resume from an
+    # offset into a file that no longer exists.
+    _final_stats.reset()
