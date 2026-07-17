@@ -93,7 +93,11 @@ def _convert_and_log(original, jsonl, log, *, kind, name, domain, desc, url, lic
     orig_mb = os.path.getsize(original) / ONE_MB
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
                 description=desc, source_url=url, origin_format=fmt, license=lic)
-    record_meta = {"source": desc, "url": url, "license": lic}
+    # source is an identity, so it is the source's name. It used to be `desc`,
+    # which wrote a sentence of prose into every record and made each source look
+    # like a different one downstream. The description is prose about the source
+    # and rides on the ingest-log row (meta) instead.
+    record_meta = {"source": name, "url": url, "license": lic}
     size = to_jsonl(original, jsonl, meta=record_meta)
     rows = count_lines(jsonl)
     logger.info(f"  {os.path.basename(jsonl)}: {rows:,} rows, {size/ONE_MB:.1f} MB")
@@ -108,7 +112,7 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
     as many small files (e.g. iann0036/iam-dataset) collapses into one output
     instead of one-jsonl-per-file. The source is recorded once.
     """
-    record_meta = {"source": desc, "url": url, "license": lic}
+    record_meta = {"source": name, "url": url, "license": lic}   # name, not desc
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
                 description=desc, source_url=url, origin_format=origin_fmt, license=lic)
     open(jsonl, "wb").close()
