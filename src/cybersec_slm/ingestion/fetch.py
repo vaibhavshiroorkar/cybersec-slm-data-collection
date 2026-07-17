@@ -10,6 +10,7 @@ import os
 import shutil
 from urllib.parse import urlparse
 
+from . import archive
 from .common import (
     EXT_PRIORITY,
     ONE_MB,
@@ -219,9 +220,7 @@ def fetch_kaggle(ref, domain, desc, lic, folder, log):
         api.dataset_download_file(ref, rel, path=tmp, quiet=True)
         got = os.path.join(tmp, os.path.basename(rel))
         if not os.path.exists(got) and os.path.exists(got + ".zip"):
-            import zipfile
-            with zipfile.ZipFile(got + ".zip") as z:
-                z.extractall(tmp)
+            archive.safe_extract(got + ".zip", tmp)
         if not os.path.exists(got):
             logger.error(f"  download missing: {rel}"); continue
         orig = os.path.join(folder, os.path.basename(rel))
@@ -241,10 +240,10 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
     orig = os.path.join(folder, name)
     download(url, orig)
     if orig.lower().endswith(".zip") or _is_zipfile(orig):
-        import zipfile
         zdir = os.path.join(folder, "_z"); os.makedirs(zdir, exist_ok=True)
-        with zipfile.ZipFile(orig) as z:
-            z.extractall(zdir)
+        # Guarded: a downloaded archive is attacker-supplied input, and the sizes
+        # it declares are a claim. safe_extract checks them before writing a byte.
+        archive.safe_extract(orig, zdir)
         os.remove(orig)
         data = [os.path.join(r, f) for r, _d, fs in os.walk(zdir) for f in fs
                 if f.lower().endswith(EXT_PRIORITY)
