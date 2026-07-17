@@ -53,3 +53,11 @@ def test_synthetic_identities_reads_flag(tmp_path):
          "Is Synthetic?": "yes"},   # case-insensitive truthy
     ])
     assert synthetic_identities(cat) == frozenset({"hf:org/synth", "kaggle:u/sim"})
+
+
+def test_synthetic_identities_of_a_missing_catalog_is_empty_not_an_error(tmp_path):
+    """Normalize runs over data/clean, which can exist without the catalog (a
+    corpus handed over without its sourcing sheet, an isolated test root). A
+    missing catalog means nothing is flagged synthetic, so the stage keeps running
+    rather than failing over a filter with nothing to filter."""
+    assert synthetic_identities(str(tmp_path / "nope" / "Sources.csv")) == frozenset()
