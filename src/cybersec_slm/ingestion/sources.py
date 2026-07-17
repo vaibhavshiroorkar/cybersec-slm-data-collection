@@ -35,6 +35,7 @@ import os
 import re
 from urllib.parse import urlparse
 
+from . import rss as _rss
 from .common import GOV_US, logger
 
 # The catalog lives in the repo's ``sources/`` dir (curated, version-controlled),
@@ -285,6 +286,12 @@ def _row_to_descriptor(row: dict) -> dict | None:
             kind = "api"          # NVD CVE 2.0 — paginated REST API (fetch_nvd)
         elif low.endswith(".xml.zip") or ("cwe.mitre.org" in low and ".xml" in low):
             kind = "xml"          # MITRE CWE — XML-in-ZIP needing custom parsing (scrape_cwe)
+        elif _rss.is_feed_url(low):
+            # RSS/Atom (scrape_rss). Before the website/url fallbacks, which is
+            # where these used to land: a feed downloaded as an opaque file
+            # produced no records and no error, so the source looked fetched.
+            # After the CWE test above, which is also .xml and has its own fetcher.
+            kind = "rss"
         elif "huggingface.co/datasets/" in low:
             kind = "hf"
         elif "kaggle.com/datasets/" in low:
@@ -324,6 +331,9 @@ def _row_to_descriptor(row: dict) -> dict | None:
     if kind == "feed":
         return dict(kind="feed", domain=domain, slug=slug, title=name,
                     license=lic, url=url, json_key=_feed_key(slug, row))
+    if kind == "rss":
+        return dict(kind="rss", domain=domain, slug=slug, title=name,
+                    license=lic, url=url)
     if kind == "website":
         prefix = _val(row, "allow_prefix")
         if not prefix:

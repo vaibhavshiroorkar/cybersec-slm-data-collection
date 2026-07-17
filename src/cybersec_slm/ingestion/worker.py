@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 
 from ..core import RAW_DATA, logger
-from . import fetch, fetch_nvd, light_eda, scrape, scrape_html
+from . import fetch, fetch_nvd, light_eda, rss, scrape, scrape_html
 from .common import _Collector
 from .license_gate import is_license_ok
 from .sources import descriptor_key, synthetic_identities
@@ -62,6 +62,9 @@ def _fetch_one(descriptor: dict, log) -> str:
     elif kind == "feed":
         scrape.scrape_feed(domain, slug, descriptor["title"], descriptor["license"],
                            descriptor["url"], descriptor["json_key"], log)
+    elif kind == "rss":
+        rss.scrape_rss(domain, slug, descriptor["title"], descriptor["license"],
+                       descriptor["url"], log)
     elif kind == "website":
         scrape_html.crawl(domain, slug, descriptor["start_url"], descriptor["license"],
                           descriptor["use_js"], descriptor["max_pages"],
