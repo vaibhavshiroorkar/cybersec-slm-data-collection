@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from cybersec_slm import llm
 from cybersec_slm.dashboard import charts, control, data, settings_store, ui
-from cybersec_slm.sourcing import blacklist, catalog, sheet
+from cybersec_slm.sourcing import blacklist, catalog, review, sheet
 from cybersec_slm.sourcing import row as row_builder
 
 ui.inject_css()
@@ -35,9 +36,10 @@ cat = catalog.load()
 all_domains = catalog.subdomains(cat)
 cat_summary = data.catalog_summary()
 
-(discover_tab, catalog_tab, licenses_tab, edit_tab, add_tab, delete_tab,
- csv_tab) = st.tabs(["Discover", "Catalog", "Licenses", "Sub-domains",
-                     "Add source", "Delete rows", "Sources.csv"])
+(discover_tab, catalog_tab, licenses_tab, edit_tab, add_tab, filter_tab,
+ delete_tab, csv_tab) = st.tabs(["Discover", "Catalog", "Licenses", "Sub-domains",
+                                 "Add source", "Filter", "Delete rows",
+                                 "Sources.csv"])
 
 # ============================================================== Discover =======
 with discover_tab:
@@ -502,6 +504,77 @@ with add_tab:
                     st.rerun()
             if not all(_required):
                 st.caption("Name, Sub-Domain, and Dataset Link are required.")
+
+# ================================================================== Filter =====
+with filter_tab:
+    with ui.section(
+            "Filter the catalog by a rule",
+            "State a condition in plain English and a model judges every row "
+            "against it. Nothing moves until you apply the result."):
+        st.caption(
+            "The catalog is judged on its metadata (Name, Sub-Domain, "
+            "Description, link, Category), never on the records themselves, and "
+            "Descriptions are search snippets: a source that is genuinely in "
+            "scope but never says so will be declined. Read the report before "
+            "applying it.")
+
+        _cond = st.text_input(
+            "Condition", key="rev_condition",
+            placeholder="the data must concern India",
+            help="Judged per row. Anything you can state in a sentence works: a "
+                 "geography, a document type, a quality bar.")
+
+        _c = st.columns([1, 1, 2])
+        _go = _c[0].button("Judge the catalog", key="rev_scan",
+                           disabled=not _cond.strip(),
+                           help="Reads every row and records a verdict. Costs one "
+                                "model call per row and changes nothing.")
+        if not llm.is_available():
+            st.warning("No model configured: set $NVIDIA_API_KEY and install the "
+                       "agent extra (uv sync --extra agent).")
+
+        if _go:
+            with st.spinner(f"Judging {cat_summary['total']} source(s)..."):
+                try:
+                    st.session_state["_rev"] = review.run_scan(_cond.strip())
+                except Exception as _e:                      # noqa: BLE001
+                    st.session_state["_rev"] = None
+                    st.error(f"Review failed: {_e}")
+
+        _rev = st.session_state.get("_rev")
+        if _rev:
+            _counts = _rev["counts"]
+            ui.stat_grid([
+                ("Approved", charts.fmt_int(_counts.get(review.APPROVE))),
+                ("Declined", charts.fmt_int(_counts.get(review.DECLINE))),
+                ("Needs a human", charts.fmt_int(_counts.get(review.REVIEW))),
+                ("Judged", charts.fmt_int(sum(_counts.values()))),
+            ], cols=4)
+            st.caption(f"Report: `{_rev['report']}`. Only high-confidence declines "
+                       "move; 'needs a human' rows are never applied.")
+            ui.table([{"verdict": r["verdict"], "confidence": r["confidence"],
+                       "source": r["name"], "sub-domain": r["sub_domain"],
+                       "why": r["reason"]}
+                      for r in sorted(_rev["results"],
+                                      key=lambda r: (r["verdict"] != review.DECLINE,
+                                                     r["name"]))],
+                     height=340)
+
+            _n = _counts.get(review.DECLINE, 0)
+            st.warning(
+                f"Applying moves {_n} declined source(s) out of Sources.csv and "
+                f"into the profile's Excluded.csv, with the model's reason. They "
+                f"are recoverable from there; nothing is deleted.")
+            if st.button(f"Apply: move {_n} declined source(s)", key="rev_apply",
+                         disabled=not _n):
+                try:
+                    _res = review.apply_report(_rev["report"],
+                                               condition=_rev["results"][0]["condition"])
+                    st.success(f"Moved {_res['moved']} source(s) to Excluded.csv.")
+                    st.session_state["_rev"] = None
+                    st.rerun()
+                except Exception as _e:                      # noqa: BLE001
+                    st.error(f"Apply failed: {_e}")
 
 # ============================================================= Delete rows =====
 with delete_tab:

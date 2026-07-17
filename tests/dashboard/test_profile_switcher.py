@@ -76,3 +76,66 @@ def test_switcher_is_locked_while_a_run_is_in_flight(monkeypatch):
     assert not app.exception
     assert app.selectbox(key="profile_pick").disabled, (
         "switching mid-run would finish the run against a different corpus")
+
+
+# ------------------------------------------------------------ create ----------
+def test_creating_a_profile_from_the_sidebar(tmp_path, monkeypatch):
+    """Creating one was CLI-only, which made the switcher a list of things
+    somebody else had made."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("CYBERSEC_SLM_PROFILE", raising=False)
+    from cybersec_slm.sourcing import profiles
+
+    at = AppTest.from_file(_APP, default_timeout=60).run()
+    at.text_input(key="profile_new_name").set_value("my-corpus").run()
+    at.text_input(key="profile_new_domain").set_value("MY_CORPUS").run()
+    at.button(key="profile_new_go").click().run()
+
+    assert not at.exception
+    assert "my-corpus" in profiles.names()
+    assert profiles.active() == "my-corpus"
+
+
+def test_a_new_profile_gets_its_own_corpus_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("CYBERSEC_SLM_PROFILE", raising=False)
+    from cybersec_slm import core
+    from cybersec_slm.sourcing import profiles
+
+    profiles.create("my-corpus", domain_name="MY_CORPUS", use_it=True)
+
+    assert core.data_dir().endswith(os.path.join("data", "my-corpus"))
+    assert core.logs_dir().endswith(os.path.join("logs", "my-corpus"))
+
+
+def test_creating_is_refused_for_a_name_that_exists(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("CYBERSEC_SLM_PROFILE", raising=False)
+
+    at = AppTest.from_file(_APP, default_timeout=60).run()
+    at.text_input(key="profile_new_name").set_value("cybersec").run()
+    at.button(key="profile_new_go").click().run()
+
+    assert not at.exception
+    assert any("already exists" in str(e.value) for e in at.error)
+
+
+def test_creating_is_refused_for_an_invalid_name(tmp_path, monkeypatch):
+    """The name becomes a directory component under data/, logs/ and sources/."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    monkeypatch.delenv("CYBERSEC_SLM_PROFILE", raising=False)
+
+    at = AppTest.from_file(_APP, default_timeout=60).run()
+    at.text_input(key="profile_new_name").set_value("../escape").run()
+    at.button(key="profile_new_go").click().run()
+
+    assert not at.exception
+    assert any("invalid profile name" in str(e.value) for e in at.error)
+
+
+def test_create_is_off_until_a_name_is_typed(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+
+    at = AppTest.from_file(_APP, default_timeout=60).run()
+
+    assert at.button(key="profile_new_go").disabled
