@@ -177,6 +177,26 @@ with ui.section("Run the full pipeline"):
                           "discovery runs dry. Only adds data, never deletes it. "
                           "The EDA page shows what it would target."):
             _do_eda_fix()
+        st.divider()
+        if st.button("Test run", key="more_test_run", disabled=running,
+                     use_container_width=True,
+                     help="Health check after a change: seeds a small synthetic "
+                          "corpus into a throwaway data root and runs clean, EDA, "
+                          "schema and the schema validator over it, reporting "
+                          "pass/fail per stage. It cannot touch your corpus: the "
+                          "run's data root is a temp directory, so the real one is "
+                          "not reachable from it. Offline, and takes seconds."):
+            _res = control.start("test-run")
+            st.rerun() if _res.get("ok") else st.error(_res["error"])
+
+        _tr = control.test_report()
+        if _tr:
+            _mark = "passed" if _tr.get("ok") else "FAILED"
+            _bad = [s["step"] for s in _tr.get("steps", []) if not s["ok"]]
+            (st.success if _tr.get("ok") else st.error)(
+                f"Last test run {_mark} in {_tr.get('seconds')}s"
+                + (f"  ·  broke at: {', '.join(_bad)}" if _bad else "")
+                + f"  ·  {_tr.get('ts', '')}")
     if b[0].button("Start", disabled=running, use_container_width=True,
                    help="Run the lit stages in order, keeping existing data: "
                         "ingest and clean skip sources already fetched/cleaned, so "

@@ -21,6 +21,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 from .. import core, stages
@@ -29,6 +30,8 @@ from . import settings_store
 CONTROL_NAME = "pipeline_run.json"
 PLAN_NAME = "pipeline_plan.json"
 FIX_NAME = "eda_fix.json"
+TEST_CFG_NAME = "test_run_cfg.json"
+TEST_REPORT_NAME = "test_run.json"
 
 # Which advanced-settings keys each stage accepts. The dashboard offers only a
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
@@ -245,6 +248,51 @@ def _fix_file() -> str:
     return os.path.join(_logs_dir(), FIX_NAME)
 
 
+def _test_cfg_file() -> str:
+    return os.path.join(_logs_dir(), TEST_CFG_NAME)
+
+
+def test_report_file() -> str:
+    """Where a Test run's result lands, under the *real* root (not the scratch)."""
+    return os.path.join(_logs_dir(), TEST_REPORT_NAME)
+
+
+def test_report() -> dict | None:
+    """The last Test run's report, or None."""
+    try:
+        with open(test_report_file(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _make_scratch_root() -> str:
+    """A throwaway data root for a Test run, seeded with the profile's sources.
+
+    The whole safety property rests on this: the child is spawned with
+    ``CYBERSEC_SLM_DATA_ROOT`` pointed here, so every path it computes lands
+    inside it. The real corpus is not merely "not written to" -- it is not
+    reachable from the child at all.
+
+    It has to be created by the *parent*, because ``core`` freezes its paths at
+    import: a child that set the variable on itself would already have bound the
+    real root by the time it ran a line.
+
+    The profile's ``sources/`` is copied in (small: CSVs and a YAML) so the
+    taxonomy and catalog resolve normally rather than silently falling back to
+    built-in defaults, which would make the run test something other than this
+    profile.
+    """
+    scratch = tempfile.mkdtemp(prefix="cybersec-slm-testrun-")
+    src = os.path.join(core.data_root(), "sources")
+    if os.path.isdir(src):
+        try:
+            shutil.copytree(src, os.path.join(scratch, "sources"))
+        except OSError:
+            pass          # a fresh checkout has none; the built-ins then apply
+    return scratch
+
+
 def build_fix_config(settings: dict | None = None) -> dict:
     """The config an ``eda-fix`` run is handed.
 
@@ -375,6 +423,18 @@ def start(stage: str = "all", *, resume: bool = False,
             json.dump(plan, f)
         cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
         resumed = any("--resume" in argv for argv in plan)
+    elif stage == "test-run":
+        # The one launch that does not run against the real data root. The scratch
+        # root is made here rather than in the child because core freezes its paths
+        # at import, so a child could not re-point itself after the fact.
+        scratch = _make_scratch_root()
+        cfg = {"report": test_report_file(), "scratch": scratch}
+        with open(_test_cfg_file(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_test",
+               _test_cfg_file()]
+        root = scratch          # spawn the child against the scratch root
+        resumed = False
     elif stage == "eda-fix":
         # The looping orchestrator: it decides each round's stages from the gate's
         # own report, so it takes a config rather than a fixed plan.
