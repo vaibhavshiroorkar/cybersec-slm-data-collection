@@ -67,7 +67,12 @@ _ALLOW = re.compile(
     # sourcing.taxonomies.OWNED_LICENSE) and never scraped off a page, so a
     # third-party source cannot talk its way past the gate by printing these words
     # — the host has to be on the profile's owned list for the stamp to be applied.
-    r"first[- ]party|owner[- ]authori[sz]ed"
+    r"first[- ]party|owner[- ]authori[sz]ed|"
+    # A metadata-only index (title/date/URL). Facts, not copyrightable, so it is
+    # the one usable form of an All-Rights-Reserved source's feed. The label is
+    # never scraped: rss.scrape_rss stamps it only when it has actually reduced the
+    # record to its facts, so the claim and the record cannot diverge.
+    r"metadata index"
     r")\b"
 )
 

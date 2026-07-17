@@ -226,3 +226,68 @@ def test_fetching_a_feed_writes_one_jsonl_record_per_item(tmp_path, monkeypatch)
         assert r["source"] == "rbi-feed"
     [row] = log.rows
     assert row["kind"] == "rss" and row["rows"] == 2 and row["status"] == "ok"
+
+
+# ------------------------------------------------------- metadata-only mode ----
+def test_metadata_only_drops_the_summary_prose(tmp_path, monkeypatch):
+    """docs/sources/legal_scope.md permits the RBI feed only as a metadata index:
+    title, date, URL, no document text. The summary is RBI's prose and must not be
+    reproduced. The record's text becomes the title alone (a factual label)."""
+    class _Resp:
+        content = _RSS.encode("utf-8")
+
+    monkeypatch.setattr(rss, "http_get", lambda url, timeout=None: _Resp())
+    monkeypatch.setattr(rss, "BASE", str(tmp_path))
+
+    class _Log:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, **kw):
+            self.rows.append(kw)
+
+    rss.scrape_rss("AML-KYC", "rbi-feed", "RBI", rss.META_INDEX_LICENSE,
+                   "https://rbi.org.in/notifications_rss.xml", _Log(),
+                   metadata_only=True)
+
+    import json
+    out = tmp_path / "AML-KYC" / "rbi-feed" / "rbi-feed.jsonl"
+    recs = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert recs
+    for r, item in zip(recs, rss.parse(_RSS), strict=True):
+        # The title is kept (a label); the summary prose is not.
+        assert r["text"] == item["title"]
+        assert item["summary"] not in r["text"]
+        assert "summary" not in r          # the field is gone, not just emptied
+        assert r["url"].startswith("https://rbi.org.in/")   # the link is a fact
+
+
+def test_full_mode_still_keeps_the_summary(tmp_path, monkeypatch):
+    """The default is a normal feed: metadata-only is the exception for a
+    barred-but-indexable source, not how every feed behaves."""
+    class _Resp:
+        content = _RSS.encode("utf-8")
+
+    monkeypatch.setattr(rss, "http_get", lambda url, timeout=None: _Resp())
+    monkeypatch.setattr(rss, "BASE", str(tmp_path))
+
+    class _Log:
+        def record(self, **kw):
+            pass
+
+    rss.scrape_rss("AML-KYC", "blog", "Blog", "MIT",
+                   "https://blog.test/feed.xml", _Log())
+
+    import json
+    out = tmp_path / "AML-KYC" / "blog" / "blog.jsonl"
+    recs = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert any("Know Your Customer" in r["text"] for r in recs)
+
+
+def test_the_metadata_index_license_passes_the_gate():
+    """A facts-only index is not a reproduction, so the licence gate must let it
+    through; otherwise the one legal way to use RBI's feed is unreachable."""
+    from cybersec_slm.ingestion.license_gate import is_license_ok
+
+    ok, _ = is_license_ok({"license": rss.META_INDEX_LICENSE})
+    assert ok

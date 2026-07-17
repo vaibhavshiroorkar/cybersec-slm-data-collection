@@ -332,8 +332,14 @@ def _row_to_descriptor(row: dict) -> dict | None:
         return dict(kind="feed", domain=domain, slug=slug, title=name,
                     license=lic, url=url, json_key=_feed_key(slug, row))
     if kind == "rss":
+        # metadata_only stamps the feed as a facts-only index (title/date/URL). Set
+        # by a "Metadata Only" catalog column, or forced when the licence is the
+        # metadata-index licence, so an All-Rights-Reserved feed cannot be
+        # catalogued full-text by omitting the column.
+        meta_only = (_bool(_val(row, "metadata_only"))
+                     or "metadata index" in (lic or "").lower())
         return dict(kind="rss", domain=domain, slug=slug, title=name,
-                    license=lic, url=url)
+                    license=lic, url=url, metadata_only=meta_only)
     if kind == "website":
         prefix = _val(row, "allow_prefix")
         if not prefix:

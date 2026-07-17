@@ -35,6 +35,16 @@ BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
+# The licence a metadata-only feed carries. A feed reduced to title, date and URL
+# is facts, not reproduced prose, and facts are not copyrightable, so this is the
+# one form in which an All-Rights-Reserved source's feed can be used. It is the
+# form docs/sources/legal_scope.md explicitly permits for rbi.org.in: "a
+# metadata-only update index (title/date/URL, no document text), which raises no
+# reproduction question." scrape_rss enforces the claim by dropping the summary,
+# so the licence label and the actual record cannot diverge.
+META_INDEX_LICENSE = ("Metadata index (title/date/URL only; facts, not "
+                      "copyrightable) - owner-authorized 2026-07-17")
+
 # URL shapes that mean "this is a feed". Narrow enough that it cannot swallow a
 # fetchable file (it runs before the url/github fallback), wide enough for what
 # publishers actually serve, which is the harder half: a first cut matched
@@ -151,11 +161,20 @@ def is_feed_url(url: str) -> bool:
     return bool(_FEED_RE.search(p.path)) or bool(_FEED_RE.search(low))
 
 
-def scrape_rss(domain: str, slug: str, title: str, lic: str, url: str, log) -> None:
-    """Fetch ``url`` as a feed and write one JSONL record per item."""
+def scrape_rss(domain: str, slug: str, title: str, lic: str, url: str, log,
+               *, metadata_only: bool = False) -> None:
+    """Fetch ``url`` as a feed and write one JSONL record per item.
+
+    ``metadata_only`` reduces each record to its facts: the text becomes the item
+    title alone (a label), and the summary prose is dropped entirely. This is for
+    a source whose full text is barred but whose feed is usable as an index, so
+    the record must not carry the publisher's prose (see :data:`META_INDEX_LICENSE`
+    and docs/sources/legal_scope.md on rbi.org.in). Dropping it here, not just
+    labelling it, is what keeps the licence honest.
+    """
     folder = os.path.join(BASE, domain, slug)
     os.makedirs(folder, exist_ok=True)
-    logger.info(f"=== RSS: {title} ===")
+    logger.info(f"=== RSS{' (metadata-only)' if metadata_only else ''}: {title} ===")
 
     resp = http_get(url, timeout=240)
     items = parse(resp.content)
@@ -164,11 +183,18 @@ def scrape_rss(domain: str, slug: str, title: str, lic: str, url: str, log) -> N
     with open(out, "w", encoding="utf-8") as f:
         from ..core import json_dumps
         for item in items:
-            # source/url/license are what cleaning and normalize read as
-            # provenance; `source` is the slug, never the description.
-            f.write(json_dumps({**item, "source": slug,
-                                "url": item.get("link") or url,
-                                "license": lic}) + "\n")
+            if metadata_only:
+                # Title, date and link only. No summary, no full text: an index
+                # entry, which is a fact and not a reproduction.
+                rec = {"title": item["title"], "published": item.get("published", ""),
+                       "text": item["title"], "source": slug,
+                       "url": item.get("link") or url, "license": lic}
+            else:
+                # source/url/license are what cleaning and normalize read as
+                # provenance; `source` is the slug, never the description.
+                rec = {**item, "source": slug, "url": item.get("link") or url,
+                       "license": lic}
+            f.write(json_dumps(rec) + "\n")
     size = os.path.getsize(out)
     logger.info(f"  {len(items):,} item(s), {size / ONE_MB:.2f} MB")
     log.record(kind="rss", name=slug, category=category_of("feed"), domain=domain,
