@@ -1811,84 +1811,57 @@ def loss_breakdown() -> dict:
 
 
 # -------------------------------------------------------------- stage funnels -
-def sourcing_funnel() -> dict:
-    """What the last sourcing run pulled back, and what it kept — a strict funnel.
+def sourcing_totals() -> dict:
+    """Every discovery run added up: how much was looked at to build this catalog.
 
-    Reads the ``funnel`` block of the newest ``summary-*.json`` (written by
-    :func:`cybersec_slm.sourcing.run.discover`) and turns it into display rows::
+    The per-run funnel in each ``summary-*.json`` answers "where did this run's
+    hits go". It cannot answer the question an operator actually asks, which is
+    what the catalog cost: 1,020 sources were not found in one run, and the newest
+    summary knows nothing about the ones before it. This reads every summary.
 
-        {"ran": bool, "found": int,
-         "rows": [{"stage", "detail", "count", "pct"} ...],   # the funnel, in order
-         "restricted_hosts": [{"host", "count"} ...],         # legal-scope cost
-         "by_domain": [{"sub-domain", "found", "dropped", "candidates", "kept_pct"}]}
+    ``ratio`` is hits examined per source appended, which is the honest headline:
+    "looked through 41,000 results to catalog 1,020 sources" says whether the
+    keywords are aimed well far better than any single run's numbers do.
 
-    ``ran`` is False on a fresh checkout, or when the newest summary predates the
-    funnel block (an older run) — the caller shows a hint rather than a table of
-    zeros that looks like a run which found nothing.
+    Returns zeros and ``runs: 0`` when no run has recorded a funnel yet (the
+    funnel post-dates some summaries), rather than pretending.
     """
-    summ = latest_source_summary() or {}
-    f = summ.get("funnel") or {}
-    if not f:
-        return {"ran": False, "found": 0, "rows": [], "restricted_hosts": [],
-                "by_domain": []}
+    paths = sorted(glob.glob(os.path.join(_logs(), "discovered", "summary-*.json")))
+    totals = {"runs": 0, "with_funnel": 0, "found": 0, "dropped": 0,
+              "duplicates": 0, "candidates": 0, "unprocessed": 0, "appended": 0,
+              "new": 0, "dropped_by": {}, "license": {}, "elapsed_s": 0.0}
+    for path in paths:
+        summ = _read_json(path)
+        if not summ:
+            continue
+        totals["runs"] += 1
+        totals["new"] += _to_int(summ, "new")
+        totals["appended"] += _to_int(summ, "appended")
+        try:
+            totals["elapsed_s"] += float(summ.get("elapsed_s") or 0)
+        except (TypeError, ValueError):
+            pass
+        fn = summ.get("funnel")
+        if not fn:
+            # Pre-funnel runs still count toward runs/appended: they really did
+            # add sources. Their hits are simply unknown, which `with_funnel`
+            # makes visible rather than burying in a total that looks complete.
+            continue
+        totals["with_funnel"] += 1
+        for key in ("found", "duplicates", "candidates", "unprocessed"):
+            totals[key] += _to_int(fn, key)
+        totals["dropped"] += _to_int(fn, "dropped_total")
+        for cat, n in (fn.get("dropped") or {}).items():
+            totals["dropped_by"][cat] = totals["dropped_by"].get(cat, 0) + int(n or 0)
+        for verdict, n in (fn.get("license") or {}).items():
+            totals["license"][verdict] = totals["license"].get(verdict, 0) + int(n or 0)
 
-    found = _to_int(f, "found")
+    totals["ratio"] = (round(totals["found"] / totals["appended"], 1)
+                       if totals["appended"] else 0.0)
+    totals["dropped_by"] = dict(sorted(totals["dropped_by"].items(),
+                                       key=lambda kv: (-kv[1], kv[0])))
+    return totals
 
-    def pct(n: int) -> float:
-        return round(100 * n / found, 1) if found else 0.0
-
-    dropped = f.get("dropped") or {}
-    lic = f.get("license") or {}
-    rows = [{"stage": "search hits", "detail": "returned by SearXNG",
-             "count": found, "pct": 100.0 if found else 0.0}]
-    rows += [{"stage": f"dropped: {cat}",
-              "detail": _DROP_DETAIL.get(cat, ""),
-              "count": _to_int(dropped, cat), "pct": pct(_to_int(dropped, cat))}
-             for cat in dropped]
-    rows += [
-        {"stage": "dropped: duplicate", "detail": "already in the catalog, or seen this run",
-         "count": _to_int(f, "duplicates"), "pct": pct(_to_int(f, "duplicates"))},
-        {"stage": "candidates", "detail": "survived the filters, licence resolved",
-         "count": _to_int(f, "candidates"), "pct": pct(_to_int(f, "candidates"))},
-        {"stage": "  licence ok", "detail": "clearly commercial -> keepable",
-         "count": _to_int(lic, "ok"), "pct": pct(_to_int(lic, "ok"))},
-        {"stage": "  licence unknown", "detail": "blank or unrecognised -> needs a human",
-         "count": _to_int(lic, "unknown"), "pct": pct(_to_int(lic, "unknown"))},
-        {"stage": "  licence blocked", "detail": "confirmed red (copyleft / NC / ARR)",
-         "count": _to_int(lic, "blocked"), "pct": pct(_to_int(lic, "blocked"))},
-        {"stage": "appended", "detail": "written to the catalog",
-         "count": _to_int(f, "appended"), "pct": pct(_to_int(f, "appended"))},
-    ]
-    unprocessed = _to_int(f, "unprocessed")
-    if unprocessed:
-        rows.insert(-4, {
-            "stage": "unprocessed",
-            "detail": "fetched, but the run hit its cap/budget before examining them",
-            "count": unprocessed, "pct": pct(unprocessed)})
-
-    by_domain = []
-    for dom, d in sorted((f.get("by_domain") or {}).items()):
-        dfound = _to_int(d, "found")
-        by_domain.append({
-            "sub-domain": dom, "found": dfound, "dropped": _to_int(d, "dropped"),
-            "candidates": _to_int(d, "candidates"),
-            "kept_pct": (round(100 * _to_int(d, "candidates") / dfound, 1)
-                         if dfound else 0.0),
-        })
-
-    hosts = [{"host": h, "count": n}
-             for h, n in (f.get("restricted_by_host") or {}).items()]
-    return {"ran": True, "found": found, "rows": rows,
-            "restricted_hosts": hosts, "by_domain": by_domain}
-
-
-# Drop category -> the one-line explanation shown next to it.
-_DROP_DETAIL = {
-    "bad link": "empty or host-less URL",
-    "junk host": "social / video / Q&A host",
-    "restricted host": "licence bars commercial reuse (see docs/sources/legal_scope.md)",
-    "listing page": "a search / tag / topic page, not a single source",
-}
 
 # Ingest status -> (display label, why). Mirrors ingest_table()'s `status` values.
 _INGEST_STATUS = {

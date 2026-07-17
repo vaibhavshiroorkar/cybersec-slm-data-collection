@@ -20,7 +20,7 @@ _DASH = os.path.join(_REPO, "src", "cybersec_slm", "dashboard")
 
 
 def _seed_minimal(root: str) -> None:
-    eda = os.path.join(root, "logs", "eda")
+    eda = os.path.join(root, "logs", PROFILE, "eda")
     final = os.path.join(root, "data", PROFILE, "final")
     os.makedirs(eda, exist_ok=True)
     os.makedirs(final, exist_ok=True)
@@ -225,3 +225,51 @@ def test_inspection_pages_have_no_run_button(script, tmp_path, monkeypatch):
     assert not at.exception
     # Running moved to the Overview page; these pages are inspection only.
     assert not any(str(b.label).lower().startswith("run") for b in at.button)
+
+
+def test_a_dimmed_stage_stays_dimmed_across_a_page_visit(tmp_path, monkeypatch):
+    """Streamlit drops a widget's state as soon as a rerun does not render it, so
+    visiting any other page reset the toggles and a stage turned off quietly came
+    back on. The selection is persisted, not held in widget state."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30).run()
+    at.pills(key="overview_stage_pills").set_value(["Clean", "EDA"]).run()
+    assert not at.exception
+
+    # A fresh script run is what a page visit and a restart both look like.
+    again = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30).run()
+
+    assert not again.exception
+    assert again.pills(key="overview_stage_pills").value == ["Clean", "EDA"]
+
+
+def test_a_dimmed_stage_is_skipped_by_the_run_it_configures(tmp_path, monkeypatch):
+    """The toggle has to reach the plan, not just the screen."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    from cybersec_slm.dashboard import control
+
+    at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30).run()
+    at.pills(key="overview_stage_pills").set_value(["Clean", "EDA"]).run()
+
+    saved = control.settings_store.get_stage("overview")
+    assert saved["stages"] == ["Clean", "EDA"]
+
+
+def test_the_pill_selection_is_per_profile(tmp_path, monkeypatch):
+    """It is saved beside the per-stage settings, which are already namespaced."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed_minimal(str(tmp_path))
+    from cybersec_slm.dashboard import control
+
+    control.settings_store.save_stage("overview", {"stages": ["Clean"]},
+                                      profile="cybersec")
+    control.settings_store.save_stage("overview", {"stages": ["Schema"]},
+                                      profile="ubi")
+
+    assert control.settings_store.get_stage(
+        "overview", profile="cybersec")["stages"] == ["Clean"]
+    assert control.settings_store.get_stage(
+        "overview", profile="ubi")["stages"] == ["Schema"]

@@ -117,11 +117,23 @@ with ui.section("Run the full pipeline"):
     stage_labels = ["Sourcing", "Ingest", "Clean", "EDA", "Schema"]
 
     # Connected pill toggle bar: lit = will run this launch, dimmed = skipped. All
-    # five lit by default (the full pipeline).
+    # five lit until told otherwise (the full pipeline).
+    #
+    # The selection is persisted rather than held in widget state. Streamlit drops
+    # a widget's state as soon as a rerun does not render it, so visiting any other
+    # page reset the toggles to all-five, and a dimmed stage quietly came back. It
+    # is saved per profile, alongside the per-stage settings, so it also survives a
+    # restart: a stage the operator turned off stays off until they turn it on.
+    _saved = control.settings_store.get_stage("overview").get("stages")
+    _default = ([label for label in stage_labels if label in _saved]
+                if isinstance(_saved, list) else stage_labels)
     selected_labels = st.pills(
         "Stages to run", stage_labels, selection_mode="multi",
-        default=stage_labels, key="overview_stage_pills",
-        help="Lit = will run this launch. Dimmed = skipped.")
+        default=_default, key="overview_stage_pills",
+        help="Lit = will run this launch. Dimmed = skipped. Kept until you "
+             "change it, across pages and restarts.") or []
+    if list(selected_labels) != (_saved if isinstance(_saved, list) else stage_labels):
+        control.settings_store.save_stage("overview", {"stages": list(selected_labels)})
     selected_keys = {k for k, label in zip(stage_keys, stage_labels, strict=True)
                      if label in selected_labels}
     run_settings = {f"skip_{k}": True for k in stage_keys if k not in selected_keys}
