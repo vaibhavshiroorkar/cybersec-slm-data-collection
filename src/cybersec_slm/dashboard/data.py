@@ -1543,18 +1543,27 @@ def _catalog_lines_by_folder() -> dict:
 def _raw_on_disk_totals(measure_size: bool = True) -> dict:
     """Raw-stage totals restricted to sources physically present under ``data/raw/``.
 
-    Iterates the on-disk ``<sub-domain>/<source>`` folders and joins each to its
-    catalog line/size via :func:`_catalog_lines_by_folder`, so Sources, Records and
+    Iterates the on-disk ``<sub-domain>/<source>`` folders so Sources, Records and
     Size all describe the same population (the data actually on this machine) rather
     than the whole catalog. Only folders that actually hold a ``.jsonl`` file are
     counted, so a folder created during ingest that produced no records is excluded
-    (matching "produced data"); a counted folder the catalog has no measured figures
-    for contributes to the count but not the totals. Returns
-    ``{"sources", "lines", "size_mb"}`` (all zero when no raw tree exists).
+    (matching "produced data"). Returns ``{"sources", "lines", "size_mb"}`` (all
+    zero when no raw tree exists).
 
-    ``measure_size=False`` skips the per-source ``os.walk`` byte count (the slow
-    part: raw can be 100+ GB), returning ``size_mb`` = 0.0 so the caller can render
-    live source/record counts cheaply and fill size from a cached measurement.
+    Records are COUNTED ON DISK, not joined from the catalog's ``Total Lines``.
+    The catalog was measured against the live corpus and is not trustworthy: it
+    claimed 17,972,727 raw records where disk held 44,761,032 (+149%). 242 of the
+    370 fetched sources had no catalog figure at all — 14.4M records that the
+    funnel simply could not see — and among those it did have, 62 disagreed with
+    disk by more than 2% (Microsoft alone by 9.5M). A number that is fast and
+    wrong is worse than one that is slow and right, and the count is memoized per
+    file by (mtime, size) (:func:`_count_file_records`) then cached on a long TTL
+    (:func:`cached.raw_records`), so it is paid once per session.
+
+    ``measure_size=False`` skips both the per-source ``os.walk`` byte count and the
+    record scan (the slow parts: raw is ~90 GB of .jsonl), returning ``size_mb`` =
+    0.0 and ``lines`` = 0 so the caller can render live *source* counts cheaply and
+    fill both from the cached measurements.
     """
     raw_root = os.path.join(_root(), "data", "raw")
     if not os.path.isdir(raw_root):
@@ -1574,8 +1583,13 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
                 if not _folder_has_jsonl(src.path):
                     continue
                 sources += 1
-                ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
-                lines += ln
+                _ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
+                # Records are counted, never joined from `_ln` (the catalog's
+                # figure): see the docstring — it was 149% wrong on the live
+                # corpus and blind to 242 fetched sources. Only the measured path
+                # pays for it; the cheap live path defers to cached.raw_records.
+                if measure_size:
+                    lines += _count_jsonl_records(src.path)
                 # Measured size means a walk per source; the cheap live path uses
                 # the catalog's per-folder size instead so the funnel can refresh
                 # every second without touching the tree.
@@ -1589,18 +1603,18 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
 def data_funnel(measure_size: bool = True) -> dict:
     """Aggregate Raw -> Cleaned -> Final metrics for the Overview funnel.
 
-    Source counts and sizes come from what is physically on disk under the data
-    root (the honest per-machine state); raw *record* totals come from the catalog,
-    which is authoritative and fast (counting them live would read every record of
-    a 100+ GB tree). Cleaned records are counted on disk — never taken from the
-    clean report, which describes one pass rather than the corpus (see the Cleaned
-    block below). Final counts come from the manifest.
+    Every figure describes what is physically on disk under the data root (the
+    honest per-machine state). Raw *and* cleaned records are counted, never taken
+    from the catalog (whose ``Total Lines`` understated the live corpus by 149%)
+    nor from the clean report (which describes one pass rather than the corpus —
+    see the Cleaned block below). Final counts come from the manifest.
 
-    ``measure_size=False`` skips the byte counts and the ``data/clean`` record
-    scan, returning those figures as 0 so the Overview can refresh live
-    source/record counts every second cheaply and fill sizes from a cached
-    snapshot. Callers that need them (the cached wrappers and the per-stage pages)
-    keep the default.
+    ``measure_size=False`` skips the byte counts and BOTH record scans, returning
+    those figures as 0 so the Overview can refresh live *source* counts every
+    second cheaply and fill records/sizes from cached snapshots
+    (:func:`cached.raw_records`, :func:`cached.cleaned_records`,
+    :func:`cached.raw_size_mb`). Callers that need them (the cached wrappers and
+    the per-stage pages) keep the default.
     """
     man = manifest()
     nr = normalize_report()

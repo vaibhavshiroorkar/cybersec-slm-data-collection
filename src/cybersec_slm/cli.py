@@ -55,6 +55,21 @@ def _physical_cores() -> int:
 _DEFAULT_CLEAN_WORKERS = min(_physical_cores(), 8)
 
 
+def _apply_pii_engine(args) -> None:
+    """Publish ``--pii-engine`` to the environment for the clean stage.
+
+    An environment variable rather than a module global on purpose: the clean
+    stage runs in *spawned* pool workers, which re-import the cleaning modules
+    from scratch and would never observe an assignment made in this process. The
+    environment is the one channel that crosses that boundary (children inherit
+    it), which is the same mechanism ``CYBERSEC_SLM_PII_MAX_CHARS`` and
+    ``CYBERSEC_SLM_TRANSLATE`` already use.
+    """
+    engine = getattr(args, "pii_engine", None)
+    if engine:
+        os.environ["CYBERSEC_SLM_PII_ENGINE"] = engine
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="cybersec-slm",
@@ -118,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="MinHash permutation count (default 128)")
     c.add_argument("--allowed-langs", nargs="*", default=None,
                    help="language codes to keep (default: en)")
+    c.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
+                   help="PII redaction engine (default: regex). 'presidio' adds a "
+                        "scoped spaCy NER pass for person names on top of the regex "
+                        "pass, at roughly 300x the cost per record; needs "
+                        "`uv sync --extra pii-ner`")
 
     # ── normalize / schema (stage 5) ──────────────────────────────────────────
     n = sub.add_parser("normalize", aliases=["schema"],
@@ -371,6 +391,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "(abandon a hung source; default 1800)")
     a.add_argument("--no-crawler", action="store_true",
                    help="skip website (crawl) sources during ingest for this run")
+    a.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
+                   help="PII redaction engine for the clean stage (default: regex). "
+                        "'presidio' adds a scoped spaCy NER pass for person names at "
+                        "roughly 300x the cost per record; needs "
+                        "`uv sync --extra pii-ner`")
     a.add_argument("--no-hazard-scan", action="store_true",
                    help="skip the security-hazard scan (script/iframe injection, "
                         "base64 blobs, malware TLDs) during the light-EDA gate; "
@@ -445,6 +470,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.action is None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
             from .cleaning import common as clean_common
+            _apply_pii_engine(args)
             if args.min_text_chars is not None:
                 clean_common.MIN_TEXT_CHARS = args.min_text_chars
             if args.max_text_chars is not None:
@@ -602,6 +628,7 @@ def main(argv: list[str] | None = None) -> None:
         if getattr(args, "no_auto_rebalance", False):
             from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False
+        _apply_pii_engine(args)
         from .ingestion import parallel
         parallel.run_v2_pipeline(
             args.sources,

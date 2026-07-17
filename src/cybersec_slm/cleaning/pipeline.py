@@ -39,7 +39,11 @@ from .langfilter import LangFilter
 from .pii import Redactor
 from .translate import Translator
 
-DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")   # exact-hash set
+DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.txt")    # exact-hash journal
+# The pre-journal format. Kept only so reset_dedup_state can clear it: a stale
+# JSON checkpoint left beside the new one would never be read (the journal path
+# differs) but would sit there looking authoritative.
+DEDUP_CKPT_LEGACY = os.path.join(LOGS, "dedup_checkpoint.json")
 DEDUP_DONE = os.path.join(LOGS, "dedup_done.json")         # files finished this pass
 DEDUP_CKPT_INTERVAL_S = 30.0                               # min seconds between checkpoints
 
@@ -398,7 +402,7 @@ def reset_dedup_state() -> None:
     Called at the start of a fresh (non-resume) build so a stale checkpoint from a
     previous corpus can never flag this build's records as duplicates.
     """
-    for p in (DEDUP_CKPT, DEDUP_DONE):
+    for p in (DEDUP_CKPT, DEDUP_CKPT_LEGACY, DEDUP_DONE):
         try:
             os.remove(p)
         except FileNotFoundError:

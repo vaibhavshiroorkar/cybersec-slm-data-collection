@@ -22,6 +22,17 @@ REQUIRED_FIELDS = ("source", "url", "license", "text")
 
 _ftfy = try_import("ftfy")
 _dateutil = try_import("dateutil.parser")
+
+# ftfy normalizes to NFC itself, which `sanitize_text` then immediately redoes on
+# the next line — so turn ftfy's copy off and pay for it once. Measured 1.12 ->
+# 0.90 ms/record with byte-identical output.
+#
+# Note this config only drops the *duplicate* pass; every repair stays on. Do not
+# be tempted to skip ftfy entirely on records with no mojibake marker: on this
+# corpus fix_text changes 36/500 records and NONE of them carry one (they are
+# uncurl_quotes, not encoding damage), and ftfy.badness.is_bad flags 0/500 of
+# them — so both "cheap guards" silently alter 7% of the corpus.
+_FTFY_CFG = _ftfy.TextFixerConfig(normalization=None) if _ftfy is not None else None
 if _ftfy is None:
     logger.debug("sanitize: ftfy not found -> heuristic encoding fix")
 if _dateutil is None:
@@ -36,7 +47,7 @@ _BLANKLINES_RE = re.compile(r"\n{3,}")           # 3+ newlines -> 2
 def fix_encoding(s: str) -> str:
     """Repair mojibake. ftfy if present, else a common latin1<->utf8 heuristic."""
     if _ftfy is not None:
-        return _ftfy.fix_text(s)
+        return _ftfy.fix_text(s, config=_FTFY_CFG)
     # Heuristic: text that was utf-8 decoded as latin-1 shows chars like Ã©, â€™.
     if any(m in s for m in ("Ã", "Â", "â€")):
         try:

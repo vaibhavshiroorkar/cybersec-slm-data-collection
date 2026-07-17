@@ -41,6 +41,19 @@ def test_garbage_ratio_is_behavioral():
     assert bucket == "behavioral" and "garbage" in reason
 
 
+def test_garbage_ratio_keeps_non_ascii_alphanumerics_clean():
+    """Accented/CJK/Cyrillic letters are alphanumeric, not garbage — the fast
+    translate path must not count them just because they are non-ASCII."""
+    for text in ("café résumé naïve " * 20, "中文测试内容 " * 20, "Привет мир " * 20):
+        assert anomaly.garbage_ratio(text) == 0.0
+
+
+def test_garbage_ratio_counts_binary_noise():
+    assert anomaly.garbage_ratio("\x00\x01\x02binary") == 3 / 9
+    assert anomaly.garbage_ratio("") == 0.0
+    assert anomaly.garbage_ratio("a=b[0]; x->y (n%2)==0 /* c */") == 0.0
+
+
 def test_extreme_length_is_behavioral():
     text = "word " * (MAX_TEXT_CHARS // 2)        # well over the char cap
     bucket, reason = anomaly.classify({"text": text})

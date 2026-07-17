@@ -740,7 +740,6 @@ source = { editable = "." }
 dependencies = [
     { name = "datasketch" },
     { name = "deep-translator" },
-    { name = "en-core-web-lg" },
     { name = "fasttext-predict" },
     { name = "ftfy" },
     { name = "google-api-python-client" },
@@ -756,8 +755,6 @@ dependencies = [
     { name = "pandas" },
     { name = "playwright" },
     { name = "polars" },
-    { name = "presidio-analyzer" },
-    { name = "presidio-anonymizer" },
     { name = "pyarrow" },
     { name = "pymupdf" },
     { name = "python-dateutil" },
@@ -785,6 +782,11 @@ orchestration = [
     { name = "prefect" },
     { name = "prefect-aws" },
 ]
+pii-ner = [
+    { name = "en-core-web-lg" },
+    { name = "presidio-analyzer" },
+    { name = "presidio-anonymizer" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -799,7 +801,7 @@ requires-dist = [
     { name = "altair", marker = "extra == 'dashboard'", specifier = ">=5" },
     { name = "datasketch", specifier = ">=1.6.0" },
     { name = "deep-translator", specifier = ">=1.11.0" },
-    { name = "en-core-web-lg", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" },
+    { name = "en-core-web-lg", marker = "extra == 'pii-ner'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" },
     { name = "fasttext-predict", specifier = ">=0.9.2" },
     { name = "ftfy", specifier = ">=6.2.0" },
     { name = "google-api-python-client", specifier = ">=2.100.0" },
@@ -818,8 +820,8 @@ requires-dist = [
     { name = "polars", specifier = ">=1.0" },
     { name = "prefect", marker = "extra == 'orchestration'", specifier = ">=3.0.0" },
     { name = "prefect-aws", marker = "extra == 'orchestration'", specifier = ">=0.5.0" },
-    { name = "presidio-analyzer", specifier = ">=2.2" },
-    { name = "presidio-anonymizer", specifier = ">=2.2" },
+    { name = "presidio-analyzer", marker = "extra == 'pii-ner'", specifier = ">=2.2" },
+    { name = "presidio-anonymizer", marker = "extra == 'pii-ner'", specifier = ">=2.2" },
     { name = "psutil", marker = "extra == 'dashboard'", specifier = ">=5.9" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "pymupdf", specifier = ">=1.24.0" },
@@ -833,7 +835,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=9.0.0" },
     { name = "trafilatura", marker = "extra == 'crawl'", specifier = ">=1.12" },
 ]
-provides-extras = ["orchestration", "crawl", "dashboard", "agent"]
+provides-extras = ["orchestration", "pii-ner", "crawl", "dashboard", "agent"]
 
 [package.metadata.requires-dev]
 dev = [
