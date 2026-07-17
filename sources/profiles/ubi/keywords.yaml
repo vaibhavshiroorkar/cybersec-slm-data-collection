@@ -19,6 +19,8 @@ subdomains:
     - entity resolution sanctions dataset
     - Prevention of Money Laundering Act 2002 indiacode
     - PMLA Maintenance of Records Rules 2005 gazette
+    - AML KYC dataset huggingface
+    - anti money laundering dataset kaggle
     text:
     - customer due diligence explained
     - know your customer process explained
@@ -30,6 +32,16 @@ subdomains:
     - risk based approach anti money laundering explained
     - trade based money laundering explained
     - correspondent banking risk explained
+    - RBI KYC master direction PDF
+    - FIU-IND AML guidelines
+    - suspicious transaction report format India STR
+    - customer due diligence CDD guidelines RBI
+    - PMLA rules 2005 full text
+    - FATF India mutual evaluation report
+    - enhanced due diligence banking India
+    - CKYCR central KYC registry guidelines
+    - site:unionbankofindia.bank.in "Anti Money Laundering"
+    - site:unionbankofindia.bank.in "Know Your Customer" policy
     vocab:
     - aml
     - beneficial ownership
@@ -73,6 +85,15 @@ subdomains:
     - risk based supervision explained
     - compliance function in banks explained
     - regulatory reporting explained
+    - RBI master direction compliance
+    - RBI risk management framework circular
+    - basel III risk management guidelines India
+    - operational risk management banking India
+    - RBI regulatory compliance framework PDF
+    - bank compliance policy India filetype:pdf
+    - credit risk management RBI guidelines
+    - site:unionbankofindia.bank.in "Basel III" filetype:pdf
+    - site:unionbankofindia.bank.in "Risk Management Policy"
     vocab:
     - basel
     - capital adequacy
@@ -111,6 +132,14 @@ subdomains:
     - audit committee role explained
     - shareholder rights explained
     - corporate disclosure obligations explained
+    - SEBI LODR regulations full text
+    - companies act 2013 board secretariat compliance
+    - corporate governance disclosure norms India
+    - SEBI listing obligations circular
+    - board meeting compliance checklist India
+    - secretarial audit report format India
+    - site:unionbankofindia.bank.in "Secretarial Compliance Report" filetype:pdf
+    - site:unionbankofindia.bank.in "Code of Corporate Governance"
     vocab:
     - annual report
     - board committee
@@ -147,6 +176,13 @@ subdomains:
     - audit evidence and documentation explained
     - internal audit charter explained
     - audit planning methodology explained
+    - RBI risk based internal audit RBIA guidelines
+    - internal audit framework banks India
+    - RBI internal audit circular PDF
+    - bank internal audit checklist India
+    - concurrent audit banks RBI guidelines
+    - site:unionbankofindia.bank.in "Policy for Engagement of Statutory Branch Auditors"
+    - site:unionbankofindia.bank.in "Audit and Inspection"
     vocab:
     - audit evidence
     - audit finding
