@@ -115,6 +115,68 @@ def test_gate_enforced_by_default(monkeypatch):
     assert ok is False
 
 
+# A kill switch decides whether a confirmed-red licence is fetched, so an input it
+# does not understand must never be read as "off". These are the values a human
+# actually types or a broken .env actually produces.
+@pytest.mark.parametrize("value", ["2", "yess", "", "  ", "maybe", "TRUE!",
+                                   "off-ish", "1.0", "enabled"])
+def test_an_unrecognized_switch_value_still_enforces_the_gate(monkeypatch, value):
+    """Fail closed. `_enforced` used to return True only for a fixed allow-list of
+    on-words, so every one of these silently disabled the gate for every source."""
+    monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", value)
+
+    ok, reason = license_gate.is_license_ok({"license": "GPL-3.0"})
+
+    assert ok is False, f"{value!r} disabled the licence gate"
+    assert "disabled" not in reason.lower()
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", " 0 ", "No"])
+def test_an_explicit_recognized_off_value_disables_the_gate(monkeypatch, value):
+    """Turning it off deliberately still has to work: it is a real dev affordance."""
+    monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", value)
+
+    ok, reason = license_gate.is_license_ok({"license": "GPL-3.0"})
+
+    assert ok is True
+    assert "disabled" in reason.lower()
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE", " 1 "])
+def test_an_explicit_on_value_enforces_the_gate(monkeypatch, value):
+    monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", value)
+
+    ok, _ = license_gate.is_license_ok({"license": "GPL-3.0"})
+
+    assert ok is False
+
+
+def test_an_unrecognized_switch_value_is_reported_not_swallowed(monkeypatch):
+    """A typo that would have disabled the gate must be loud, not silently ignored.
+
+    The package logger does not propagate to root, so caplog never sees it; record
+    the warnings off the module's own logger instead.
+    """
+    said: list[str] = []
+    monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", "yess")
+    monkeypatch.setattr(license_gate.logger, "warning", lambda m: said.append(str(m)))
+
+    license_gate.is_license_ok({"license": "MIT"})
+
+    assert any("yess" in m for m in said)
+
+
+def test_a_recognized_value_says_nothing(monkeypatch):
+    """Only a value that would have silently changed behaviour is worth a warning."""
+    said: list[str] = []
+    monkeypatch.setenv("CYBERSEC_SLM_ENFORCE_LICENSE_GATE", "0")
+    monkeypatch.setattr(license_gate.logger, "warning", lambda m: said.append(str(m)))
+
+    license_gate.is_license_ok({"license": "MIT"})
+
+    assert said == []
+
+
 # ----------------------------------------------------------- 3-state verdict ----
 @pytest.mark.parametrize("raw", ["GPL-3.0", "CC BY-NC-SA 4.0", "CC BY-SA 4.0",
                                  "All Rights Reserved", "AGPL-3.0", "proprietary"])

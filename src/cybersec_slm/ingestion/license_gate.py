@@ -32,6 +32,8 @@ import os
 import re
 from typing import Literal
 
+from ..core import logger
+
 # Non-commercial, copyleft, share-alike, proprietary, or unresolved-restrictive.
 # `lgpl`/`agpl` are listed explicitly because a `\bgpl\b` boundary would not match
 # inside them. `nc`/`sa` are matched as whole tokens so they catch `-nc-`/`-sa`
@@ -116,12 +118,36 @@ def license_verdict(raw: str | None) -> Literal["ok", "blocked", "unknown"]:
     return "unknown"
 
 
+# The only values that turn the gate off. Everything else, including anything
+# unrecognized, leaves it on: see _enforced.
+_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
 def _enforced() -> bool:
-    """Whether the gate is active (default on; env can turn it off)."""
+    """Whether the gate is active. Default on, and it fails closed.
+
+    This switch decides whether a confirmed-red licence gets fetched, so a value
+    it does not understand must never be read as "off". It used to test for
+    membership of the *on* words and return False for anything else, which meant
+    a typo (``yess``), a wrong-shaped value (``2``) or an empty assignment
+    (``CYBERSEC_SLM_ENFORCE_LICENSE_GATE=``) silently disabled the gate for every
+    source. Now only an explicit, recognized off value disables it; anything
+    unrecognized enforces and says so, because a switch that quietly does the
+    dangerous thing on a typo is worse than no switch.
+    """
     env = os.environ.get("CYBERSEC_SLM_ENFORCE_LICENSE_GATE")
     if env is None:
         return True
-    return env.strip().lower() in ("1", "true", "yes", "on")
+    val = env.strip().lower()
+    if val in _OFF_VALUES:
+        return False
+    if val not in _ON_VALUES:
+        logger.warning(
+            f"CYBERSEC_SLM_ENFORCE_LICENSE_GATE={env!r} is not a recognized "
+            f"value; keeping the licence gate ON. Use one of "
+            f"{sorted(_OFF_VALUES)} to disable it.")
+    return True
 
 
 def is_license_ok(descriptor: dict) -> tuple[bool, str]:
