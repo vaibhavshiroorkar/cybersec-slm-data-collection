@@ -109,6 +109,36 @@ with discover_tab:
         st.caption("Edit these keywords in the Sub-domains tab. The remaining run "
                    "caps live in the Overview page's Sourcing settings.")
 
+    # What the catalog cost, across every run. The per-run funnel below says where
+    # one run's hits went; it cannot say what the whole catalog took, because 1,020
+    # sources were not found in one run and the newest summary knows nothing of the
+    # ones before it.
+    _tot = data.sourcing_totals()
+    if _tot["runs"]:
+        with ui.section("What this catalog cost",
+                        "Every discovery run added up."):
+            ui.stat_grid([
+                ("Runs", charts.fmt_int(_tot["runs"])),
+                ("Hits looked through", charts.fmt_int(_tot["found"])),
+                ("Sources appended", charts.fmt_int(_tot["appended"])),
+                ("Hits per source", f"{_tot['ratio']:g}" if _tot["ratio"] else "n/a"),
+            ], cols=4)
+            if _tot["found"] and _tot["appended"]:
+                st.caption(
+                    f"Searched {charts.fmt_int(_tot['found'])} results to catalog "
+                    f"{charts.fmt_int(_tot['appended'])} sources: about "
+                    f"{_tot['ratio']:g} looked at per source kept. "
+                    f"{charts.fmt_int(_tot['dropped'])} were dropped by the quality "
+                    f"filter, {charts.fmt_int(_tot['duplicates'])} were already "
+                    f"known.")
+            _blind = _tot["runs"] - _tot["with_funnel"]
+            if _blind:
+                st.caption(
+                    f"{_blind} of {_tot['runs']} run(s) predate the discovery funnel, "
+                    f"so their hits are not counted above: the sources they added "
+                    f"are, which makes the hits-per-source figure a floor rather "
+                    f"than an estimate.")
+
     summ = data.latest_source_summary()
     if summ:
         with ui.section("Last discovery run"):
