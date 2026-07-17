@@ -34,7 +34,7 @@ PLAN_NAME = "pipeline_plan.json"
 _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
             "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english",
-            "no_crawler"},
+            "no_crawler", "pii_engine"},
     "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
                "max_minutes", "workers", "time_range", "no_site_scope",
                "no_quality_filter", "dry_run", "searxng_url", "language",
@@ -46,7 +46,7 @@ _STAGE_FLAGS: dict[str, set[str]] = {
     "clean": {"purge_raw", "limit", "resume", "workers", "drop_non_english", "domains",
               "sources_only", "min_text_chars", "max_text_chars", "garbage_max",
               "repeat_max", "near_dup_threshold", "shingle_size", "minhash_perm",
-              "allowed_langs"},
+              "allowed_langs", "pii_engine"},
     "eda": {"no_auto_rebalance", "no_enforce", "min_total_records",
             "min_records_per_subdomain", "max_source_share", "max_drift",
             "max_dup_rate", "min_avg_tokens", "max_topic_cv",
@@ -83,6 +83,7 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("near_dup_threshold", "--near-dup-threshold", "value"),
     ("shingle_size", "--shingle-size", "value"),
     ("minhash_perm", "--minhash-perm", "value"),
+    ("pii_engine", "--pii-engine", "value"),
     ("min_total_records", "--min-total-records", "value"),
     ("min_records_per_subdomain", "--min-records-per-subdomain", "value"),
     ("max_source_share", "--max-source-share", "value"),
@@ -118,8 +119,20 @@ def build_command(stage: str = "all", *, resume: bool = False,
     """Build the ``cybersec-slm <stage> ...`` command for a launch.
 
     Only the flags that ``stage`` accepts (per ``_STAGE_FLAGS``) are emitted; any
-    other setting is dropped. ``resume=True`` adds ``--resume`` when the stage
-    supports it. Pure and side-effect-free, so it is unit-tested directly.
+    other setting is dropped. Pure and side-effect-free, so it is unit-tested
+    directly.
+
+    ``resume=True`` forces ``--resume`` on where the stage supports it.
+    ``resume=False`` does NOT force it off — it only declines to add it, so a
+    saved ``resume: true`` in ``settings`` still wins. That is deliberate (a
+    page's saved setting is the user's choice, and silently starting a *fresh*
+    run would wipe their corpus), but it means a caller that needs a guaranteed
+    fresh run must say so explicitly::
+
+        build_command("clean", settings={**saved, "resume": False})
+
+    :func:`start` records which of the two actually happened by reading the argv
+    back, so ``status()`` can never disagree with the running command.
     """
     merged = dict(settings or {})
     if resume:
@@ -323,8 +336,15 @@ def start(stage: str = "all", *, resume: bool = False,
     root = core.data_root()
     logs = _logs_dir()
     os.makedirs(logs, exist_ok=True)
+    # ``resumed`` is read back off the argv that is actually launched, never off
+    # the caller's flag. Each stage of a full run is built from its own page's
+    # saved settings, so a saved ``resume: true`` on the Clean page puts
+    # ``--resume`` in the plan even when the caller passed ``resume=False``.
+    # Echoing the caller's flag made status() announce a fresh run while the
+    # pipeline resumed and skipped every source in its ledger.
     if _command is not None:
         cmd = _command
+        resumed = bool(resume or (settings or {}).get("resume"))
     elif stage in ("all", "quick-finish"):
         # One detached orchestrator running a plan of stages in order, each with
         # its own page's saved settings (overridden by ``settings``, the Overview
@@ -334,12 +354,14 @@ def start(stage: str = "all", *, resume: bool = False,
         with open(_plan_file(), "w", encoding="utf-8") as f:
             json.dump(plan, f)
         cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
+        resumed = any("--resume" in argv for argv in plan)
     else:
         cmd = build_command(stage, resume=resume, settings=settings)
+        resumed = "--resume" in cmd
     pid = _spawn_detached(cmd, root=root, logs=logs)
 
     ctl = {"pid": pid, "cmd": cmd, "stage": stage,
-           "resume": bool(resume or (settings or {}).get("resume")),
+           "resume": resumed,
            "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with open(_control_file(), "w", encoding="utf-8") as f:
         json.dump(ctl, f)

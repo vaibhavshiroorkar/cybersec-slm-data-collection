@@ -32,6 +32,21 @@ def raw_size_mb(root: str) -> float:
     return sum(r["size_mb"] for r in raw_table(root))
 
 
+@st.cache_data(ttl=_RAW_TTL_S, show_spinner="Counting data/raw records (one-time)...")
+def raw_records(root: str) -> int:
+    """Records physically under ``data/raw/`` (the funnel's Raw "Records").
+
+    Counted rather than read off the catalog: the catalog's ``Total Lines``
+    understated the live corpus by 149% (17,972,727 claimed vs 44,761,032 on
+    disk) and had no figure at all for 242 of the 370 fetched sources. Reading
+    ~90 GB of JSONL takes a couple of minutes cold, which is why it shares
+    ``raw_table``'s long TTL — raw only changes when ingestion runs, and the
+    per-file counts are memoized by (mtime, size), so a re-count after a run only
+    re-reads the files that actually changed.
+    """
+    return data._count_jsonl_records(os.path.join(root, "data", "raw"))
+
+
 # The corpus funnel scans data/ (records + sizes) on every full rerun, which made
 # the Overview flash and recompute on each interaction. Cache it on a short TTL so
 # it renders from a stable snapshot; a run or the manual Refresh button clears it.
@@ -40,9 +55,14 @@ _STATS_TTL_S = 90
 
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
 def funnel(root: str) -> dict:
-    """Cached corpus-funnel snapshot: ``{funnel, progress}`` (see :mod:`data`)."""
+    """Cached corpus-funnel snapshot: ``{funnel, progress}`` (see :mod:`data`).
+
+    Raw size and records both come from the long-TTL scans rather than this
+    snapshot's own walk, so the expensive measurements are shared and paid once.
+    """
     f = data.data_funnel()
     f["raw"]["size_mb"] = raw_size_mb(root)
+    f["raw"]["lines"] = raw_records(root)
     return {"funnel": f, "progress": data.ingest_progress()}
 
 
@@ -92,6 +112,7 @@ def clear_stats() -> None:
     """Drop every cached scan snapshot so the next read remeasures."""
     funnel.clear()
     raw_table.clear()
+    raw_records.clear()
     data_funnel.clear()
     cleaned_records.clear()
     cleaned_table.clear()

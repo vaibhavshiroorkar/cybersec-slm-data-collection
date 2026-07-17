@@ -502,26 +502,62 @@ def test_pipeline_logs_excludes_dashboard_own_log(tmp_path, monkeypatch):
     assert picked[-1] == str(run)
 
 
-def test_raw_funnel_counts_disk_sources_and_catalog_lines(tmp_path, monkeypatch):
+def test_raw_funnel_counts_records_on_disk_not_the_catalog(tmp_path, monkeypatch):
+    """Raw Records must be counted, not taken from the catalog.
+
+    The catalog's line totals were measured against the live corpus and found to
+    be wrong by +149% (17,972,727 claimed vs 44,761,032 actually on disk): 242 of
+    370 fetched sources had no catalog figure at all, and one source alone
+    (Microsoft) was out by 9.5M records. Disk is the only honest answer.
+    """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    # Two source folders on disk under data/raw/<sub-domain>/<source>/.
     raw = tmp_path / "data" / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cryptography" / "src-b").mkdir(parents=True)
-    # Line totals come from a per-folder catalog join (only sources actually on
-    # disk contribute); size is measured live from disk so it stays accurate as a
-    # run writes to data/raw/, rather than a stale catalog-wide sum.
-    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_bytes(b"\0" * (1024 * 1024))
-    (raw / "Cryptography" / "src-b" / "data.jsonl").write_bytes(b"\0" * (2 * 1024 * 1024))
+    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text(
+        '{"a":1}\n{"a":2}\n{"a":3}\n', encoding="utf-8")
+    (raw / "Cryptography" / "src-b" / "data.jsonl").write_text(
+        '{"b":1}\n{"b":2}\n', encoding="utf-8")
+    # The catalog wildly disagrees with disk; disk must win.
     monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {
         ("Cloud Security", "src-a"): (20_000_000, 40000.0),
         ("Cryptography", "src-b"): (2_000_000, 3000.0)})
 
-    funnel = data.data_funnel()
+    funnel = data.data_funnel(measure_size=True)
     assert funnel["raw"]["sources"] == 2                 # counted on disk
-    assert funnel["raw"]["lines"] == 22_000_000          # joined from the catalog
-    assert funnel["raw"]["size_mb"] == 3.0               # measured on disk (1 + 2 MB)
+    assert funnel["raw"]["lines"] == 5                   # 3 + 2, counted on disk
+
+
+def test_raw_funnel_counts_sources_the_catalog_never_measured(tmp_path, monkeypatch):
+    """242 of 370 fetched sources had zero catalog lines, hiding 14.4M records."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Threat Intelligence" / "uncatalogued").mkdir(parents=True)
+    (raw / "Threat Intelligence" / "uncatalogued" / "d.jsonl").write_text(
+        '{"a":1}\n{"a":2}\n{"a":3}\n{"a":4}\n', encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {})   # nothing measured
+
+    funnel = data.data_funnel(measure_size=True)
+    assert funnel["raw"]["sources"] == 1
+    assert funnel["raw"]["lines"] == 4       # was 0 while the records sat on disk
+
+
+def test_raw_funnel_cheap_path_defers_record_count(tmp_path, monkeypatch):
+    """The 1s live fragment must not read 92 GB: the cheap path reports 0 and the
+    Overview fills Records from the cached count (as it already does for Size)."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    _seed(str(tmp_path))
+    raw = tmp_path / "data" / "raw"
+    (raw / "Cloud Security" / "src-a").mkdir(parents=True)
+    (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text(
+        '{"a":1}\n{"a":2}\n', encoding="utf-8")
+    monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {})
+
+    funnel = data.data_funnel(measure_size=False)
+    assert funnel["raw"]["sources"] == 1     # still live and cheap
+    assert funnel["raw"]["lines"] == 0       # deferred to cached.raw_records
 
 
 def test_raw_size_measures_only_the_jsonl_corpus(tmp_path, monkeypatch):
@@ -633,7 +669,9 @@ def test_data_funnel_cheap_path_uses_catalog_size_not_disk_walk(tmp_path, monkey
 
     cheap = data.data_funnel(measure_size=False)
     assert cheap["raw"]["sources"] == 1
-    assert cheap["raw"]["lines"] == 20_000_000
+    # Records are deferred to cached.raw_records, never taken from the catalog's
+    # 20M claim: it was 149% wrong on the live corpus.
+    assert cheap["raw"]["lines"] == 0
     assert cheap["raw"]["size_mb"] == 40000.0            # catalog size, no disk walk
 
     full = data.data_funnel(measure_size=True)

@@ -259,6 +259,11 @@ def _corpus_funnel() -> None:
     funnel = _data_funnel_snapshot(measure_size=False)
     _root = data.data_root()
     funnel["raw"]["size_mb"] = cached.raw_size_mb(_root)
+    # Raw records are counted on disk, not read off the catalog, whose Total Lines
+    # understated the live corpus by 149% and knew nothing of 242 fetched sources.
+    # Same treatment as Size: too costly for a 1s tick, so it comes from the
+    # long-TTL cached count.
+    funnel["raw"]["lines"] = cached.raw_records(_root)
     # Cleaned records grow live as clean workers write; the clean report only lands
     # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
     funnel["cleaned"]["lines"] = cached.cleaned_records(_root)

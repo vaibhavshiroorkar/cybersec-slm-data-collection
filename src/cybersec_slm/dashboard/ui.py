@@ -566,6 +566,20 @@ def _stage_widgets(stage: str, base: dict) -> dict:
             parsed = [t.strip() for t in langs.split(",") if t.strip()]
             if parsed:
                 s["allowed_langs"] = parsed
+        if "pii_engine" in allowed:
+            engines = ["regex", "presidio"]
+            current = str(base.get("pii_engine", "regex"))
+            s["pii_engine"] = st.selectbox(
+                "PII engine",
+                engines,
+                index=engines.index(current) if current in engines else 0,
+                key=f"{stage}_piiengine",
+                help="regex (default) redacts emails, public IPs, valid cards and "
+                     "SSNs at about 0.2 ms per record. presidio adds a spaCy NER "
+                     "pass for person names on top, at roughly 300x that cost, and "
+                     "needs `uv sync --extra pii-ner`. Person names in this corpus "
+                     "are mostly public author bylines, so regex is the right "
+                     "default; pick presidio for a deliberate audit pass.")
         if "no_auto_rebalance" in allowed:
             # Auto-rebalance is off by default; the flag is passed unless enabled.
             enable = st.checkbox("enable auto-rebalance",

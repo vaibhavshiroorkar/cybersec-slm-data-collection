@@ -40,6 +40,50 @@ def test_start_status_stop(tmp_path, monkeypatch):
     assert control.status()["running"] is False
 
 
+def test_status_resume_reflects_the_command_actually_launched(tmp_path, monkeypatch):
+    """status() must report what is RUNNING, not what the caller asked for.
+
+    A full run's argv is built per stage from that page's saved settings, so a
+    saved ``resume: true`` on the Clean page puts ``--resume`` in the plan even
+    when the caller passed ``resume=False``. status() used to echo the caller's
+    flag, so it announced a fresh run while the pipeline resumed — and skipped
+    every source in the ledger.
+    """
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage",
+                        lambda key: {"resume": True} if key == "clean" else {})
+    monkeypatch.setattr(control, "_spawn_detached", lambda cmd, root, logs: 4242)
+    try:
+        control.start(stage="all", resume=False,
+                      settings={"skip_source": True, "skip_ingest": True})
+        st = control.status()
+        assert st["resume"] is True, "a plan containing --resume must report resume=True"
+    finally:
+        control._clear_control()
+
+
+def test_explicit_resume_false_overrides_a_saved_resume(tmp_path, monkeypatch):
+    """An explicit override must be able to force a run to be fresh."""
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage",
+                        lambda key: {"resume": True} if key == "clean" else {})
+    plan = control.build_full_plan(
+        {"skip_source": True, "skip_ingest": True, "resume": False}, resume=False)
+    assert not any("--resume" in argv for argv in plan)
+
+
+def test_status_resume_false_for_a_fresh_plan(tmp_path, monkeypatch):
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage", lambda key: {})
+    monkeypatch.setattr(control, "_spawn_detached", lambda cmd, root, logs: 4243)
+    try:
+        control.start(stage="all", resume=False,
+                      settings={"skip_source": True, "skip_ingest": True})
+        assert control.status()["resume"] is False
+    finally:
+        control._clear_control()
+
+
 def test_stale_control_reads_idle(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
     logs = tmp_path / "logs"
