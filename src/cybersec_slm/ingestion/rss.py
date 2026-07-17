@@ -28,10 +28,14 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 from ..core import logger, sha256_file
+from ..core import RAW_DATA
 from .common import ONE_MB, category_of, http_get
 
-BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))))), "data", "raw")
+# The profile's raw tree, exactly as scrape.py and scrape_html.py resolve it. This
+# module first computed its own <repo>/data/raw by hand, which ignored the active
+# profile and wrote a ubi feed into cybersec's tree (data/raw, the pre-profile
+# path). Use the shared constant so every fetcher lands in the same place.
+BASE = RAW_DATA
 
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
