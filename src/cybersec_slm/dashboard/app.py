@@ -127,12 +127,20 @@ with ui.section("Run the full pipeline"):
     _saved = control.settings_store.get_stage("overview").get("stages")
     _default = ([label for label in stage_labels if label in _saved]
                 if isinstance(_saved, list) else stage_labels)
+    # Re-hydrate the widget's own key rather than passing default=. Streamlit
+    # ignores `default` once the key exists in session state, and drops that key
+    # the moment a rerun does not render the widget, so `default` alone restores
+    # the saved value on some navigations and not others. Seeding the key when it
+    # is missing restores it on every path into this page, and Streamlit then
+    # owns it for as long as the widget keeps rendering.
+    if "overview_stage_pills" not in st.session_state:
+        st.session_state["overview_stage_pills"] = _default
     selected_labels = st.pills(
         "Stages to run", stage_labels, selection_mode="multi",
-        default=_default, key="overview_stage_pills",
+        key="overview_stage_pills",
         help="Lit = will run this launch. Dimmed = skipped. Kept until you "
              "change it, across pages and restarts.") or []
-    if list(selected_labels) != (_saved if isinstance(_saved, list) else stage_labels):
+    if list(selected_labels) != _default:
         control.settings_store.save_stage("overview", {"stages": list(selected_labels)})
     selected_keys = {k for k, label in zip(stage_keys, stage_labels, strict=True)
                      if label in selected_labels}

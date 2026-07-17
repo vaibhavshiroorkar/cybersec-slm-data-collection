@@ -216,6 +216,40 @@ def profile_switcher() -> str:
         info = profiles.info(active)
         st.caption(f"{info['domain_name']} · {len(info['subdomains'])} sub-domains "
                    f"· {info['catalog_rows']} sources")
+
+        # Creating a profile was CLI-only (`cybersec-slm profile create`), which
+        # made the switcher a list of things someone else had made. A new profile
+        # starts empty: its taxonomy is added on the Sourcing page, and it gets its
+        # own data/ and logs/ the first time it runs.
+        with st.expander("New profile"):
+            new = st.text_input(
+                "Name", key="profile_new_name", placeholder="my-corpus",
+                help="Letters, digits, '.', '_' and '-'. Becomes a directory "
+                     "under sources/profiles/ and under data/ and logs/.")
+            dom = st.text_input(
+                "Domain label", key="profile_new_domain", placeholder="MY_CORPUS",
+                help="The schema's top-level domain_name for this corpus. "
+                     "Optional; defaults to the profile name upper-cased.")
+            switch = st.checkbox("Switch to it", value=True, key="profile_new_use",
+                                 disabled=running)
+            if st.button("Create", key="profile_new_go", disabled=not new.strip()):
+                try:
+                    profiles.create(new.strip(),
+                                    domain_name=dom.strip() or new.strip().upper(),
+                                    use_it=bool(switch) and not running)
+                    st.success(f"Created {new.strip()!r}. Add its sub-domains on "
+                               f"the Sourcing page.")
+                    # Drop the selectbox's remembered value. It still holds the
+                    # profile that was active a moment ago, and the switch handler
+                    # above compares it against the active one: left in place, the
+                    # rerun would read it as "the user picked the old profile" and
+                    # switch straight back out of the one just created.
+                    st.session_state.pop("profile_pick", None)
+                    from . import cached
+                    cached.clear_stats()
+                    st.rerun()
+                except (ValueError, FileExistsError) as e:
+                    st.error(str(e))
     return active
 
 
