@@ -112,7 +112,16 @@ class SiteSpider(scrapy.Spider):
         self.start_urls = [cfg["start_url"]]
         self._prefix = cfg["allow_prefix"]
         self._use_js = bool(cfg.get("use_js"))
-        self._link_extractor = LinkExtractor(allow_domains=[parsed.netloc])
+        # Permit PDF links. Scrapy's LinkExtractor drops everything in
+        # IGNORED_EXTENSIONS by default, which includes 'pdf', so a page that is an
+        # index of PDF links (a bank's policies/disclosures pages are exactly this)
+        # yielded no links and no records: "crawl failed rc=0". Keep the rest of
+        # the ignore list (images, archives, media) so the crawler still does not
+        # chase a logo or a zip.
+        from scrapy.linkextractors import IGNORED_EXTENSIONS
+        deny_ext = [e for e in IGNORED_EXTENSIONS if e != "pdf"]
+        self._link_extractor = LinkExtractor(allow_domains=[parsed.netloc],
+                                             deny_extensions=deny_ext)
 
     def start_requests(self):
         yield self._request(self.cfg["start_url"])
@@ -126,6 +135,12 @@ class SiteSpider(scrapy.Spider):
         self.logger.warning(f"fetch failed: {failure.request.url}")
 
     def parse(self, response):
+        # A PDF response is not a TextResponse, so the HTML path below returns
+        # early on it. Extract it here instead, or every bank policy and
+        # disclosure document (all PDFs) would be fetched and thrown away.
+        if response.body[:4] == b"%PDF" or response.url.lower().endswith(".pdf"):
+            yield from self._parse_pdf(response)
+            return
         if not isinstance(response, TextResponse):
             return
         title, text = extract(response, self.cfg.get("extractor",
@@ -139,6 +154,33 @@ class SiteSpider(scrapy.Spider):
             nu = link.url.split("#")[0]
             if nu.startswith(self._prefix):
                 yield self._request(nu)
+
+    def _parse_pdf(self, response):
+        """One record per page of a PDF, extracted with pymupdf.
+
+        Same extraction as ``scrape.scrape_pdf`` (the standalone pdf kind), so a
+        PDF found by crawling is treated exactly like one catalogued directly. A
+        page with no extractable text (a scanned image) is skipped, not errored."""
+        try:
+            import pymupdf
+            doc = pymupdf.open(stream=response.body, filetype="pdf")
+        except Exception as e:                       # noqa: BLE001
+            self.logger.warning(f"pdf parse failed: {response.url}: {e}")
+            return
+        try:
+            for page in doc:
+                txt = page.get_text().strip()
+                # Any non-empty page, matching scrape_pdf: the MIN_TEXT floor is
+                # for HTML pages padded with boilerplate, whereas a PDF page is
+                # already content. A scanned image page extracts to "" and is
+                # skipped; the cleaning stage applies the real length floor.
+                if txt:
+                    yield {"source": self.cfg["description"],
+                           "url": response.url,
+                           "license": self.cfg["license"],
+                           "text": txt}
+        finally:
+            doc.close()
 
 
 def build_settings(cfg: dict) -> dict:

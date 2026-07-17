@@ -64,7 +64,8 @@ def _fetch_one(descriptor: dict, log) -> str:
                            descriptor["url"], descriptor["json_key"], log)
     elif kind == "rss":
         rss.scrape_rss(domain, slug, descriptor["title"], descriptor["license"],
-                       descriptor["url"], log)
+                       descriptor["url"], log,
+                       metadata_only=descriptor.get("metadata_only", False))
     elif kind == "website":
         scrape_html.crawl(domain, slug, descriptor["start_url"], descriptor["license"],
                           descriptor["use_js"], descriptor["max_pages"],
