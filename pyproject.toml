@@ -47,6 +47,10 @@ dependencies = [
                                  # (fasttext-wheel has no cp313 wheel -> source build needs MSVC)
     "langdetect>=1.0.9",         # language id fallback (langfilter)
     "deep-translator>=1.11.0",   # translate non-English -> English (translate)
+    # --- normalize (stage 5: the canonical 22-field schema) ---
+    "pydantic>=2.0",             # normalize/schema.py CanonicalRecord; a core stage,
+                                 # imported unconditionally, so it belongs here rather
+                                 # than in an extra (CI's bare `uv sync` must install it)
     # --- sourcing (cybersec-slm source -> append rows to the tracking sheet) ---
     "google-api-python-client>=2.100.0",
     "google-auth>=2.30.0",

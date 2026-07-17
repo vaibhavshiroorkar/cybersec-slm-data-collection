@@ -454,10 +454,20 @@ def synthetic_identities(spec: str | None = None) -> frozenset[str]:
     Reads the catalog CSV and returns the :func:`source_identity` of each flagged
     row's ``Dataset Link``. The normalize stage matches record URLs against this
     set to keep synthetic sources out of the final dataset.
+
+    A missing catalog means nothing is flagged synthetic, not an error: normalize
+    runs over ``data/clean``, which can exist without the catalog (a fresh
+    checkout, an isolated test root, a corpus handed over without its sourcing
+    sheet). Returning an empty set there keeps the stage running instead of
+    failing it over a filter that simply has nothing to filter.
     """
     import pandas as pd
 
-    path = _resolve(spec or default_catalog())
+    path = spec or default_catalog()
+    if not os.path.exists(path):
+        logger.debug(f"synthetic_identities: no catalog at {path}; none flagged")
+        return frozenset()
+    path = _resolve(path)
     df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
     ids: set[str] = set()
