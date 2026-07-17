@@ -42,6 +42,12 @@ subdomains:
     - CKYCR central KYC registry guidelines
     - site:unionbankofindia.bank.in "Anti Money Laundering"
     - site:unionbankofindia.bank.in "Know Your Customer" policy
+    - site:unionbankofindia.bank.in "KYC" filetype:pdf
+    - site:unionbankofindia.bank.in "customer acceptance policy"
+    - site:unionbankofindia.bank.in "PMLA" policy
+    - site:indiacode.nic.in banking regulation
+    - site:egazette.gov.in financial notification
+    - RBI guidelines India filetype:pdf
     vocab:
     - aml
     - beneficial ownership
@@ -94,6 +100,13 @@ subdomains:
     - credit risk management RBI guidelines
     - site:unionbankofindia.bank.in "Basel III" filetype:pdf
     - site:unionbankofindia.bank.in "Risk Management Policy"
+    - site:unionbankofindia.bank.in "Pillar 3" disclosures
+    - site:unionbankofindia.bank.in "capital adequacy"
+    - site:unionbankofindia.bank.in "credit risk" policy
+    - site:unionbankofindia.bank.in compliance policy filetype:pdf
+    - site:indiacode.nic.in banking regulation
+    - site:egazette.gov.in financial notification
+    - RBI guidelines India filetype:pdf
     vocab:
     - basel
     - capital adequacy
@@ -140,6 +153,13 @@ subdomains:
     - secretarial audit report format India
     - site:unionbankofindia.bank.in "Secretarial Compliance Report" filetype:pdf
     - site:unionbankofindia.bank.in "Code of Corporate Governance"
+    - site:unionbankofindia.bank.in "Whistle Blower Policy"
+    - site:unionbankofindia.bank.in "board of directors"
+    - site:unionbankofindia.bank.in annual report filetype:pdf
+    - site:unionbankofindia.bank.in "policies" filetype:pdf
+    - site:indiacode.nic.in banking regulation
+    - site:egazette.gov.in financial notification
+    - RBI guidelines India filetype:pdf
     vocab:
     - annual report
     - board committee
@@ -183,6 +203,13 @@ subdomains:
     - concurrent audit banks RBI guidelines
     - site:unionbankofindia.bank.in "Policy for Engagement of Statutory Branch Auditors"
     - site:unionbankofindia.bank.in "Audit and Inspection"
+    - site:unionbankofindia.bank.in "Statutory Branch Auditors"
+    - site:unionbankofindia.bank.in "concurrent audit"
+    - site:unionbankofindia.bank.in "internal audit" policy
+    - site:unionbankofindia.bank.in "Risk Based Internal Audit"
+    - site:indiacode.nic.in banking regulation
+    - site:egazette.gov.in financial notification
+    - RBI guidelines India filetype:pdf
     vocab:
     - audit evidence
     - audit finding
