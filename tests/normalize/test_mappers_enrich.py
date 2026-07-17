@@ -30,7 +30,7 @@ def test_a_datasets_own_source_column_cannot_hijack_provenance():
            "text": "Rotate service account keys every ninety days without fail."}
 
     out = mappers.get_mapper("secvalley", rec).map(
-        rec, domain="Cloud Security", source="secvalley")
+        rec, domain="Internal Audit", source="secvalley")
 
     assert out["source"] == "secvalley"
     assert out["source_file"] == "secvalley"
@@ -40,9 +40,9 @@ def test_build_record_files_a_hijacked_record_under_its_real_source():
     """The end of the chain: what the manifest and the corpus funnel count."""
     rec = {"source": "This synthetic dataset for LLM training captures realistic "
                      "employee-assistant interactions about HR and compliance.",
-           "text": "Rotate service account keys every ninety days without fail."}
+           "text": "Customer due diligence requires verifying the beneficial owner."}
     mapped = mappers.get_mapper("hr-corpus", rec).map(
-        rec, domain="Cloud Security", source="hr-corpus")
+        rec, domain="AML-KYC", source="hr-corpus")
 
     record = enrich.build_record(mapped)
 
