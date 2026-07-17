@@ -102,9 +102,18 @@ class BaseMapper(abc.ABC):
         return value.strip() if isinstance(value, str) and value.strip() else fallback
 
     def _base(self, rec: dict, text: str, domain: str, source: str) -> dict:
+        # ``source`` is provenance: which source folder this record came from. Only
+        # the pipeline knows that, so it is never read off the record. Whatever a
+        # record calls "source" is the dataset author's own notion (a citation, a
+        # URL, a sentence of prose), and trusting it let ingestion's bug (it wrote
+        # the description into every record's source, see fetch._convert_and_log)
+        # reach the manifest: 61% of the live corpus was filed under 188 prose
+        # "sources", which made the funnel's Final row claim more sources than
+        # data/clean has folders. Reading provenance from the pipeline keeps this
+        # true whatever the records happen to carry.
         return {
             "text": text,
-            "source": self._str_or(rec.get("source"), source),
+            "source": source,
             "source_url": self._str_or(rec.get("url")),
             "license": self._str_or(rec.get("license")) or "",
             "origin_format": _infer_origin_format(rec),
