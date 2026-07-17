@@ -16,6 +16,7 @@ import time
 import pandas as pd
 
 from ..core import LOGS, RAW_DATA, count_lines, logger, sha256_file, try_import  # noqa: F401
+from . import urlscreen
 
 # ---------------------------------------------------------------- config -----
 ONE_MB = 1024 * 1024
@@ -53,26 +54,74 @@ _RETRY = dict(stop=stop_after_attempt(4),
               reraise=True)
 
 
+# How many hops a fetch will follow before giving up. httpx's own default is 20;
+# a corpus source that needs more than a handful is broken, not shy.
+MAX_REDIRECTS = 10
+
+
+def _screened_hops(url: str, timeout: int, opener):
+    """Walk the redirect chain, screening every hop, and return the final response.
+
+    ``follow_redirects=True`` is the natural way to write this and it is exactly
+    what makes the screen useless: httpx would follow a 302 from a public URL to
+    169.254.169.254 without the screen ever seeing the second URL. So redirects
+    are followed by hand and :func:`urlscreen.check` runs on each hop.
+
+    ``opener`` returns a response for one hop, so the streaming and non-streaming
+    callers share this logic without one of them buffering the whole body.
+    """
+    seen: list[str] = []
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        urlscreen.check(current)
+        resp = opener(current, timeout)
+        location = resp.headers.get("location") if resp.headers else None
+        if not (getattr(resp, "is_redirect", False) and location):
+            return resp
+        seen.append(current)
+        # A Location may be relative; resolve against the hop it came from, or the
+        # screen would run on a fragment and pass it for the wrong reason.
+        current = str(httpx.URL(current).join(location))
+        if hasattr(resp, "close"):
+            resp.close()
+    raise httpx.HTTPError(
+        f"too many redirects (> {MAX_REDIRECTS}) starting at {url!r}: {seen}")
+
+
 @retry(**_RETRY)
 def http_get(url: str, timeout: int = 180) -> httpx.Response:
-    r = httpx.get(url, headers=HEADERS, follow_redirects=True, timeout=timeout)
+    """GET a screened URL, following (and re-screening) redirects by hand."""
+    def _open(u, t):
+        return httpx.get(u, headers=HEADERS, follow_redirects=False, timeout=t)
+
+    r = _screened_hops(url, timeout, _open)
     r.raise_for_status()
     return r
 
 
 @retry(**_RETRY)
 def download(url: str, dest: str) -> tuple[int, str]:
-    """Stream a URL to disk; return (bytes, sha256)."""
+    """Stream a screened URL to disk; return (bytes, sha256)."""
     import hashlib
     h = hashlib.sha256()
     size = 0
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-    with httpx.stream("GET", url, headers=HEADERS, follow_redirects=True, timeout=180) as r:
+
+    def _open(u, t):
+        ctx = httpx.stream("GET", u, headers=HEADERS, follow_redirects=False,
+                           timeout=t)
+        return ctx.__enter__()
+
+    r = _screened_hops(url, 180, _open)
+    try:
         r.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in r.iter_bytes(1 << 16):
                 size += len(chunk)
                 f.write(chunk); h.update(chunk)
+    finally:
+        if hasattr(r, "close"):
+            r.close()
     return size, h.hexdigest()
 
 
