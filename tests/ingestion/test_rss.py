@@ -291,3 +291,12 @@ def test_the_metadata_index_license_passes_the_gate():
 
     ok, _ = is_license_ok({"license": rss.META_INDEX_LICENSE})
     assert ok
+
+
+def test_rss_writes_under_the_active_profiles_raw_tree():
+    """rss.BASE first hand-computed <repo>/data/raw, ignoring the profile, so a ubi
+    feed landed in the pre-profile data/raw. It must match the other fetchers."""
+    from cybersec_slm.ingestion import rss as _rss
+    from cybersec_slm.ingestion import scrape, scrape_html
+
+    assert _rss.BASE == scrape.BASE == scrape_html.BASE
