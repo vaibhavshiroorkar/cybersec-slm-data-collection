@@ -17,7 +17,7 @@ st.caption("Cleaned and cross-source deduplicated records under `data/clean/`. "
            "Run this stage from the Overview page.")
 
 # ------------------------------------------------------------------ stats ------
-funnel = cached.data_funnel(data.data_root())
+funnel = cached.data_funnel(data.scope())
 cleaned = funnel["cleaned"]
 with ui.section("Cleaned"):
     c = st.columns(3)
@@ -80,7 +80,7 @@ with ui.section("Per-source cleaning stats",
 # ----------------------------------------------------------- cleaned table -----
 with ui.section("Cleaned sources", "What is physically under `data/clean/` now, "
                                    "measured on disk."):
-    ct_disk = cached.cleaned_table(data.data_root())
+    ct_disk = cached.cleaned_table(data.scope())
     if ct_disk:
         st.caption(f"{len(ct_disk)} sources under `data/clean/`.")
         ui.table(ct_disk, height=340)

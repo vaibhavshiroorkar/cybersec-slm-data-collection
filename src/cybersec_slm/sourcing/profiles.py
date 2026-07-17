@@ -94,23 +94,18 @@ def _active_file() -> str:
 def active() -> str:
     """The active profile name (env > persisted file > built-in default).
 
+    Delegates to :func:`core.active_profile`. The resolution used to live here and
+    be re-implemented in core once core needed a profile to build its paths, and
+    two answers to "which profile am I" that can disagree is a bug waiting to
+    happen: the catalog would come from one profile while the corpus was written
+    under another's directory. One implementation, and this is the name everything
+    outside core keeps calling.
+
     Never raises: an env var or file naming a profile that does not exist falls
     back to the default, so a stale pointer degrades to a working pipeline rather
     than breaking every stage's import.
     """
-    env = (os.environ.get(ENV_VAR) or "").strip()
-    if env and exists(env):
-        return env
-
-    try:
-        with open(_active_file(), encoding="utf-8") as f:
-            saved = f.read().strip()
-    except OSError:
-        saved = ""
-    if saved and exists(saved):
-        return saved
-
-    return taxonomies.DEFAULT_PROFILE
+    return core.active_profile()
 
 
 def use(name: str) -> str:

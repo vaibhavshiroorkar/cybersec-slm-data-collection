@@ -7,6 +7,7 @@ import os
 from concurrent.futures import Future
 
 from cybersec_slm.cleaning import pipeline
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.ingestion import parallel
 
 
@@ -82,7 +83,7 @@ class _StubTranslator:
 
 def _wire(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
@@ -128,14 +129,15 @@ def test_run_clean_resume_skips_already_cleaned_sources(tmp_path, monkeypatch):
     # First run cleans both sources and writes the checkpoint.
     result1 = parallel.run_clean()
     assert result1["files"] == 2
-    assert (tmp_path / "logs" / "cleaned_sources.txt").exists()
+    assert (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").exists()
 
     # Add a new source and rerun with resume. The already-cleaned sources should be skipped.
     _write_jsonl(str(raw / "Test" / "s3" / "c.jsonl"), [{"text": distinct}])
     result2 = parallel.run_clean(resume=True)
 
     assert result2["files"] == 1
-    cleaned = (tmp_path / "logs" / "cleaned_sources.txt").read_text(encoding="utf-8").splitlines()
+    cleaned = (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").read_text(
+        encoding="utf-8").splitlines()
     assert "Test/s1" in cleaned
     assert "Test/s2" in cleaned
     assert "Test/s3" in cleaned
@@ -157,7 +159,7 @@ def test_sharded_source_is_ledgered_only_when_every_window_is_done(tmp_path,
     monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
 
     result = parallel.run_clean(workers=2)
-    cleaned = (tmp_path / "logs" / "cleaned_sources.txt").read_text(
+    cleaned = (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").read_text(
         encoding="utf-8").split()
 
     # Each source appears exactly ONCE, however many windows it took.
@@ -222,7 +224,7 @@ def test_run_clean_keep_raw_false_deletes_raw(tmp_path, monkeypatch):
 
 def _wire_two_domains(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
@@ -273,7 +275,7 @@ def test_run_clean_selective_purge_raw_deletes_only_chosen(tmp_path, monkeypatch
 
 def _wire_two_sources_one_domain(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))

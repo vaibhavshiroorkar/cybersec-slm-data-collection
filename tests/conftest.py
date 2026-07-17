@@ -23,7 +23,25 @@ module, which is early enough.
 """
 
 import os
+import tempfile
 
 from cybersec_slm.sourcing.taxonomies import DEFAULT_PROFILE
 
 os.environ.setdefault("CYBERSEC_SLM_PROFILE", DEFAULT_PROFILE)
+
+# Pin the data root away from the developer's corpus, for the same reason and with
+# the same urgency as the profile.
+#
+# `core.data_root()` falls back to `os.getcwd()`, so any test that reaches real
+# code without setting a root operates on the checkout it is running in. Most
+# tests do set one (monkeypatch.setenv per test, which still wins over this), but
+# "most" is not a safety property. A run of this suite moved a real 5GB corpus
+# under the wrong profile, because a test called `cli.main()` without a root and
+# the CLI's layout migration duly migrated the developer's data using the profile
+# pinned above.
+#
+# Nothing the suite touches should ever be outside a temp directory. Set here, at
+# import, because `core` freezes DATA_ROOT/DATA_DIR/LOGS the moment it is imported
+# and the root conftest is the last place that runs before that.
+os.environ.setdefault("CYBERSEC_SLM_DATA_ROOT",
+                      tempfile.mkdtemp(prefix="cybersec-slm-tests-"))

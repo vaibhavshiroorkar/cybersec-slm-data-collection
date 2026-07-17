@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import pytest
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
+
 
 @pytest.fixture(autouse=True)
 def _isolate_dashboard_logs(tmp_path, monkeypatch):
     from cybersec_slm import core
 
-    monkeypatch.setattr(core, "LOGS", str(tmp_path / "logs"), raising=False)
+    monkeypatch.setattr(core, "LOGS", str(tmp_path / "logs" / PROFILE), raising=False)
     yield

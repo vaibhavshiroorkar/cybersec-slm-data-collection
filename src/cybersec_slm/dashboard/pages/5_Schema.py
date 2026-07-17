@@ -27,7 +27,7 @@ norm_tab, fields_tab, manifest_tab, browse_tab = st.tabs(
 # ------------------------------------------------------------- normalize -------
 with norm_tab:
     with ui.section("Normalization"):
-        appended = cached.data_funnel(data.data_root())["appended"]
+        appended = cached.data_funnel(data.scope())["appended"]
         c = st.columns(4)
         c[0].metric("Sources", charts.fmt_int(appended["sources"]))
         c[1].metric("Records written", charts.fmt_int(appended["lines"]))

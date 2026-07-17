@@ -9,6 +9,7 @@ import os
 import pytest
 
 from cybersec_slm import llm
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.sourcing import review
 
 _COLS = ["Name", "Sub-Domain", "Description", "Dataset Link", "Category",
@@ -60,7 +61,7 @@ def _row(name, link, desc=""):
 def _redirect(monkeypatch, tmp_path):
     """Point the reports and Excluded.csv at tmp (never the real repo)."""
     monkeypatch.setattr(review, "reviews_dir",
-                        lambda: str(tmp_path / "logs" / "reviews"))
+                        lambda: str(tmp_path / "logs" / PROFILE / "reviews"))
     monkeypatch.setattr(review, "excluded_path",
                         lambda profile=None: str(tmp_path / "Excluded.csv"))
 
