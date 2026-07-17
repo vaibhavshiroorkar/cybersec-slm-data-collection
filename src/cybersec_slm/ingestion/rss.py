@@ -27,8 +27,7 @@ import re
 from urllib.parse import urlparse
 from xml.etree import ElementTree
 
-from ..core import logger, sha256_file
-from ..core import RAW_DATA
+from ..core import RAW_DATA, logger, sha256_file
 from .common import ONE_MB, category_of, http_get
 
 # The profile's raw tree, exactly as scrape.py and scrape_html.py resolve it. This
