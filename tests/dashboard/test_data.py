@@ -678,6 +678,79 @@ def test_data_funnel_cheap_path_uses_catalog_size_not_disk_walk(tmp_path, monkey
     assert full["raw"]["size_mb"] == 5.0                 # measured on disk (5 MB)
 
 
+def _seed_final(root, recs):
+    """Write a data/final/dataset.jsonl with no manifest beside it."""
+    final = root / "data" / "final"
+    final.mkdir(parents=True, exist_ok=True)
+    (final / "dataset.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return final
+
+
+def test_final_funnel_counts_the_dataset_when_no_manifest_exists(tmp_path, monkeypatch):
+    """The bug: normalize writes the manifest only when the whole pass finishes.
+
+    Until then the dataset is large and growing while the Final row read 0 sources
+    and 0 records beside a real Size.
+    """
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    data.final_stats.reset()
+    final = _seed_final(tmp_path, [
+        {"source": "alpha", "token_count": 10},
+        {"source": "beta", "token_count": 15},
+        {"source": "alpha", "token_count": 5},
+    ])
+    assert not (final / "manifest.json").exists()
+
+    appended = data.data_funnel(measure_size=True)["appended"]
+
+    assert appended["lines"] == 3
+    assert appended["sources"] == 2
+    assert appended["tokens"] == 30
+    assert appended["size_mb"] > 0
+
+
+def test_final_funnel_ignores_a_stale_manifest_in_favour_of_the_dataset(tmp_path,
+                                                                        monkeypatch):
+    """A manifest from an earlier run must not outvote the file on disk."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    data.final_stats.reset()
+    final = _seed_final(tmp_path, [{"source": "alpha", "token_count": 10}])
+    (final / "manifest.json").write_text(json.dumps(
+        {"record_count": 999, "sources": {"stale": 1}, "token_total": 42}),
+        encoding="utf-8")
+
+    appended = data.data_funnel(measure_size=True)["appended"]
+
+    assert appended["lines"] == 1          # not the manifest's 999
+    assert appended["sources"] == 1        # not the manifest's "stale"
+    assert appended["tokens"] == 10        # not the manifest's 42
+
+
+def test_final_funnel_cheap_path_defers_the_scan(tmp_path, monkeypatch):
+    """The 1s tick must not parse the corpus; the Overview fills it from cache."""
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    data.final_stats.reset()
+    _seed_final(tmp_path, [{"source": "alpha", "token_count": 10}])
+
+    appended = data.data_funnel(measure_size=False)["appended"]
+
+    assert appended["lines"] == 0
+    assert appended["sources"] == 0
+    assert appended["tokens"] == 0
+    assert appended["size_mb"] > 0         # a stat call, not a scan
+
+
+def test_final_funnel_is_zero_with_no_dataset(tmp_path, monkeypatch):
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
+    data.final_stats.reset()
+
+    appended = data.data_funnel(measure_size=True)["appended"]
+
+    assert (appended["lines"], appended["sources"], appended["tokens"]) == (0, 0, 0)
+    assert appended["size_mb"] == 0.0
+
+
 def test_blank_license_links_returns_only_unresolved_rows_with_links(monkeypatch):
     monkeypatch.setattr(data, "catalog_rows", lambda: [
         {"Name": "Good", "Dataset Link": "http://good", "License": "MIT"},
