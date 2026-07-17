@@ -393,12 +393,11 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 value=_clamp(int(base.get("workers", _wdef)), 1, 32),
                 key=f"{stage}_workers",
                 help=worker_help))
-        if "resume" in allowed:
-            s["resume"] = st.checkbox(
-                "resume from checkpoint",
-                value=bool(base.get("resume", False)),
-                key=f"{stage}_resume",
-                help="Skip already-finished sources and continue the previous run.")
+        # No "resume from checkpoint" checkbox. Resuming is a property of a launch,
+        # not of a stage's saved configuration: the Overview's Start and Resume both
+        # already pass it. Saving it here meant a stale `resume: true` silently won
+        # over the button the user actually pressed (see control.build_command),
+        # which is a foot-gun with no upside.
         if "source_timeout" in allowed:
             s["source_timeout"] = int(st.number_input(
                 "source timeout (s)", 30, 7200,
@@ -487,24 +486,19 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                                  key=f"{stage}_lang")
             if lang.strip() and lang.strip() != "en":
                 s["language"] = lang.strip()
-        if "no_enrich" in allowed:
-            enrich_on = st.checkbox(
-                "enrich discovered sources with metadata "
-                "(size, license, last updated, author, popularity, tags)",
-                value=not bool(base.get("no_enrich", False)), key=f"{stage}_enrich",
-                help="Fetches per-source metadata from the host (HuggingFace, "
-                     "GitHub, or an HTTP HEAD). Adds a network call per source; "
-                     "set $GITHUB_TOKEN to raise GitHub's rate limit.")
-            s["no_enrich"] = not enrich_on
+        # No enrichment toggle. Enrichment fills License, Author, size and Last
+        # Updated, and License is what the ingestion gate reads: a row discovered
+        # without it is unusable until a backfill resolves it. It is on by default
+        # and there is no sensible reason to discover sources without it.
         if "dry_run" in allowed:
             s["dry_run"] = st.checkbox(
                 "dry run (write candidate CSV, do not append to the catalog)",
                 value=bool(base.get("dry_run", False)), key=f"{stage}_dry")
-        if "no_crawler" in allowed:
-            enable = st.checkbox("crawl website sources this run",
-                                 value=not bool(base.get("no_crawler", False)),
-                                 key=f"{stage}_crawler")
-            s["no_crawler"] = not enable
+        # No "crawl website sources this run" toggle. Crawling is how a website-kind
+        # row is fetched at all, so turning it off does not change how the run works,
+        # it silently skips those sources: the same thing as not cataloguing them,
+        # but discovered only later when their raw folders are missing. The stage
+        # already has the extractor choice for the part that is a real decision.
         if "no_hazard_scan" in allowed:
             enable = st.checkbox(
                 "scan for security hazards (script/iframe injection, base64 "

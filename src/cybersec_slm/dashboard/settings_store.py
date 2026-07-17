@@ -96,11 +96,31 @@ def load(path: str | None = None, *, profile: str | None = None) -> dict:
     return dict(legacy) if name == _active_profile() else {}
 
 
+# Settings the dashboard no longer offers, stripped on read so a value saved
+# before its toggle was retired cannot keep steering runs from a file nobody
+# opens. This is not hypothetical: pipeline_settings.json carried
+# ``all.no_crawler: true``, which skipped every website source of every full run.
+#
+#   resume      -- a property of a launch, not of a stage. Start and Resume each
+#                  pass it; a saved true silently outvoted the button pressed.
+#   no_enrich   -- enrichment resolves License, which the ingestion gate reads. A
+#                  row discovered without it is unusable until a backfill.
+#   no_crawler  -- crawling is how a website row is fetched at all, so off does
+#                  not change the run, it just drops those sources.
+RETIRED_KEYS: frozenset[str] = frozenset({"resume", "no_enrich", "no_crawler"})
+
+
 def get_stage(stage: str, path: str | None = None, *,
               profile: str | None = None) -> dict:
-    """Saved settings for one stage of the active (or named) profile."""
+    """Saved settings for one stage of the active (or named) profile.
+
+    Retired keys (:data:`RETIRED_KEYS`) are dropped: they have no widget any more,
+    so a leftover value would be configuration nobody can see or unset.
+    """
     val = load(path, profile=profile).get(stage)
-    return dict(val) if isinstance(val, dict) else {}
+    if not isinstance(val, dict):
+        return {}
+    return {k: v for k, v in val.items() if k not in RETIRED_KEYS}
 
 
 def save_stage(stage: str, settings: dict, path: str | None = None, *,

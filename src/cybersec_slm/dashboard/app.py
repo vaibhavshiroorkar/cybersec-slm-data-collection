@@ -143,15 +143,40 @@ with ui.section("Run the full pipeline"):
         res = control.start("quick-finish", settings=run_settings)
         st.rerun() if res.get("ok") else st.error(res["error"])
 
+    def _do_eda_fix() -> None:
+        # Same reason Quick finish stops first: the fix's own clean rounds must not
+        # race a clean pass already in flight. The ledger survives a stop, so the
+        # resume inside each round picks up exactly where this run left off.
+        if control.status()["running"]:
+            control.stop()
+        res = control.start("eda-fix", settings=run_settings)
+        st.rerun() if res.get("ok") else st.error(res["error"])
+
     b = st.columns(5)
-    if b[4].button("Quick finish", use_container_width=True,
-                   help="Pause cleaning and build a dataset from what is already "
-                        "cleaned: EDA (observe only) and Schema run over data/clean "
-                        "as it stands, then cleaning resumes from its checkpoint and "
-                        "a final EDA + Schema rebuild over the fuller corpus. "
-                        "Nothing is recleaned; the snapshot's gate never blocks the "
-                        "run, because a partial corpus fails it by construction."):
-        _do_quick_finish()
+    # The two multi-stage recipes live behind More: they are deliberate,
+    # occasional actions, and putting them beside Start/Resume/Stop invited a
+    # mis-click into a run that reorders the whole pipeline.
+    with b[4].popover("More", use_container_width=True):
+        st.caption("Multi-stage recipes. Each stops a run in flight first, then "
+                   "resumes from its checkpoint, so nothing is refetched or "
+                   "recleaned.")
+        if st.button("Quick finish", key="more_quick_finish",
+                     use_container_width=True,
+                     help="Pause cleaning and build a dataset from what is already "
+                          "cleaned: EDA (observe only) and Schema run over "
+                          "data/clean as it stands, then cleaning resumes from its "
+                          "checkpoint and a final EDA + Schema rebuild over the "
+                          "fuller corpus. Nothing is recleaned; the snapshot's gate "
+                          "never blocks the run, because a partial corpus fails it "
+                          "by construction."):
+            _do_quick_finish()
+        if st.button("EDA fix", key="more_eda_fix", use_container_width=True,
+                     help="Balance the corpus: source only the sub-domains the EDA "
+                          "gate reports as starved, ingest and clean what arrives, "
+                          "then look again, repeating until it balances or "
+                          "discovery runs dry. Only adds data, never deletes it. "
+                          "The EDA page shows what it would target."):
+            _do_eda_fix()
     if b[0].button("Start", disabled=running, use_container_width=True,
                    help="Run the lit stages in order, keeping existing data: "
                         "ingest and clean skip sources already fetched/cleaned, so "
@@ -463,12 +488,19 @@ with left:
 
 with right:
     with ui.section("Release"):
-        if not man:
-            st.caption("No manifest yet. Run the pipeline to reach the schema stage.")
+        # Records, Tokens and Size come from the dataset on disk, not the manifest:
+        # normalize only writes the manifest when a whole pass finishes, so during a
+        # run (and after an interrupted one) these read zero beside a multi-GB file.
+        # Unique hashes stays on the manifest, which is the only thing that counts
+        # them, and so is absent until the pass completes.
+        _rel = cached.final_stats(data.data_root())
+        if not _rel["lines"] and not man:
+            st.caption("No dataset yet. Run the pipeline to reach the schema stage.")
         else:
             ui.stat_grid([
-                ("Records", charts.fmt_int(man.get("record_count"))),
-                ("Unique hashes", charts.fmt_int(man.get("unique_content_hashes"))),
-                ("Tokens", charts.fmt_int(man.get("token_total"))),
-                ("Domains", charts.fmt_int(len(man.get("domains") or {}))),
+                ("Records", charts.fmt_int(_rel["lines"])),
+                ("Unique hashes", charts.fmt_int(man.get("unique_content_hashes"))
+                                  if man else "n/a"),
+                ("Tokens", charts.fmt_int(_rel["tokens"])),
+                ("Size", charts.fmt_size(_rel["size_mb"])),
             ], cols=2)
