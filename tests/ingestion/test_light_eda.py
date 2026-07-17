@@ -120,6 +120,50 @@ def test_flag_security_hazards(tmp_path):
     assert len(report["flags"]["security_hazards"]) > 0
 
 
+def test_a_hazards_severity_survives_into_the_report(tmp_path):
+    """The summary used to hardcode severity="info", so every warning-severity
+    finding (script/iframe, javascript:, shell metacharacters) was reported as
+    info. Severity is the whole point of the field: it is what tells an operator
+    which flags deserve a look."""
+    records = [{"text": "Exploit payload: <script>alert('xss')</script> in the wild"}]
+    folder = _source_folder(tmp_path, records)
+
+    _passed, report = light_eda.assess_source(folder, _descriptor(),
+                                              synthetic_ids=frozenset())
+
+    [entry] = [h for h in report["flags"]["security_hazards"]
+               if h["type"] == "embedded_active_content"]
+    assert entry["severity"] == "warning"
+
+
+def test_an_info_severity_hazard_is_still_reported_as_info(tmp_path):
+    """A long base64 blob is common in a security corpus and stays info."""
+    records = [{"text": "payload " + ("QUJD" * 200)}]
+    folder = _source_folder(tmp_path, records)
+
+    _passed, report = light_eda.assess_source(folder, _descriptor(),
+                                              synthetic_ids=frozenset())
+
+    [entry] = [h for h in report["flags"]["security_hazards"]
+               if h["type"] == "base64_payload"]
+    assert entry["severity"] == "info"
+
+
+def test_the_worst_severity_wins_when_one_type_has_both(tmp_path):
+    """Summarising by type collapses many findings into one row, so the row has to
+    carry the most serious severity seen, not whichever happened to be last."""
+    records = [{"text": "<script>a</script>"}, {"text": "<iframe src=x>"}]
+    folder = _source_folder(tmp_path, records)
+
+    _passed, report = light_eda.assess_source(folder, _descriptor(),
+                                              synthetic_ids=frozenset())
+
+    [entry] = [h for h in report["flags"]["security_hazards"]
+               if h["type"] == "embedded_active_content"]
+    assert entry["severity"] == "warning"
+    assert entry["count"] == 2
+
+
 # ── reject_source tests ─────────────────────────────────────────────────────
 
 def test_reject_source_moves_folder(tmp_path, monkeypatch):
