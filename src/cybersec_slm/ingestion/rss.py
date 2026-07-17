@@ -35,13 +35,17 @@ BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
-# URL shapes that mean "this is a feed". Kept narrow on purpose: it is checked
-# before the generic url/github fallback, so anything matched here stops being
-# fetchable as a file.
+# URL shapes that mean "this is a feed". Narrow enough that it cannot swallow a
+# fetchable file (it runs before the url/github fallback), wide enough for what
+# publishers actually serve, which is the harder half: a first cut matched
+# /rss.xml and /feed/ and missed every one of RBI's real feeds, because they are
+# named notifications_rss.xml and Publication_rss.xml. "rss" is a suffix on a
+# name far more often than it is a path segment.
 _FEED_RE = re.compile(
-    r"(?:^|/)(?:rss|atom|feed)(?:\.aspx|\.xml|\.php|/|$)"      # /rss.aspx, /feed/
-    r"|\.(?:rss|atom)$"                                        # /x.rss, /x.atom
-    r"|(?:^|/)(?:feed|rss|atom)\.xml$",                        # /feed.xml
+    r"(?:^|/|[._-])(?:rss|atom)\.(?:xml|aspx|php)$"     # /notifications_rss.xml
+    r"|(?:^|/)(?:rss|atom|feed)(?:\.aspx|\.xml|\.php|/|$)"   # /rss.aspx, /feed/
+    r"|\.(?:rss|atom)$"                                 # /x.rss, /x.atom
+    r"|(?:^|/|[._-])feed\.xml$",                        # /blog_feed.xml
     re.IGNORECASE)
 
 
@@ -85,6 +89,16 @@ def parse(body) -> list[dict]:
     body = (body or "").strip()
     if not body:
         raise FeedError("empty response")
+
+    # Sniff HTML before parsing, not after. An HTML page rarely parses as XML, so
+    # checking the root tag only catches the well-formed minority and everything
+    # else surfaces as "not parseable as XML", which sends the reader looking for
+    # a broken feed instead of the truth: this URL is a web page. That is the
+    # common case, not an edge one. rbi.org.in/Scripts/rss.aspx, the obvious URL
+    # for RBI's feed, is exactly this: an HTML page listing the real feeds.
+    if re.match(r"<!doctype\s+html|<html[\s>]", body[:200], re.IGNORECASE):
+        raise FeedError("the URL returned HTML, not a feed (a feed index page or "
+                        "an error page?)")
     try:
         root = ElementTree.fromstring(body)
     except ElementTree.ParseError as e:

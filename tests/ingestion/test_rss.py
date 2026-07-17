@@ -98,12 +98,21 @@ def test_parse_accepts_bytes_as_httpx_returns_them():
 
 # ------------------------------------------------------------- is_feed_url ----
 @pytest.mark.parametrize("url", [
-    "https://rbi.org.in/Scripts/rss.aspx",
+    # RBI's real feeds. These are the shape a first cut missed: "rss" is a suffix
+    # on the name, not a path segment, so /notifications_rss.xml matched nothing
+    # and every one of them fell through to be downloaded as an opaque file.
+    "https://rbi.org.in/notifications_rss.xml",
+    "https://rbi.org.in/pressreleases_rss.xml",
+    "https://rbi.org.in/Publication_rss.xml",
+    "https://rbi.org.in/AnnualReportMain_rss.xml",
+    "https://rbi.org.in/speeches_rss.xml",
+    # And the shapes it did cover.
     "https://blog.test/feed.xml",
     "https://blog.test/rss",
     "https://blog.test/feed/",
     "https://blog.test/index.atom",
     "https://blog.test/atom.xml",
+    "https://blog.test/blog_feed.xml",
 ])
 def test_a_feed_url_is_recognized(url):
     assert rss.is_feed_url(url)
@@ -121,10 +130,41 @@ def test_a_non_feed_url_is_not_mistaken_for_one(url):
 
 
 def test_the_rbi_feed_is_the_case_this_exists_for():
+    assert rss.is_feed_url("https://rbi.org.in/notifications_rss.xml")
+
+
+def test_rbis_rss_landing_page_is_not_itself_a_feed():
+    """rbi.org.in/Scripts/rss.aspx looks like a feed and is an HTML page listing
+    the real ones. Recognising the URL is right (it is worth trying); parse() is
+    what refuses the HTML, and says so rather than yielding nothing."""
     assert rss.is_feed_url("https://rbi.org.in/Scripts/rss.aspx")
+    with pytest.raises(rss.FeedError, match="HTML"):
+        rss.parse("<!DOCTYPE html PUBLIC><html><body>feeds</body></html>")
 
 
 # --------------------------------------------------------------- routing ------
+@pytest.mark.parametrize("url", [
+    "https://rbi.org.in/notifications_rss.xml",
+    "https://rbi.org.in/speeches_rss.xml",
+])
+def test_rbis_real_feeds_route_to_the_rss_fetcher(tmp_path, url):
+    """The routing that matters, against the URLs actually being catalogued.
+    They inferred Category=Website / Format=HTML from the URL, so without the
+    rss test running first they became crawler targets."""
+    from cybersec_slm.ingestion import sources as srcs
+
+    csv = tmp_path / "Sources.csv"
+    csv.write_text(
+        "Name,Sub-Domain,Description,Dataset Link,Category,Original Format,"
+        "License\n"
+        f"rbi,Compliance and Risk Management,RBI,{url},Website,HTML,"
+        "Government of India\n", encoding="utf-8")
+
+    [d] = srcs.load_descriptors(str(csv), order_by_size=False)
+
+    assert d["kind"] == "rss"
+
+
 def test_a_feed_url_is_routed_to_the_rss_kind(tmp_path):
     """The gap: an .rss/.xml URL matched no kind and fell through to `url`, which
     downloaded the feed as an opaque file and produced no records."""
