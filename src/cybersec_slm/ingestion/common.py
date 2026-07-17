@@ -99,12 +99,35 @@ def http_get(url: str, timeout: int = 180) -> httpx.Response:
     return r
 
 
+class DownloadTooLarge(RuntimeError):
+    """Raised when a stream exceeds the byte cap; the partial file is removed."""
+
+
+# The most a single source may stream to disk. --max-source-gb filters on the
+# catalog's *declared* size, which a hostile or wrong row simply lies about; this
+# counts the bytes actually arriving, which is the only number that can fill a
+# volume. Generous by default: the largest genuine sources here are a few GB.
+DEFAULT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024 * 1024      # 25 GB
+
+
+def _max_download_bytes() -> int:
+    try:
+        return int(os.environ["CYBERSEC_SLM_MAX_DOWNLOAD_BYTES"])
+    except (KeyError, TypeError, ValueError):
+        return DEFAULT_MAX_DOWNLOAD_BYTES
+
+
 @retry(**_RETRY)
 def download(url: str, dest: str) -> tuple[int, str]:
-    """Stream a screened URL to disk; return (bytes, sha256)."""
+    """Stream a screened URL to disk; return (bytes, sha256).
+
+    Aborts past the byte cap and deletes the partial file, so a source that
+    streams forever costs the run one failure rather than the whole volume.
+    """
     import hashlib
     h = hashlib.sha256()
     size = 0
+    cap = _max_download_bytes()
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
 
     def _open(u, t):
@@ -118,7 +141,18 @@ def download(url: str, dest: str) -> tuple[int, str]:
         with open(dest, "wb") as f:
             for chunk in r.iter_bytes(1 << 16):
                 size += len(chunk)
+                if size > cap:
+                    raise DownloadTooLarge(
+                        f"{url!r} exceeded the {cap / 1048576:,.0f} MB download "
+                        f"cap; aborting")
                 f.write(chunk); h.update(chunk)
+    except DownloadTooLarge:
+        # Leaving a truncated file behind would be read as a real, valid source.
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
     finally:
         if hasattr(r, "close"):
             r.close()
