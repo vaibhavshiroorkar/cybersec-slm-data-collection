@@ -8,6 +8,7 @@ real data root is not reachable from the run.
 import json
 import os
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.dashboard import control, run_test
 
 
@@ -65,9 +66,9 @@ def test_the_report_lands_under_the_real_root_not_the_scratch(tmp_path,
 
     control.start("test-run")
 
-    cfg = json.loads((tmp_path / "logs" / control.TEST_CFG_NAME)
+    cfg = json.loads((tmp_path / "logs" / PROFILE / control.TEST_CFG_NAME)
                      .read_text(encoding="utf-8"))
-    assert cfg["report"] == str(tmp_path / "logs" / control.TEST_REPORT_NAME)
+    assert cfg["report"] == str(tmp_path / "logs" / PROFILE / control.TEST_REPORT_NAME)
 
 
 def test_a_test_run_does_not_claim_to_be_resuming(tmp_path, monkeypatch):
@@ -82,7 +83,7 @@ def test_a_test_run_does_not_claim_to_be_resuming(tmp_path, monkeypatch):
 def test_seeding_writes_a_raw_corpus_the_cleaner_can_read(tmp_path):
     n = run_test._seed(str(tmp_path), "Network Security")
 
-    p = tmp_path / "data" / "raw" / "Network Security" / "testrun" / "data.jsonl"
+    p = tmp_path / "data" / PROFILE / "raw" / "Network Security" / "testrun" / "data.jsonl"
     recs = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
     assert n == len(recs) == run_test.SEED_RECORDS
     for r in recs:

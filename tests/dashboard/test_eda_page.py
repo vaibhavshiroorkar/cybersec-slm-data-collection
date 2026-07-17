@@ -12,6 +12,8 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
+
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PAGE = os.path.join(_REPO, "src", "cybersec_slm", "dashboard", "pages", "4_EDA.py")
 
@@ -32,10 +34,10 @@ def _report(subs, topic_cv=0.0):
 @pytest.fixture
 def page(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    (tmp_path / "logs" / "eda").mkdir(parents=True)
+    (tmp_path / "logs" / PROFILE / "eda").mkdir(parents=True)
 
     def _seed(report):
-        with open(tmp_path / "logs" / "eda" / "latest.json", "w",
+        with open(tmp_path / "logs" / PROFILE / "eda" / "latest.json", "w",
                   encoding="utf-8") as f:
             json.dump(report, f)
 

@@ -453,8 +453,37 @@ def _run_profile(args) -> None:
               "page, or edit keywords.yaml in that directory.")
 
 
+def _migrate_layout() -> None:
+    """Move a pre-profile ``data/``/``logs/`` under the active profile, if needed.
+
+    Best-effort and loud: if the rename fails (on Windows, a process still holding
+    a log file open), say so and carry on with whatever layout is there rather than
+    refusing to run. Nothing is copied or deleted, so a failed attempt leaves the
+    corpus exactly as it was.
+    """
+    from . import core
+    try:
+        moved = core.migrate_layout()
+    except OSError as e:
+        core.logger.warning(
+            f"could not move the corpus under its profile ({e}); it is untouched. "
+            f"Close any running pipeline and retry.")
+        return
+    if moved:
+        core.logger.info(
+            f"moved {', '.join(moved)}/ under profile {core.active_profile()!r}: "
+            f"each profile now keeps its own corpus and logs")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+
+    # Move a pre-profile corpus under its profile, once, before any stage reads a
+    # path. Here rather than at core's import because a ProcessPoolExecutor worker
+    # re-imports core, and several processes racing to rename the same tree is how
+    # you lose it. This is the single-process entry point every stage comes
+    # through, and it is a no-op once the move has happened.
+    _migrate_layout()
 
     # The crawl extractor travels by environment, not by argument: the chain from
     # here to the choice is run_ingest -> pool worker -> crawl subprocess, and the

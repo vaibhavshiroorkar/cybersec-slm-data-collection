@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import pytest
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
+
 
 @pytest.fixture(autouse=True)
 def _isolate_sourcing_logs(tmp_path, monkeypatch):
     from cybersec_slm.sourcing import run
 
-    monkeypatch.setattr(run, "LOGS", str(tmp_path / "logs"), raising=False)
+    monkeypatch.setattr(run, "LOGS", str(tmp_path / "logs" / PROFILE), raising=False)
     yield

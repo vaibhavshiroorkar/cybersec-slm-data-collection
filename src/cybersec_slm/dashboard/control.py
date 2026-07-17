@@ -233,7 +233,15 @@ def build_quick_finish_plan(overrides: dict | None = None) -> list[list[str]]:
 
 
 def _logs_dir() -> str:
-    return os.path.join(core.data_root(), "logs")
+    """This profile's logs. Resolved per call, not from core's frozen LOGS.
+
+    Everything the control plane keeps lives here (``pipeline_run.json``, the plan,
+    the eda-fix config, the test-run report), so scoping it per profile is what
+    stops one profile's run being reported as the other's: a ubi run used to make
+    the dashboard say "running" while the operator was looking at cybersec, and
+    ``start`` refused to launch profile B because profile A was live.
+    """
+    return core.logs_dir()
 
 
 def _control_file() -> str:
@@ -357,14 +365,22 @@ def status() -> dict:
     }
 
 
-def _spawn_detached(cmd: list[str], *, root: str, logs: str) -> int:
+def _spawn_detached(cmd: list[str], *, root: str, logs: str,
+                    profile: str | None = None) -> int:
     """Launch ``cmd`` detached with the dashboard's data root; return its PID.
 
     The child survives dashboard reruns and can be killed as a whole tree; its
     stdout/stderr go to ``logs/pipeline_control.out`` while the pipeline writes its
     own ``logs/pipeline.<pid>.log`` that the live monitor tails.
+
+    The profile is pinned into the child's environment, not left to it. A child
+    re-reads ``sources/active_profile`` at its own import, so switching profiles in
+    the dashboard mid-run used to silently re-point the *running* child's next
+    stage at the other corpus. Pinning it means a launch builds the profile it was
+    started for, whatever the operator does afterwards.
     """
-    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root}
+    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root,
+           "CYBERSEC_SLM_PROFILE": profile or core.active_profile(root)}
     out = open(os.path.join(logs, "pipeline_control.out"), "ab")
     kwargs: dict = {"cwd": root, "env": env, "stdout": out, "stderr": out,
                     "stdin": subprocess.DEVNULL}
@@ -522,21 +538,25 @@ def _force_rmtree(path: str) -> list[str]:
 
 
 def reset() -> dict:
-    """Delete ALL pipeline output (``data/`` and ``logs/``) under the data root.
+    """Delete **this profile's** pipeline output (its ``data/`` and ``logs/``).
 
-    Refuses while a run is active (stop it first). The ``data/`` folder is cleared
-    completely (read-only files included); ``logs/`` is cleared too, except a log
+    Scoped to the active profile. It used to delete ``<root>/data`` and
+    ``<root>/logs`` wholesale, which took every *other* profile's corpus with it:
+    resetting ubi destroyed cybersec's 1.9M records, from a button labelled as if
+    it only concerned what was on screen.
+
+    Refuses while a run is active (stop it first). The profile's ``data/`` is
+    cleared completely (read-only files included); its ``logs/`` too, except a log
     file the current process still holds open, which is reported in ``skipped``
-    rather than silently left behind. The curated catalog under ``sources/`` is
-    never touched. Returns ``{ok, removed, skipped}``.
+    rather than silently left behind. The curated catalogs under ``sources/`` are
+    never touched. Returns ``{ok, removed, skipped, profile}``.
     """
     if status()["running"]:
         return {"ok": False, "error": "stop the running pipeline before resetting"}
-    root = core.data_root()
+    profile = core.active_profile()
     removed: list[str] = []
     skipped: list[str] = []
-    for sub in ("data", "logs"):
-        path = os.path.join(root, sub)
+    for sub, path in (("data", core.data_dir()), ("logs", core.logs_dir())):
         if not os.path.isdir(path):
             continue
         skipped.extend(_force_rmtree(path))
@@ -545,4 +565,4 @@ def reset() -> dict:
             # data/ has no such handle, so it is always fully removed here.
             continue
         removed.append(sub)
-    return {"ok": True, "removed": removed, "skipped": skipped}
+    return {"ok": True, "removed": removed, "skipped": skipped, "profile": profile}

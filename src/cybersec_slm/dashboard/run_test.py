@@ -57,7 +57,8 @@ _SEED_TEXTS = (
 
 def _seed(root: str, domain: str) -> int:
     """Write a small raw corpus under ``root`` and return how many records."""
-    folder = os.path.join(root, "data", "raw", domain, "testrun")
+    from .. import core
+    folder = os.path.join(core.data_dir(root), "raw", domain, "testrun")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "data.jsonl")
     with open(path, "w", encoding="utf-8") as f:
@@ -121,7 +122,8 @@ def main(argv: list[str] | None = None) -> None:
 
     from .. import core
     root = core.data_root()
-    report_path = cfg.get("report") or os.path.join(root, "logs", "test_run.json")
+    report_path = cfg.get("report") or os.path.join(core.logs_dir(root),
+                                                     "test_run.json")
     domain = _first_subdomain()
 
     logger.info(f"test run: scratch root {root}")
@@ -138,7 +140,7 @@ def main(argv: list[str] | None = None) -> None:
         steps.append(_step("schema", lambda: _run_stage(["schema"])))
         steps.append(_step("validate", _validate))
 
-    dataset = os.path.join(root, "data", "final", "dataset.jsonl")
+    dataset = os.path.join(core.data_dir(root), "final", "dataset.jsonl")
     records = 0
     if os.path.exists(dataset):
         with open(dataset, encoding="utf-8", errors="replace") as f:

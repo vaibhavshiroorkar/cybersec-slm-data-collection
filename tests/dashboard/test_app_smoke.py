@@ -13,13 +13,15 @@ import pytest
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
+
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DASH = os.path.join(_REPO, "src", "cybersec_slm", "dashboard")
 
 
 def _seed_minimal(root: str) -> None:
     eda = os.path.join(root, "logs", "eda")
-    final = os.path.join(root, "data", "final")
+    final = os.path.join(root, "data", PROFILE, "final")
     os.makedirs(eda, exist_ok=True)
     os.makedirs(final, exist_ok=True)
     report = {"ts": "2026-07-02T10:00:00", "passed": True,
@@ -81,7 +83,13 @@ def test_overview_stage_pills_default_to_all_five_lit(tmp_path, monkeypatch):
 def test_reset_button_asks_to_confirm_before_deleting(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
-    data_dir = os.path.join(str(tmp_path), "data")
+    # This profile's corpus. Reset is scoped to it: it used to delete <root>/data
+    # wholesale, which took every other profile's corpus with it.
+    data_dir = os.path.join(str(tmp_path), "data", PROFILE)
+    other = os.path.join(str(tmp_path), "data", "some-other-profile")
+    os.makedirs(other)
+    with open(os.path.join(other, "keep.jsonl"), "w", encoding="utf-8") as f:
+        f.write('{"text": "a second profile corpus"}\n')
     at = AppTest.from_file(os.path.join(_DASH, "app.py"), default_timeout=30)
     at.run()
     reset_btn = next(b for b in at.button if b.label == "Reset")
@@ -103,6 +111,10 @@ def test_reset_button_asks_to_confirm_before_deleting(tmp_path, monkeypatch):
     yes_btn.click().run()
     assert not at.exception
     assert not os.path.isdir(data_dir)
+    # The other profile is untouched. This is the whole point of scoping Reset:
+    # resetting ubi used to destroy cybersec's corpus from a button that said
+    # nothing about it.
+    assert os.path.isfile(os.path.join(other, "keep.jsonl"))
 
 
 def test_sourcing_page_saves_domain_name_and_subdomain_code(tmp_path, monkeypatch):
@@ -130,7 +142,7 @@ def test_sourcing_page_saves_domain_name_and_subdomain_code(tmp_path, monkeypatc
 def test_live_strip_shows_progress_chart_while_running(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed_minimal(str(tmp_path))
-    logs = os.path.join(str(tmp_path), "logs")
+    logs = os.path.join(str(tmp_path), "logs", PROFILE)
     os.makedirs(logs, exist_ok=True)
     with open(os.path.join(logs, "pipeline_run.json"), "w", encoding="utf-8") as f:
         json.dump({"pid": os.getpid(), "cmd": ["x"], "stage": "all",

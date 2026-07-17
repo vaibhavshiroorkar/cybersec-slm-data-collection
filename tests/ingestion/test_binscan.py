@@ -8,6 +8,7 @@ executed either way; the gap is that nothing was ever *reported*.
 
 import os
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.ingestion import binscan
 
 
@@ -125,7 +126,7 @@ def test_scan_tree_reports_the_true_total_even_when_capped(tmp_path):
 
 # ------------------------------------------------------------- report ---------
 def test_report_records_a_source_that_ships_binaries(tmp_path, monkeypatch):
-    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs"))
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
     root = tmp_path / "z"
     _write(root, "data.csv", b"col\n1\n")
     _write(root, "bin/tool.exe", b"MZ\x90\x00" + b"\x00" * 64)
@@ -140,7 +141,7 @@ def test_report_records_a_source_that_ships_binaries(tmp_path, monkeypatch):
 
 
 def test_report_says_nothing_for_a_clean_source(tmp_path, monkeypatch):
-    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs"))
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
     root = tmp_path / "z"
     _write(root, "data.csv", b"col\n1\n")
 
@@ -150,7 +151,7 @@ def test_report_says_nothing_for_a_clean_source(tmp_path, monkeypatch):
 
 def test_report_states_the_true_total_when_the_list_is_capped(tmp_path, monkeypatch):
     """'20 of 4,312' is a very different fact from '20'."""
-    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs"))
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
     root = tmp_path / "z"
     for i in range(30):
         _write(root, f"b{i}.exe", b"MZ\x90\x00" + b"\x00" * 8)
@@ -164,7 +165,7 @@ def test_report_states_the_true_total_when_the_list_is_capped(tmp_path, monkeypa
 def test_report_never_fails_the_fetch(tmp_path, monkeypatch):
     """A source shipping a binary is worth knowing; failing to write the note is
     not worth losing the fetch over."""
-    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs"))
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
     monkeypatch.setattr(binscan, "scan_tree",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
     root = tmp_path / "z"

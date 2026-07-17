@@ -25,6 +25,28 @@ ui.inject_css()
 ui.app_header("cybersec-slm-data-collection")
 
 
+@st.cache_resource
+def _migrate_once() -> list[str]:
+    """Move a pre-profile corpus under its profile, once per dashboard process.
+
+    ``cache_resource`` so it runs on the first script execution and not on every
+    rerun: the move is two renames and idempotent, but a Streamlit page re-executes
+    top to bottom on every interaction and there is no reason to keep asking.
+    """
+    from cybersec_slm import core
+    try:
+        return core.migrate_layout()
+    except OSError as e:
+        core.logger.warning(f"could not move the corpus under its profile ({e})")
+        return []
+
+
+if _migrate_once():
+    st.info(f"Moved the existing corpus under the `{data.active_profile()}` "
+            f"profile. Each profile now keeps its own `data/` and `logs/`, so "
+            f"switching profiles shows that profile's corpus rather than this one.")
+
+
 # ---------------------------------------------------------------- live strip ---
 @st.fragment(run_every=1)
 def _live() -> None:
@@ -297,20 +319,22 @@ def _corpus_funnel() -> None:
     reflowing the rest of the page.
     """
     funnel = _data_funnel_snapshot(measure_size=False)
-    _root = data.data_root()
-    funnel["raw"]["size_mb"] = cached.raw_size_mb(_root)
+    # Keyed on the profile too, not just the root: both profiles share one root, so
+    # a root-only key served the other profile's cached counts after a switch.
+    _scope = data.scope()
+    funnel["raw"]["size_mb"] = cached.raw_size_mb(_scope)
     # Raw records are counted on disk, not read off the catalog, whose Total Lines
     # understated the live corpus by 149% and knew nothing of 242 fetched sources.
     # Same treatment as Size: too costly for a 1s tick, so it comes from the
     # long-TTL cached count.
-    funnel["raw"]["lines"] = cached.raw_records(_root)
+    funnel["raw"]["lines"] = cached.raw_records(_scope)
     # Cleaned records grow live as clean workers write; the clean report only lands
     # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
-    funnel["cleaned"]["lines"] = cached.cleaned_records(_root)
+    funnel["cleaned"]["lines"] = cached.cleaned_records(_scope)
     # Same treatment for the final dataset, which grows live as normalize appends
     # and whose manifest only lands when the pass finishes. Reading it from the
     # manifest showed 0 records beside a multi-GB Size for the whole run.
-    funnel["appended"].update(cached.final_stats(_root))
+    funnel["appended"].update(cached.final_stats(_scope))
     prog = data.ingest_progress()
     pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
     st.progress(min(pct, 1.0),
@@ -513,7 +537,7 @@ with right:
         # run (and after an interrupted one) these read zero beside a multi-GB file.
         # Unique hashes stays on the manifest, which is the only thing that counts
         # them, and so is absent until the pass completes.
-        _rel = cached.final_stats(data.data_root())
+        _rel = cached.final_stats(data.scope())
         if not _rel["lines"] and not man:
             st.caption("No dataset yet. Run the pipeline to reach the schema stage.")
         else:

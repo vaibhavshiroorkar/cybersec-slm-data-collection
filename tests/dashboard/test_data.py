@@ -6,14 +6,15 @@ import pathlib
 import sqlite3
 import time
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.dashboard import charts, data
 
 
 def _seed(root: str) -> None:
     """Write a minimal but realistic set of pipeline artifacts under `root`."""
-    logs = os.path.join(root, "logs")
+    logs = os.path.join(root, "logs", PROFILE)
     eda = os.path.join(logs, "eda")
-    final = os.path.join(root, "data", "final")
+    final = os.path.join(root, "data", PROFILE, "final")
     os.makedirs(eda, exist_ok=True)
     os.makedirs(final, exist_ok=True)
 
@@ -169,7 +170,8 @@ def test_live_and_run_status(tmp_path, monkeypatch):
 
     assert data.run_status()["state"] == "running"               # log just written
     old = time.time() - 3600
-    os.utime(os.path.join(tmp_path, "logs", "pipeline.999.log"), (old, old))
+    os.utime(os.path.join(tmp_path, "logs", PROFILE, "pipeline.999.log"),
+             (old, old))
     assert data.run_status()["state"] == "idle"
 
 
@@ -182,7 +184,7 @@ def test_checkpoint_status(tmp_path, monkeypatch):
     assert empty["exists"] is False
 
     # A ledger with N recorded sources -> exists, counted; total from the catalog.
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True, exist_ok=True)
     (logs / "completed_sources.txt").write_text("hf:a\nurl:b\npdf:c\n",
                                                 encoding="utf-8")
@@ -192,8 +194,8 @@ def test_checkpoint_status(tmp_path, monkeypatch):
 
 
 def _write_log(tmp_path, name, body):
-    logs = tmp_path / "logs"
-    logs.mkdir(exist_ok=True)
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / name).write_text(body, encoding="utf-8")
 
 
@@ -247,8 +249,8 @@ def test_run_phase_follows_pointer_not_newest_log(tmp_path, monkeypatch):
     run is actually mid-clean.
     """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     run_log = logs / "pipeline.100.log"
     run_log.write_text("x - ingest: done ok=125\n"
                        "x - clean: /data/raw -> /data/clean\n", encoding="utf-8")
@@ -349,7 +351,7 @@ def test_clean_eta_is_measured_in_bytes_not_source_count(tmp_path, monkeypatch):
     """Sources span KB to GB, so counting them projects nonsense; and only THIS
     run's work may set the rate, since the ledger spans every resume."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True)
     # 4 sources of 100 bytes each; a resume already did 2 before this run began.
     monkeypatch.setattr(data, "_raw_sizes_by_sid",
@@ -367,7 +369,7 @@ def test_clean_eta_is_measured_in_bytes_not_source_count(tmp_path, monkeypatch):
 def test_clean_eta_is_bounded_by_the_biggest_single_source(tmp_path, monkeypatch):
     """One file is cleaned by one worker, so the tail cannot be parallelised away."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True)
     # Done: 400 bytes. Remaining: one huge 1000-byte source.
     monkeypatch.setattr(data, "_raw_sizes_by_sid",
@@ -391,7 +393,7 @@ def test_clean_eta_names_the_dedup_tail_rather_than_claiming_zero(tmp_path,
     was still running.
     """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True)
     monkeypatch.setattr(data, "_raw_sizes_by_sid", lambda: {"D/s0": 100})
     (logs / "cleaned_sources.txt").write_text("D/s0\n", encoding="utf-8")
@@ -403,7 +405,7 @@ def test_clean_eta_names_the_dedup_tail_rather_than_claiming_zero(tmp_path,
 
 def test_clean_eta_has_no_rate_before_the_first_source_finishes(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    (tmp_path / "logs").mkdir(parents=True)
+    (tmp_path / "logs" / PROFILE).mkdir(parents=True)
     monkeypatch.setattr(data, "_raw_sizes_by_sid", lambda: {"D/s0": 100})
     monkeypatch.setattr(data, "_resume_skipped", lambda: 0)
     eta, basis = data.clean_eta(5.0)
@@ -419,13 +421,13 @@ def test_run_phase_falls_back_to_newest_log_without_pointer(tmp_path, monkeypatc
 
 def test_stage_states_all_done_when_artifacts_present(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     (logs / "eda").mkdir(parents=True)
     (logs / "completed_sources.txt").write_text("a\n", encoding="utf-8")
     (logs / "clean_report.csv").write_text(
         "sub_domain,source,file,in,out\nTOTAL,,1 files,10,8\n", encoding="utf-8")
     (logs / "eda" / "latest.json").write_text('{"passed": true}', encoding="utf-8")
-    final = tmp_path / "data" / "final"
+    final = tmp_path / "data" / PROFILE / "final"
     final.mkdir(parents=True)
     (final / "manifest.json").write_text('{"record_count": 8}', encoding="utf-8")
     monkeypatch.setattr(data, "_catalog_total", lambda: 5)
@@ -438,8 +440,8 @@ def test_stage_states_all_done_when_artifacts_present(tmp_path, monkeypatch):
 
 def test_stage_states_gate_failed_marks_eda(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / "pipeline.1.log").write_text(
         "x - eda: total=10\nx:1 - EDA sufficiency gate FAILED: 1 blocker\n",
         encoding="utf-8")
@@ -454,8 +456,8 @@ def test_run_status_includes_phase(tmp_path, monkeypatch):
 
 def test_run_status_control_file_is_authoritative(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     # a recent, non-empty pipeline log would otherwise read as "running"...
     (logs / "pipeline.123.log").write_text("work\n", encoding="utf-8")
     # ...but a control file whose process is dead makes state authoritatively idle
@@ -466,8 +468,8 @@ def test_run_status_control_file_is_authoritative(tmp_path, monkeypatch):
 
 def test_run_status_running_when_control_pid_alive(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / "pipeline_run.json").write_text(
         json.dumps({"pid": os.getpid(), "started_at": "x", "resume": False}),
         encoding="utf-8")   # this test process is alive
@@ -476,8 +478,8 @@ def test_run_status_running_when_control_pid_alive(tmp_path, monkeypatch):
 
 def test_run_status_ignores_empty_stub_log(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / "pipeline.777.log").write_text("", encoding="utf-8")   # empty import stub
     assert data.run_status()["state"] == "idle"                    # not "running"
 
@@ -488,8 +490,8 @@ def test_pipeline_logs_excludes_dashboard_own_log(tmp_path, monkeypatch):
     # by mtime. It must be excluded so phase/status follow the running pipeline's
     # log (a separate pid) instead of the dashboard's own chatter -> "Starting".
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     own = logs / f"pipeline.{os.getpid()}.log"
     run = logs / "pipeline.99999.log"
     run.write_text("clean stage marker\n", encoding="utf-8")
@@ -512,7 +514,7 @@ def test_raw_funnel_counts_records_on_disk_not_the_catalog(tmp_path, monkeypatch
     """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cryptography" / "src-b").mkdir(parents=True)
     (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text(
@@ -533,7 +535,7 @@ def test_raw_funnel_counts_sources_the_catalog_never_measured(tmp_path, monkeypa
     """242 of 370 fetched sources had zero catalog lines, hiding 14.4M records."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Threat Intelligence" / "uncatalogued").mkdir(parents=True)
     (raw / "Threat Intelligence" / "uncatalogued" / "d.jsonl").write_text(
         '{"a":1}\n{"a":2}\n{"a":3}\n{"a":4}\n', encoding="utf-8")
@@ -549,7 +551,7 @@ def test_raw_funnel_cheap_path_defers_record_count(tmp_path, monkeypatch):
     Overview fills Records from the cached count (as it already does for Size)."""
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text(
         '{"a":1}\n{"a":2}\n', encoding="utf-8")
@@ -570,7 +572,7 @@ def test_raw_size_measures_only_the_jsonl_corpus(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     src = raw / "Vulnerability Management" / "patrowl"
     (src / "repo" / "nested").mkdir(parents=True)
     (src / "data.jsonl").write_bytes(b"\0" * (2 * 1024 * 1024))
@@ -630,13 +632,13 @@ def test_cleaned_funnel_counts_disk_not_the_clean_report(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    clean = tmp_path / "data" / "clean" / "Dom" / "src"
+    clean = tmp_path / "data" / PROFILE / "clean" / "Dom" / "src"
     clean.mkdir(parents=True)
     (clean / "a.jsonl").write_bytes(b'{"t":1}\n{"t":2}\n{"t":3}\n')      # 3 on disk
 
     # A report claiming only 1 record out — as a resumed pass would.
-    logs = tmp_path / "logs"
-    logs.mkdir(exist_ok=True)
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / "clean_report.csv").write_text(
         "sub_domain,source,file,in,out\n"
         "Dom,src,Dom/src/a.jsonl,1,1\n"
@@ -661,7 +663,7 @@ def test_data_funnel_cheap_path_uses_catalog_size_not_disk_walk(tmp_path, monkey
     # must come from the catalog (cheap), while the default path walks disk.
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     _seed(str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cloud Security" / "src-a" / "data.jsonl").write_bytes(b"\0" * (5 * 1024 * 1024))
     monkeypatch.setattr(data, "_catalog_lines_by_folder", lambda: {
@@ -680,7 +682,7 @@ def test_data_funnel_cheap_path_uses_catalog_size_not_disk_walk(tmp_path, monkey
 
 def _seed_final(root, recs):
     """Write a data/final/dataset.jsonl with no manifest beside it."""
-    final = root / "data" / "final"
+    final = root / "data" / PROFILE / "final"
     final.mkdir(parents=True, exist_ok=True)
     (final / "dataset.jsonl").write_text(
         "".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
@@ -779,7 +781,7 @@ def test_ingest_source_rows_keeps_file_order_and_link_less_rows(monkeypatch):
 
 def test_clean_source_rows_stable_sorted_with_folder_ids(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     for dom, src in (("Cryptography", "zeta"), ("Cryptography", "alpha"),
                      ("Cloud Security", "beta")):
         (raw / dom / src).mkdir(parents=True)
@@ -795,13 +797,13 @@ def test_clean_source_rows_stable_sorted_with_folder_ids(tmp_path, monkeypatch):
 
 def test_ingest_progress_uses_completed_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cloud Security" / "src-a").mkdir(parents=True)
     (raw / "Cloud Security" / "src-a" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     (raw / "Cryptography" / "src-b").mkdir(parents=True)
     (raw / "Cryptography" / "src-b" / "data.jsonl").write_text("{}\n", encoding="utf-8")
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     # Ledger records more checked sources than produced folders (skips/failures).
     (logs / "completed_sources.txt").write_text(
         "hf:a\nurl:b\nurl:c\nkaggle:d\n", encoding="utf-8")
@@ -813,7 +815,7 @@ def test_ingest_progress_uses_completed_ledger(tmp_path, monkeypatch):
 
 def test_ingest_progress_falls_back_to_disk(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cryptography" / "src-b").mkdir(parents=True)   # no ledger present
     (raw / "Cryptography" / "src-b" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     monkeypatch.setattr(data, "_catalog_total", lambda: 10)
@@ -826,7 +828,7 @@ def test_ingest_progress_excludes_empty_folders(tmp_path, monkeypatch):
     # A folder created during ingest that produced no records (no .jsonl) is not
     # counted as "produced data": with_data reflects data-bearing folders only.
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / PROFILE / "raw"
     (raw / "Cloud Security" / "has-data").mkdir(parents=True)
     (raw / "Cloud Security" / "has-data" / "data.jsonl").write_text("{}\n", encoding="utf-8")
     (raw / "Cloud Security" / "empty").mkdir(parents=True)   # fetched, produced nothing
@@ -838,8 +840,8 @@ def test_ingest_progress_excludes_empty_folders(tmp_path, monkeypatch):
 
 def test_ingest_outcome_parses_log_and_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(logs / "ingest_log.sqlite"))
     con.execute("CREATE TABLE ingest (name TEXT, status TEXT)")
     con.execute("INSERT INTO ingest VALUES (?, ?)", ("nsa-cnsa-2-0", "failed: crawl rc=0"))
@@ -890,7 +892,7 @@ def test_sources_without_data_reconciles_catalog_to_disk(tmp_path, monkeypatch):
                         lambda d: (False, "non-commercial (nc)")
                         if (d.get("ref") or "").startswith("ownerB") else (True, "ok"))
 
-    raw = tmp_path / "data" / "raw" / "Cloud Security" / "ownerA"
+    raw = tmp_path / "data" / PROFILE / "raw" / "Cloud Security" / "ownerA"
     raw.mkdir(parents=True)
     (raw / "f.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
 
@@ -920,8 +922,8 @@ def test_fmt_hms():
 def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     monkeypatch.setattr(data, "_catalog_total", lambda: 4)     # 4 sources total
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / "completed_sources.txt").write_text("a\nb\n", encoding="utf-8")  # 2 done
     start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 100))
     (logs / "pipeline_run.json").write_text(
@@ -941,8 +943,8 @@ def test_run_timing_ingest_linear_eta(tmp_path, monkeypatch):
 
 def test_run_timing_finalizing_during_tail(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 50))
     (logs / "pipeline.6.log").write_text(                       # no control file
         f"{start}.0 | INFO | x:1 - final global dedup over /clean\n", encoding="utf-8")
@@ -953,7 +955,7 @@ def test_run_timing_finalizing_during_tail(tmp_path, monkeypatch):
 
 def test_loss_breakdown(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     (logs / "eda").mkdir(parents=True)
     (logs / "clean_report.csv").write_text(
         "sub_domain,source,file,in,excluded_no_text,struct_dropped,"
@@ -1032,7 +1034,7 @@ def _seed_ingest_table(tmp_path, monkeypatch):
     monkeypatch.setattr(data, "_catalog_path", lambda: str(catalog))
     monkeypatch.setattr(data, "_repo_root", lambda: str(tmp_path))
 
-    raw = tmp_path / "data" / "raw" / "Cloud Security" / "ownerA"
+    raw = tmp_path / "data" / PROFILE / "raw" / "Cloud Security" / "ownerA"
     raw.mkdir(parents=True)
     (raw / "f.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
 
@@ -1109,7 +1111,7 @@ _CLEAN_REPORT = (
 
 def test_clean_stats_reads_every_counter(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True)
     (logs / "clean_report.csv").write_text(_CLEAN_REPORT, encoding="utf-8")
 
@@ -1138,7 +1140,7 @@ def test_clean_stats_empty_without_a_report(tmp_path, monkeypatch):
 
 def test_clean_table_aggregates_each_source_over_its_files(tmp_path, monkeypatch):
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True)
     (logs / "clean_report.csv").write_text(_CLEAN_REPORT, encoding="utf-8")
 

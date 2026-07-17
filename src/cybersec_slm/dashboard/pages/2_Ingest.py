@@ -19,10 +19,10 @@ st.caption("Sources fetched to `data/raw/`, one row per source. Run this stage "
            "from the Overview page; inspect what each source produced here.")
 
 # ------------------------------------------------------------------ stats ------
-raw = cached.data_funnel(data.data_root())["raw"]
+raw = cached.data_funnel(data.scope())["raw"]
 prog = data.ingest_progress()
-raw_rows = cached.raw_table(data.data_root())
-rows = cached.ingest_table(data.data_root())
+raw_rows = cached.raw_table(data.scope())
+rows = cached.ingest_table(data.scope())
 raw_size = sum(r["size_mb"] for r in raw_rows)
 with ui.section("Ingested (raw)",
                 "Records are raw catalog rows (large tabular datasets dominate). "

@@ -3,9 +3,16 @@
 
 Walking ``data/raw/`` (100+ GB, hundreds of thousands of files) takes over a
 minute, so the results are cached here with ``st.cache_data`` and shared across
-every page and rerun. Keyed on the data root so a changed root recomputes. This
-module imports Streamlit at the top (unlike :mod:`data`, which stays headless),
-so only pages import it.
+every page and rerun.
+
+Keyed on :func:`data.scope`, which is the data root *and* the active profile.
+Keying on the root alone made the cache a second way to show the wrong corpus:
+both profiles live under one root, so switching to ubi re-read nothing and served
+cybersec's cached counts under ubi's name. Every ``scope`` parameter below is a
+cache key and nothing else; the paths are resolved live from the active profile.
+
+This module imports Streamlit at the top (unlike :mod:`data`, which stays
+headless), so only pages import it.
 """
 
 from __future__ import annotations
@@ -23,18 +30,18 @@ _RAW_TTL_S = 3600
 
 
 @st.cache_data(ttl=_RAW_TTL_S, show_spinner="Measuring data/raw on disk (one-time)...")
-def raw_table(root: str) -> list[dict]:
+def raw_table(scope: str) -> list[dict]:
     """Cached per-source raw folder table (see :func:`data.raw_table`)."""
     return data.raw_table()
 
 
-def raw_size_mb(root: str) -> float:
+def raw_size_mb(scope: str) -> float:
     """Total on-disk size of ``data/raw/`` in MB, from the cached folder walk."""
-    return sum(r["size_mb"] for r in raw_table(root))
+    return sum(r["size_mb"] for r in raw_table(scope))
 
 
 @st.cache_data(ttl=_RAW_TTL_S, show_spinner="Counting data/raw records (one-time)...")
-def raw_records(root: str) -> int:
+def raw_records(scope: str) -> int:
     """Records physically under ``data/raw/`` (the funnel's Raw "Records").
 
     Counted rather than read off the catalog: the catalog's ``Total Lines``
@@ -45,7 +52,7 @@ def raw_records(root: str) -> int:
     per-file counts are memoized by (mtime, size), so a re-count after a run only
     re-reads the files that actually changed.
     """
-    return data._count_jsonl_records(os.path.join(root, "data", "raw"))
+    return data._count_jsonl_records(data._raw())
 
 
 # The corpus funnel scans data/ (records + sizes) on every full rerun, which made
@@ -55,20 +62,20 @@ _STATS_TTL_S = 90
 
 
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
-def funnel(root: str) -> dict:
+def funnel(scope: str) -> dict:
     """Cached corpus-funnel snapshot: ``{funnel, progress}`` (see :mod:`data`).
 
     Raw size and records both come from the long-TTL scans rather than this
     snapshot's own walk, so the expensive measurements are shared and paid once.
     """
     f = data.data_funnel()
-    f["raw"]["size_mb"] = raw_size_mb(root)
-    f["raw"]["lines"] = raw_records(root)
+    f["raw"]["size_mb"] = raw_size_mb(scope)
+    f["raw"]["lines"] = raw_records(scope)
     return {"funnel": f, "progress": data.ingest_progress()}
 
 
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
-def data_funnel(root: str) -> dict:
+def data_funnel(scope: str) -> dict:
     """Cached wrapper around :func:`data.data_funnel` (Ingest/Clean/Schema pages)."""
     return data.data_funnel()
 
@@ -81,14 +88,14 @@ _CLEAN_RECORDS_TTL_S = 20
 
 
 @st.cache_data(ttl=_CLEAN_RECORDS_TTL_S, show_spinner=False)
-def cleaned_records(root: str) -> int:
+def cleaned_records(scope: str) -> int:
     """Records currently under ``data/clean`` (cheap short-TTL live count)."""
-    return data._count_jsonl_records(os.path.join(root, "data", "clean"))
+    return data._count_jsonl_records(data._clean())
 
 
 @st.cache_data(ttl=_CLEAN_RECORDS_TTL_S,
                show_spinner="Counting data/final records (one-time)...")
-def final_stats(root: str) -> dict:
+def final_stats(scope: str) -> dict:
     """Records / sources / tokens / size of ``data/final/dataset.jsonl``.
 
     Shares the cleaned count's short TTL for the same reason: the final dataset
@@ -101,13 +108,13 @@ def final_stats(root: str) -> dict:
     Only the very first scan reads the lot (about 17s at 5 GB), which is why this
     one shows a spinner while the short-TTL refreshes stay silent.
     """
-    fs = _final_stats.scan(os.path.join(root, "data", "final", "dataset.jsonl"))
+    fs = _final_stats.scan(os.path.join(data._final(), "dataset.jsonl"))
     return {"sources": fs.sources, "lines": fs.records, "tokens": fs.tokens,
             "size_mb": fs.size_mb}
 
 
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
-def cleaned_table(root: str) -> list[dict]:
+def cleaned_table(scope: str) -> list[dict]:
     """Cached per-source cleaned-folder table (:func:`data.cleaned_table`).
 
     Walks every ``data/clean/<domain>/<source>/`` folder and opens every JSONL
@@ -118,7 +125,7 @@ def cleaned_table(root: str) -> list[dict]:
 
 
 @st.cache_data(ttl=_STATS_TTL_S, show_spinner=False)
-def ingest_table(root: str) -> list[dict]:
+def ingest_table(scope: str) -> list[dict]:
     """Cached full per-source ingest table (:func:`data.ingest_table`).
 
     Parses the catalog into descriptors and reconciles each against ``data/raw/``,
@@ -126,7 +133,7 @@ def ingest_table(root: str) -> list[dict]:
     on-disk byte figures come from the already-cached :func:`raw_table` walk, so
     this adds no second scan of the raw tree.
     """
-    return data.ingest_table(raw_rows=raw_table(root))
+    return data.ingest_table(raw_rows=raw_table(scope))
 
 
 def clear_stats() -> None:

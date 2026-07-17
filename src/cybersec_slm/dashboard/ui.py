@@ -198,11 +198,19 @@ def profile_switcher() -> str:
             key="profile_pick", disabled=running,
             label_visibility="collapsed",
             help="Which corpus every stage works on. Switching re-points the "
-                 "taxonomy, the source catalog, and the saved settings.")
+                 "taxonomy, the source catalog, the saved settings, and this "
+                 "profile's own data/ and logs/.")
         if running:
             st.caption("Locked while a run is in flight.")
         elif picked != active:
             profiles.use(picked)
+            # Drop every cached scan. They are keyed on data.scope(), which
+            # includes the profile, so the old values could not be *served* after
+            # a switch, but they would sit in memory holding the other corpus's
+            # tables until their TTL expired. Clearing makes the switch honest and
+            # immediate rather than eventually correct.
+            from . import cached
+            cached.clear_stats()
             st.rerun()
 
         info = profiles.info(active)

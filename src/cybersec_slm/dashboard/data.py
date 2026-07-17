@@ -43,20 +43,38 @@ FILTER_FIELDS = {
 
 
 # --------------------------------------------------------------- path helpers --
+# Every path below resolves the active profile on each call, and none of them reads
+# core's DATA_DIR/LOGS constants. That is the whole point: those freeze at import,
+# and the dashboard is one long-lived process that has to notice a profile switch.
+# Reading them made switching to ubi keep showing cybersec's corpus, EDA report and
+# manifest, because the paths had been decided before the switch happened.
 def _root() -> str:
     return core.data_root()
 
 
+def _profile() -> str:
+    return core.active_profile()
+
+
+def _data() -> str:
+    """This profile's ``data/`` (``<root>/data/<profile>``)."""
+    return core.data_dir()
+
+
 def _logs() -> str:
-    return os.path.join(_root(), "logs")
+    return core.logs_dir()
+
+
+def _raw() -> str:
+    return os.path.join(_data(), "raw")
 
 
 def _final() -> str:
-    return os.path.join(_root(), "data", "final")
+    return os.path.join(_data(), "final")
 
 
 def _clean() -> str:
-    return os.path.join(_root(), "data", "clean")
+    return os.path.join(_data(), "clean")
 
 
 def _eda_dir() -> str:
@@ -72,6 +90,22 @@ def _repo_root() -> str:
 def data_root() -> str:
     """The resolved data root the dashboard is reading from (shown in the UI)."""
     return _root()
+
+
+def active_profile() -> str:
+    """The profile the dashboard is showing (named in the UI)."""
+    return _profile()
+
+
+def scope() -> str:
+    """What the cached scans are keyed on: the data root *and* the profile.
+
+    Both profiles live under one root, so keying a cache on the root alone made
+    the cache itself a second way to show the wrong corpus: switching to ubi
+    re-read nothing and served cybersec's cached record counts, sizes and tables
+    under ubi's name. The value is opaque; only its identity matters.
+    """
+    return f"{_root()}|{_profile()}"
 
 
 # --------------------------------------------------------------- small readers -
@@ -394,7 +428,7 @@ def blank_license_links() -> list[str]:
 
 def raw_subdomains() -> list[str]:
     """Sorted Sub-Domains that have fetched data under ``data/raw/`` (for clean)."""
-    raw = os.path.join(_root(), "data", "raw")
+    raw = _raw()
     if not os.path.isdir(raw):
         return []
     try:
@@ -445,7 +479,7 @@ def clean_source_rows() -> list[dict]:
     offers the sources that have data to clean (matching the funnel's raw count) and
     skips folders that were created during ingest but produced no records.
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.isdir(raw_root):
         return []
     rows: list[dict] = []
@@ -518,7 +552,7 @@ def ingest_progress() -> dict:
     correctly: nearly every source was tried; not all yielded a downloadable
     corpus. Falls back to the on-disk folder count when the ledger is absent.
     """
-    with_data = _count_source_dirs(os.path.join(_root(), "data", "raw"),
+    with_data = _count_source_dirs(_raw(),
                                    require_data=True)
     checked = _completed_count() or with_data
     total = _catalog_total() or 0
@@ -564,7 +598,7 @@ def raw_table() -> list[dict]:
     Record counts are omitted because counting them means reading every JSONL
     line (minutes).
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.exists(raw_root):
         return []
     rows: list[dict] = []
@@ -772,7 +806,7 @@ def ingest_table(raw_rows: list[dict] | None = None) -> list[dict]:
     except Exception:
         return []
 
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     disk = {(r["sub-domain"], r["source"]): r
             for r in (raw_table() if raw_rows is None else raw_rows)}
     meta = _catalog_meta_by_folder()
@@ -839,7 +873,7 @@ def cleaned_table() -> list[dict]:
     one row per ``<sub-domain>/<source>`` folder with its JSONL record count and
     size on disk. Empty when nothing has been cleaned yet.
     """
-    clean_root = os.path.join(_root(), "data", "clean")
+    clean_root = _clean()
     if not os.path.exists(clean_root):
         return []
     out: list[dict] = []
@@ -1026,7 +1060,7 @@ def stage_progress_sample() -> dict | None:
     if key == "clean":
         return {"stage": key, "label": "Clean", "unit": "MB",
                 "what": "cleaned output on disk",
-                "value": _dir_size_mb(os.path.join(_root(), "data", "clean"))}
+                "value": _dir_size_mb(_clean())}
     if key == "schema":
         path = os.path.join(_final(), "dataset.jsonl")
         size = os.path.getsize(path) / (1024 * 1024) if os.path.exists(path) else 0.0
@@ -1121,7 +1155,7 @@ def _raw_sizes_by_sid() -> dict[str, int]:
     now = time.monotonic()
     if _raw_sizes_cache is not None and now - _raw_sizes_cache[0] < _RAW_SIZES_TTL_S:
         return _raw_sizes_cache[1]
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     sizes: dict[str, int] = {}
     if os.path.isdir(raw_root):
         try:
@@ -1566,7 +1600,7 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
     0.0 and ``lines`` = 0 so the caller can render live *source* counts cheaply and
     fill both from the cached measurements.
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.isdir(raw_root):
         return {"sources": 0, "lines": 0, "size_mb": 0.0}
 
@@ -1636,7 +1670,7 @@ def data_funnel(measure_size: bool = True) -> dict:
     # true across resumes and dedup. The per-record scan is memoized per file
     # (see _count_file_records), so a refresh only re-reads what changed; the cheap
     # live path still skips it and the Overview fills it from a short-TTL cache.
-    clean_root = os.path.join(_root(), "data", "clean")
+    clean_root = _clean()
     cleaned_size_mb = _dir_size_mb(clean_root)
     cleaned_sources = _count_source_dirs(clean_root)
     cleaned_lines = _count_jsonl_records(clean_root) if measure_size else 0

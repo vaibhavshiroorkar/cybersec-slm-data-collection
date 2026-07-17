@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.dashboard import run_fix
 
 
@@ -211,7 +212,7 @@ def test_starting_a_fix_run_spawns_the_loop_with_its_config(tmp_path, monkeypatc
     out = control.start("eda-fix", settings={"fix_rounds": 3, "workers": 4})
 
     assert out["ok"] and out["pid"] == 4321
-    cfg = json.loads((tmp_path / "logs" / control.FIX_NAME).read_text(encoding="utf-8"))
+    cfg = json.loads((tmp_path / "logs" / PROFILE / control.FIX_NAME).read_text(encoding="utf-8"))
     assert cfg["rounds"] == 3
     assert cfg["settings"] == {"workers": 4}      # loop knobs are not stage flags
 
