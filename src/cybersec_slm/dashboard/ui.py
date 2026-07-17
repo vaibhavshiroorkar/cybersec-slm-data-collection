@@ -75,6 +75,21 @@ def inject_css() -> None:
             letter-spacing: 0.05em; font-size: 0.72rem; opacity: 0.72; }
 
           div[data-testid="stCode"] { max-height: 100%; }
+
+          /* Drag a table taller from its bottom edge. Streamlit fixes a
+             dataframe's height, so a 300px table of 400 rows can only be
+             scrolled, however much screen is going spare. The browser's own
+             resize handle costs no JS and no rerun: `resize` needs a non-visible
+             overflow to take effect, and min-height keeps a drag from collapsing
+             the table to nothing. Vertical only, because the width is the
+             column's job (drag its edge) and a table wider than its card would
+             sit outside the layout. */
+          div[data-testid="stDataFrame"] {
+            resize: vertical; overflow: auto; min-height: 6rem; }
+          /* The handle itself: Streamlit's frame paints over the corner, so give
+             it a visible grip rather than an invisible hot zone nobody finds. */
+          div[data-testid="stDataFrame"]::-webkit-resizer {
+            background: rgba(128,128,128,0.35); border-radius: 0.15rem; }
         </style>
         """,
         unsafe_allow_html=True,
