@@ -28,6 +28,7 @@ from . import settings_store
 
 CONTROL_NAME = "pipeline_run.json"
 PLAN_NAME = "pipeline_plan.json"
+FIX_NAME = "eda_fix.json"
 
 # Which advanced-settings keys each stage accepts. The dashboard offers only a
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
@@ -240,6 +241,25 @@ def _plan_file() -> str:
     return os.path.join(_logs_dir(), PLAN_NAME)
 
 
+def _fix_file() -> str:
+    return os.path.join(_logs_dir(), FIX_NAME)
+
+
+def build_fix_config(settings: dict | None = None) -> dict:
+    """The config an ``eda-fix`` run is handed.
+
+    ``fix_rounds`` and ``fix_step`` steer the loop itself rather than any one
+    stage, so they are lifted out here; everything left over is the per-stage
+    override layer, exactly as for a full run. Pure and side-effect-free.
+    """
+    from . import rebalance  # local: rebalance imports this module
+
+    over = dict(settings or {})
+    rounds = over.pop("fix_rounds", None) or rebalance.DEFAULT_ROUNDS
+    step = over.pop("fix_step", None) or rebalance.DEFAULT_ROW_STEP
+    return {"rounds": int(rounds), "step": int(step), "settings": over}
+
+
 def _read_control() -> dict | None:
     try:
         with open(_control_file(), encoding="utf-8") as f:
@@ -355,6 +375,13 @@ def start(stage: str = "all", *, resume: bool = False,
             json.dump(plan, f)
         cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
         resumed = any("--resume" in argv for argv in plan)
+    elif stage == "eda-fix":
+        # The looping orchestrator: it decides each round's stages from the gate's
+        # own report, so it takes a config rather than a fixed plan.
+        with open(_fix_file(), "w", encoding="utf-8") as f:
+            json.dump(build_fix_config(settings), f)
+        cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_fix", _fix_file()]
+        resumed = True          # its ingest and clean rounds always resume
     else:
         cmd = build_command(stage, resume=resume, settings=settings)
         resumed = "--resume" in cmd
