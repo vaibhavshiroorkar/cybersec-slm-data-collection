@@ -29,9 +29,10 @@ or quarantined instead of slipping downstream unnoticed.
 
 A few ideas hold it together:
 
-- **Two gates before a fetch.** A source is pulled only if it's marked `approved` in
-  `sources/allowlist.yaml` — so a swapped-out or compromised upstream can't sneak into
-  the corpus under a trusted name — *and* its license clearly allows commercial use.
+- **Two gates before a fetch.** Every URL is screened before it is requested
+  (`ingestion/urlscreen.py`: no non-HTTP schemes, no embedded credentials, no host
+  resolving to a private or cloud-metadata address, re-checked across redirects),
+  *and* a source is pulled only if its license clearly allows commercial use.
   Anything else is skipped and logged.
 - **Nothing is thrown away quietly.** Removed records go to `data/dropped/` with a
   reason, and records that need a human eye go to `data/flagged/`. Everything stays
@@ -77,13 +78,13 @@ src/cybersec_slm/
   core.py        shared utilities: logging, data paths, JSONL + hashing
   cli.py         the single entry point (source / run / clean / eda / normalize / flow / dashboard / all)
   sourcing/      SearXNG source discovery (editable keyword catalog) → Sources.csv
-  ingestion/     fetch, scrape, crawl, allowlist + license gate, parallel worker
+  ingestion/     fetch, scrape, crawl, URL screen + license gate, parallel worker
   cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
   eda/           metrics + the sufficiency gate
   normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
   orchestration/ Prefect build-corpus flow
   dashboard/     Streamlit control center: run stages, monitor live, explore data, Q&A agent
-sources/         Sources.csv (the curated catalog) + allowlist.yaml + the research behind them
+sources/         profiles/<name>/: Sources.csv (the catalog), keywords.yaml, Blacklist.csv
 tests/           pytest suite covering every stage
 docs/            architecture, commands, schema, deployment, and security notes
 infra/           Terraform skeleton (ECR / ECS / S3 / IAM / Secrets Manager)
@@ -114,7 +115,7 @@ lives in [security-requirements.md](docs/security-requirements.md).
 | [operations/deploy.md](docs/operations/deploy.md) | AWS deployment (Prefect Cloud + ECS Fargate, ECR, S3) |
 | [operations/dvc.md](docs/operations/dvc.md) | Versioned corpus releases with DVC + S3 |
 | [pii_limitations.md](docs/pii_limitations.md) | What the automated PII pass does and does not catch |
-| [risk_register.md](docs/risk_register.md) | Operational risks and mitigations |
+| [security-requirements.md](docs/security-requirements.md) | Trust model, per-stage threats, and the prioritized checklist |
 | `docs/sources/source_*.md` | How sources were researched, evaluated, and accepted |
 | [dashboard/README.md](src/cybersec_slm/dashboard/README.md) | The Streamlit dashboard: pages, what each one shows, how it reads data |
 
@@ -122,8 +123,8 @@ lives in [security-requirements.md](docs/security-requirements.md).
 
 **v1 — complete.** Week 4 (orchestration and deployment) is done, and with it the whole
 v1 pipeline. All five stages are built, wired end to end, and covered by the test suite,
-and the operational layer around them is in place: ingestion sits behind two gates (the
-source allowlist and a default-deny commercial-license gate), releases are
+and the operational layer around them is in place: ingestion sits behind two gates (a
+URL screen and a default-deny commercial-license gate), releases are
 content-hashed into a provenance manifest and can be versioned and shipped through
 Prefect + DVC on AWS, and a Streamlit dashboard drives the pipeline from the browser
 with per-stage run controls, live monitoring, a dataset explorer, and a

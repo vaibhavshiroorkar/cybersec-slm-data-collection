@@ -115,7 +115,7 @@ content reaching later stages; credential leakage.
 | The web crawler MUST obey robots.txt, stay on the same host, and rate-limit | MUST | [present] `crawl_runner.py`: `ROBOTSTXT_OBEY=True`, `allowed_domains`, `allow_prefix`, `CLOSESPIDER_PAGECOUNT`/`TIMEOUT`, `DOWNLOAD_DELAY`, `AUTOTHROTTLE_ENABLED`. |
 | The crawler subprocess MUST be launched without a shell and with a bounded timeout | MUST | [present] `scrape_html.crawl` uses a list-form `subprocess` call with a timeout; no `shell=True`. |
 | Every produced/skipped file MUST be recorded with provenance (source, url, license, sha256) for later surgical removal | MUST | [present] `common.IngestLog` + `export_ledger` -> `logs/provenance/ledger.csv`. |
-| Ingested content MUST be treated as untrusted downstream (no execution, no `eval`) | MUST | [present] readers parse data as data (`pandas`/`polars`/`json_repair`); no code paths execute fetched content. |
+| Ingested content MUST be treated as untrusted downstream (no execution, no `eval`) | MUST | [partial] readers parse data as data (`pandas`/`polars`/`json_repair`) and no reader executes fetched content. But the **crawler runs Playwright Chromium** (`scrape_html.py`, `Dockerfile`), which executes remote JavaScript by design: that is the pipeline's one live code-execution surface, and this row used to deny it existed. Binaries inside fetched archives are never executed, and since `binscan` they are at least reported (`logs/binary_scan.jsonl`) rather than deleted unseen. |
 | Downloaded artifacts SHOULD be integrity-pinned to an expected hash where the upstream publishes one | SHOULD | [missing] hashes are recorded after download (provenance), not verified against a known-good value (trust-on-first-use). |
 
 **Best measures (in priority order):**
@@ -150,7 +150,7 @@ online translator; resource exhaustion on pathological inputs.
 |---|---|---|
 | PII MUST be redacted with a documented, reviewable pass | MUST | [present] `cleaning/pii.py` (Presidio + spaCy, regex fallback). |
 | PII redaction limits MUST be documented and manually reviewed each release | MUST | [present] [pii_limitations.md](pii_limitations.md) + `tools/pii_sample_review.py`. See F8. |
-| Security hazards (embedded scripts, JS URIs, base64 blobs, shell-injection patterns, suspicious URLs) MUST be flagged, not silently kept | MUST | [present] `ingestion/hazard_scan.py`; flags to `data/flagged/` with `_stage=hazard`, never auto-drops (a security corpus legitimately contains payloads). |
+| Security hazards (embedded scripts, JS URIs, base64 blobs, shell-injection patterns, suspicious URLs) MUST be flagged, not silently kept | MUST | [present] `ingestion/hazard_scan.py`, which runs in **Stage 1 ingestion** (`light_eda.assess_source`), not here. Findings are counted by type, with their severity, into the ingest report's `flags.security_hazards`; nothing is dropped (a security corpus legitimately contains payloads) and nothing is quarantined. This row previously claimed hazards were diverted to `data/flagged/` with `_stage=hazard`: no code ever did that, and `data/flagged/` is written only by the cleaning stage's anomaly path. |
 | The dedup checkpoint MUST NOT be an executable/deserializable format | MUST | [present] `cleaning/dedup.py` uses JSON checkpoints and explicitly rejects pickle ("deserializing an unvetted pickle is a code-execution risk"). |
 | Non-English translation egress MUST be opt-outable, since it sends record text to an online service | SHOULD | [present] `CYBERSEC_SLM_TRANSLATE=off` skips online translation and drops non-English instead; `--drop-non-english` on ingest/clean. |
 | The PII redactor SHOULD gain custom recognizers for the recurring security-corpus categories it misses (internal hostnames, private IPs, service accounts, tokens, MAC addresses) | SHOULD | [partial] boundary documented; custom recognizers are the follow-up called for in `pii_limitations.md`. |
@@ -348,14 +348,17 @@ and prune `SECRET_KEYS` so it matches the current credential set.
 
 Apply top-down; the first four close the highest-severity gaps.
 
-- [ ] **F1** Restore the ingestion allowlist gate (or correct the docs that claim it exists).
+- [x] **F1** Closed, but not by restoring the allowlist. `3aa6f20` removed it deliberately (the catalog is the source list; suitability is decided by code, not a hand-maintained approve list) and that reasoning stands. The risk it named is real because discovery is automated, so the replacement is a rule rather than a list: `ingestion/urlscreen.py` screens every fetch (see F4). Docs corrected.
 - [ ] **F2** Enforce localhost-only for the dashboard/control plane; require an auth proxy for any remote access.
-- [ ] **F3** Add a streamed download byte cap and a zip-bomb guard (uncompressed size + entry count) in `ingestion/`.
-- [ ] **F4** Add an SSRF host/scheme screen to `common.download`/`http_get`, re-checked across redirects; screen discovered URLs in sourcing.
+- [x] **F3** `common.download` caps the bytes actually arriving and deletes the partial file; `ingestion/archive.safe_extract` checks uncompressed total, entry count and compression ratio from the central directory *before* writing a byte, and refuses traversal entries. Both zip sites use it.
+- [x] **F4** `ingestion/urlscreen.py`, wired into both `common.http_get` and `common.download`. Refuses non-HTTP schemes, embedded credentials, and any host *resolving* to a private/loopback/link-local/reserved address. Redirects are followed by hand so every hop is re-screened; `follow_redirects=True` is what made this reachable.
 - [ ] **F5** Flag corpus-to-NIM egress to the operator; consider a local model or output redaction for sensitive corpora.
 - [ ] **F6** Sanitize Sub-Domain names used as path segments and argv; validate the stage name against `_STAGE_FLAGS`.
-- [ ] **F7** Fix documentation drift: update `architecture.md` (SearXNG, allowlist status) and the dead `risk_register.md` link in `README.md`.
+- [x] **F7** Corrected here and in `architecture.md`; the dead `risk_register.md` link is gone from `README.md`. Two rows in this document were themselves wrong and are fixed: the hazard scanner never quarantined anything, and the crawler does execute remote JavaScript.
 - [ ] **F8** Keep the PII manual sample review as a release gate; add custom recognizers for the categories in `pii_limitations.md`.
+- [x] Canary tokens (`cleaning/canary.py`): opt-in, planted as their own labelled records (never spliced into real ones), recorded in `data/final/canaries.json`, and `verify` re-checks they survived the pipeline. This is the only control that says anything about the corpus *after* it leaves.
+- [x] Binaries inside fetched archives are reported (`ingestion/binscan.py` -> `logs/binary_scan.jsonl`) instead of being dropped with no log line and then deleted. Magic bytes, not extensions.
+- [x] The licence kill switch fails closed: it used to disable the gate for every source on any unrecognised value (`=2`, `=yess`, empty).
 - [ ] Record effective EDA thresholds (incl. env overrides) into each run artifact.
 - [ ] Integrity-pin downloads to a known hash where the upstream publishes one.
 - [ ] Prune `orchestration/flows.SECRET_KEYS` to the current credential set.
