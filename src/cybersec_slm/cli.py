@@ -277,6 +277,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="SearXNG base URL (env: SEARXNG_URL; default http://localhost:8080)")
     d.add_argument("--language", default="en",
                    help="SearXNG search language (default: en)")
+    d.add_argument("--countries", nargs="*", default=None,
+                   help="filter sources by these countries (injected into query)")
+    d.add_argument("--fields", nargs="*", default=None,
+                   help="filter sources by these fields (injected into query)")
     d.add_argument("--no-enrich", action="store_true",
                    help="skip fetching per-source metadata (size, license, last "
                         "updated, author, popularity, tags) from the source host; "
@@ -629,7 +633,8 @@ def main(argv: list[str] | None = None) -> None:
                 site_scope=not args.no_site_scope,
                 quality_filter=not args.no_quality_filter,
                 workers=args.workers or 12, enrich=not args.no_enrich,
-                engines=args.engines, target_per_domain=args.target_per_domain)
+                engines=args.engines, target_per_domain=args.target_per_domain,
+                countries=args.countries, fields=args.fields)
         except SearchError as e:
             raise SystemExit(f"source: discovery could not run: {e}") from None
         print(f"source: {summary['found']} hits, {summary['new']} new, "

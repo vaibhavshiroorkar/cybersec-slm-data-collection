@@ -44,7 +44,7 @@ _STAGE_FLAGS: dict[str, set[str]] = {
                "max_minutes", "workers", "time_range", "no_site_scope",
                "no_quality_filter", "dry_run", "searxng_url", "language",
                "no_enrich", "backfill", "backfill_all", "no_blacklist", "limit",
-               "engines", "target_per_domain"},
+               "engines", "target_per_domain", "countries", "fields"},
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
                "max_source_gb", "no_crawler", "domains", "sources_only",
                "no_hazard_scan", "extractor"},
@@ -116,6 +116,8 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("domains", "--domains", "list"),
     ("sources_only", "--sources-only", "list"),
     ("allowed_langs", "--allowed-langs", "list"),
+    ("countries", "--countries", "list"),
+    ("fields", "--fields", "list"),
 ]
 
 
