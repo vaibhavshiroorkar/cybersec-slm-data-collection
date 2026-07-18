@@ -26,6 +26,12 @@ DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1"
 # A model that stalls must surface as an error, never hang a run: the SDK's own
 # default is 600s.
 DEFAULT_TIMEOUT = 60.0
+# How many times the SDK retries a 429 (or 5xx) with exponential backoff before
+# giving up. NIM's free tier throttles a burst -- judging a 500-row catalog hit
+# the limit and 338 rows came back as errors -- and the SDK honours the response's
+# Retry-After, so a handful of retries turns "throttled, gave up" into "waited,
+# succeeded". Env-overridable for a paid tier that needs fewer. See client().
+DEFAULT_MAX_RETRIES = int(os.environ.get("CYBERSEC_SLM_NIM_RETRIES", "6"))
 
 API_KEY_VAR = "NVIDIA_API_KEY"
 BASE_URL_VAR = "CYBERSEC_SLM_NIM_BASE_URL"
@@ -67,7 +73,7 @@ def client():
     from openai import OpenAI
     return OpenAI(api_key=api_key,
                   base_url=os.environ.get(BASE_URL_VAR, DEFAULT_BASE_URL),
-                  timeout=DEFAULT_TIMEOUT, max_retries=1)
+                  timeout=DEFAULT_TIMEOUT, max_retries=DEFAULT_MAX_RETRIES)
 
 
 def ask(system: str, user: str, *, cli=None, temperature: float = 0.0) -> str:

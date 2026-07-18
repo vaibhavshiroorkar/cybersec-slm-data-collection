@@ -68,26 +68,53 @@ def _redirect(monkeypatch, tmp_path):
 
 # ------------------------------------------------------------------ parsing ---
 @pytest.mark.parametrize("reply,expected", [
+    # The decisive schema the prompt now asks for.
+    ('{"keep":true,"confidence":0.9,"reason":"about India"}', "approve"),
+    ('{"keep":false,"confidence":0.9,"reason":"US only"}', "decline"),
+    ('```json\n{"keep":false,"confidence":0.9,"reason":"US only"}\n```', "decline"),
+    ('Sure! {"keep":false,"confidence":0.8,"reason":"US"} hope this helps', "decline"),
+    ('{"keep":"yes","confidence":0.7,"reason":"x"}', "approve"),   # tolerant bool
+    ('{"keep":"no","confidence":0.7,"reason":"x"}', "decline"),
+    # The old verdict schema still reads, so a saved report or a stray reply works.
     ('{"verdict":"approve","confidence":0.9,"reason":"about India"}', "approve"),
-    ('```json\n{"verdict":"decline","confidence":0.9,"reason":"US only"}\n```',
-     "decline"),                                        # fenced JSON
-    ('Sure! {"verdict":"decline","confidence":0.8,"reason":"US only"} hope this helps',
-     "decline"),                                        # prose around the JSON
-    ("not json at all", "review"),                      # unparseable -> review
-    ('{"verdict":"maybe","confidence":0.9,"reason":"x"}', "review"),  # bad verdict
-    ("", "review"),                                     # empty reply
+    ('{"verdict":"decline","confidence":0.9,"reason":"US only"}', "decline"),
+    # Only a genuinely unreadable reply is review (and review is never dropped).
+    ("not json at all", "review"),
+    ('{"confidence":0.9,"reason":"x"}', "review"),      # no keep and no verdict
+    ("", "review"),
 ])
 def test_parse_reply_verdicts(reply, expected):
     assert review._parse(reply)[0] == expected
 
 
-def test_low_confidence_decline_is_downgraded_to_review():
-    """A hesitant decline must not remove a source; it goes to a human."""
-    cli = _FakeClient(['{"verdict":"decline","confidence":0.3,"reason":"unsure"}'])
-    verdict, conf, reason = review.classify_row(_row("A", "http://a"), "about India",
-                                                cli=cli)
-    assert verdict == "review" and conf == 0.3
-    assert "low-confidence" in reason
+def test_a_low_confidence_decline_is_still_a_decline():
+    """The decisive point: every readable reply is acted on, with no confidence
+    downgrade. The old design turned a "drop, 0.3" into review and applied almost
+    nothing (5 of 500) -- the opposite of a filter."""
+    cli = _FakeClient(['{"keep":false,"confidence":0.3,"reason":"probably US"}'])
+
+    verdict, conf, _reason = review.classify_row(_row("A", "http://a"), "about India",
+                                                 cli=cli)
+
+    assert verdict == "decline" and conf == 0.3
+
+
+def test_a_low_confidence_keep_is_still_a_keep():
+    cli = _FakeClient(['{"keep":true,"confidence":0.4,"reason":"maybe Indian"}'])
+
+    verdict, _conf, _reason = review.classify_row(_row("A", "http://a"), "India", cli=cli)
+
+    assert verdict == "approve"
+
+
+def test_every_readable_reply_is_a_decision_never_review():
+    """review is reserved for unreadable replies now, so a scan over a catalog
+    leaves nothing sitting on the fence."""
+    for reply in ('{"keep":true,"confidence":0.9,"reason":"x"}',
+                  '{"keep":false,"confidence":0.1,"reason":"y"}'):
+        cli = _FakeClient([reply])
+        v, _c, _r = review.classify_row(_row("A", "http://a"), "cond", cli=cli)
+        assert v in ("approve", "decline")
 
 
 def test_per_row_error_becomes_review_not_a_crash():

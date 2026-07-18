@@ -51,9 +51,11 @@ DECLINE = "decline"
 REVIEW = "review"
 VERDICTS = (APPROVE, DECLINE, REVIEW)
 
-# Below this the verdict is downgraded to `review`: the model saying "decline,
-# 0.3" is not a basis for removing a source from the corpus.
-MIN_APPLY_CONFIDENCE = 0.7
+# `review` now means only "the model's reply could not be read" — a rare parse
+# failure, kept (never dropped) so a garbled reply cannot lose a source. Every
+# readable reply is a decision, so there is no confidence gate any more: the old
+# design downgraded most declines to `review` and then applied almost nothing
+# (5 of 500), which is the opposite of a filter. See classify_row.
 
 REPORT_COLS = ("condition", "name", "sub_domain", "link", "category",
                "verdict", "confidence", "reason")
@@ -61,14 +63,17 @@ REPORT_COLS = ("condition", "name", "sub_domain", "link", "category",
 EXCLUDED_REASON_COL = "Excluded Reason"
 
 SYSTEM_PROMPT = (
-    "You judge whether a dataset belongs in a training corpus, given a condition. "
-    "You see only the catalog metadata for one source, never its data. "
-    "Reply with ONLY a JSON object, no prose and no code fence: "
-    '{"verdict": "approve"|"decline"|"review", "confidence": 0.0-1.0, '
-    '"reason": "<one short sentence>"}. '
-    "Use approve when the source plainly meets the condition, decline when it "
-    "plainly does not, and review when the metadata is too thin to tell — "
-    "prefer review over guessing, because a decline removes the source."
+    "You decide whether a source belongs in a training corpus, given a condition. "
+    "You see only the catalog metadata for one source (name, link, description), "
+    "never its data. You MUST decide keep or drop for every source; never abstain, "
+    "never sit on the fence. Weigh every field together, and remember the NAME and "
+    "the LINK's host are often stronger evidence than the description: a source "
+    "named 'Union Bank of India ...' or hosted on an '.in' / 'rbi.org.in' domain "
+    "concerns India even when the description does not say the word India, and a "
+    "source named for a German, US, Japanese or other foreign institution does not, "
+    "whatever else it says. Reply with ONLY a JSON object, no prose and no code "
+    'fence: {"keep": true|false, "confidence": 0.0-1.0, "reason": "<one short '
+    'sentence>"}. keep=true if the source meets the condition, keep=false if not.'
 )
 
 
@@ -103,11 +108,13 @@ def _prompt(row: dict, condition: str) -> str:
 
 
 def _parse(reply: str) -> tuple[str, float, str]:
-    """Read the model's JSON reply; anything unreadable becomes a `review`.
+    """Read the model's binary JSON reply into ``(verdict, confidence, reason)``.
 
-    The reply is untrusted input: a model can wrap JSON in a fence, add prose, or
-    invent a verdict. Nothing here may raise, because one bad reply must not end a
-    scan over a whole catalog.
+    ``{"keep": true}`` -> approve, ``{"keep": false}`` -> decline. Only a reply
+    that cannot be read at all becomes `review`, and review is never dropped, so a
+    garbled reply costs nothing rather than losing a source. The reply is untrusted
+    input (a model may fence it, wrap it in prose, or invent fields); nothing here
+    raises, because one bad reply must not end a scan over a whole catalog.
     """
     if not reply:
         return REVIEW, 0.0, "empty reply from the model"
@@ -124,23 +131,44 @@ def _parse(reply: str) -> tuple[str, float, str]:
     if not isinstance(data, dict):
         return REVIEW, 0.0, f"unparseable reply: {reply[:80]}"
 
-    verdict = str(data.get("verdict") or "").strip().lower()
-    if verdict not in VERDICTS:
-        return REVIEW, 0.0, f"unknown verdict {verdict!r}"
+    keep = _as_bool(data.get("keep"))
+    if keep is None:                                 # older/looser replies said verdict
+        v = str(data.get("verdict") or "").strip().lower()
+        keep = True if v == APPROVE else False if v == DECLINE else None
+    if keep is None:
+        return REVIEW, 0.0, f"no keep/verdict in reply: {reply[:80]}"
     try:
         confidence = max(0.0, min(1.0, float(data.get("confidence"))))
     except (TypeError, ValueError):
         confidence = 0.0
     reason = str(data.get("reason") or "").strip()[:200] or "(no reason given)"
-    return verdict, confidence, reason
+    return (APPROVE if keep else DECLINE), confidence, reason
+
+
+def _as_bool(v):
+    """A JSON keep field, tolerating true/false, "yes"/"no", 1/0. None if absent."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "yes", "keep", "1"):
+            return True
+        if s in ("false", "no", "drop", "0"):
+            return False
+    return None
 
 
 def classify_row(row: dict, condition: str, *, cli=None) -> tuple[str, float, str]:
-    """``(verdict, confidence, reason)`` for one catalog row.
+    """``(verdict, confidence, reason)`` for one catalog row — a real decision.
 
-    A per-row failure (timeout, rate limit, refusal) becomes a `review`, so a
-    partial scan still yields a usable report. A *systemic* failure — no key, no
-    SDK — is raised by :func:`llm.client` before any row is judged.
+    Every readable reply is kept as its keep/drop decision, with no confidence
+    downgrade: the point of the filter is that every source gets a verdict, so a
+    "drop, 0.55" is still a drop. Only an unreadable reply, or a per-row failure
+    (timeout, rate limit), becomes `review`, which is never dropped, so the worst a
+    hiccup does is leave a source in for a human. A systemic failure (no key, no
+    SDK) is raised by :func:`llm.client` before any row is judged.
     """
     try:
         reply = llm.ask(SYSTEM_PROMPT, _prompt(row, condition), cli=cli)
@@ -148,10 +176,7 @@ def classify_row(row: dict, condition: str, *, cli=None) -> tuple[str, float, st
         raise
     except Exception as exc:                    # noqa: BLE001 — one row, not the run
         return REVIEW, 0.0, f"{type(exc).__name__}: {exc}"[:200]
-    verdict, confidence, reason = _parse(reply)
-    if verdict == DECLINE and confidence < MIN_APPLY_CONFIDENCE:
-        return REVIEW, confidence, f"low-confidence decline: {reason}"
-    return verdict, confidence, reason
+    return _parse(reply)
 
 
 def _catalog_rows(spec: str | None) -> tuple[str, list[dict]]:
@@ -162,12 +187,26 @@ def _catalog_rows(spec: str | None) -> tuple[str, list[dict]]:
         return path, list(csv.DictReader(f))
 
 
-def scan(condition: str, spec: str | None = None, *, cli=None) -> list[dict]:
-    """Judge every catalog row; one result dict per row (never writes anything)."""
+# Seconds between rows. A judge call is cheap but NIM's free tier throttles a
+# burst, so a small pause keeps a large catalog under the limit instead of firing
+# every request at once and taking most of them back as 429s. Set to 0 on a paid
+# tier. The SDK's own backoff (llm.DEFAULT_MAX_RETRIES) catches whatever slips past.
+REQUEST_SPACING_S = float(os.environ.get("CYBERSEC_SLM_REVIEW_SPACING", "0.4"))
+
+
+def scan(condition: str, spec: str | None = None, *, cli=None,
+         on_progress=None) -> list[dict]:
+    """Judge every catalog row; one result dict per row (never writes anything).
+
+    ``on_progress(done, total)`` is called after each row, so a UI can show a bar
+    over what is deliberately a slow, paced pass rather than a burst.
+    """
     _path, rows = _catalog_rows(spec)
     cli = cli or llm.client()               # fail before judging anything
     out: list[dict] = []
-    for row in rows:
+    for i, row in enumerate(rows):
+        if i and REQUEST_SPACING_S:
+            time.sleep(REQUEST_SPACING_S)
         verdict, confidence, reason = classify_row(row, condition, cli=cli)
         out.append({
             "condition": condition,
@@ -179,6 +218,8 @@ def scan(condition: str, spec: str | None = None, *, cli=None) -> list[dict]:
             "confidence": f"{confidence:.2f}",
             "reason": reason,
         })
+        if on_progress:
+            on_progress(i + 1, len(rows))
     return out
 
 
