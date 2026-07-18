@@ -72,7 +72,12 @@ _ALLOW = re.compile(
     # the one usable form of an All-Rights-Reserved source's feed. The label is
     # never scraped: rss.scrape_rss stamps it only when it has actually reduced the
     # record to its facts, so the claim and the record cannot diverge.
-    r"metadata index"
+    r"metadata index|"
+    # GODL-India (Government Open Data License - India), the licence on data.gov.in.
+    # It permits use, adaptation and derivative works "for all lawful commercial
+    # and non-commercial purposes" with attribution -- clearly commercial. See
+    # docs/sources/legal_scope.md, which lists data.gov.in as allowed.
+    r"godl|government open data license"
     r")\b"
 )
 

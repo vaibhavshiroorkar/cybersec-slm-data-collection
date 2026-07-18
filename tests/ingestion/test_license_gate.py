@@ -38,6 +38,10 @@ _COMMERCIAL_OK = [
     "Commercial use permitted",
     "Royalty-free",
     "Free to use",
+    # GODL-India: data.gov.in's licence, commercial use permitted with attribution
+    "Government Open Data License - India (GODL)",
+    "GODL-India",
+    "GODL",
 ]
 
 # Licenses that forbid, restrict, or fail to establish commercial use -> block.
