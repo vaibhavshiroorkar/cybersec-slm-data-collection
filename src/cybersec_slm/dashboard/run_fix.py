@@ -90,62 +90,65 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("run_fix: expected a fix config file path")
     _record_run_log()
 
-    cfg = _load_cfg(args[0])
-    rounds = int(cfg.get("rounds") or rebalance.DEFAULT_ROUNDS)
-    step = int(cfg.get("step") or rebalance.DEFAULT_ROW_STEP)
-    settings = dict(cfg.get("settings") or {})
+    try:
+        cfg = _load_cfg(args[0])
+        rounds = int(cfg.get("rounds") or rebalance.DEFAULT_ROUNDS)
+        step = int(cfg.get("step") or rebalance.DEFAULT_ROW_STEP)
+        settings = dict(cfg.get("settings") or {})
 
-    logger.info(f"eda fix: up to {rounds} round(s), step {step} rows/domain")
-    worked = False
+        logger.info(f"eda fix: up to {rounds} round(s), step {step} rows/domain")
+        worked = False
 
-    for i in range(1, rounds + 1):
-        _run_stage(_eda_argv(settings))
-        report = _report()
+        for i in range(1, rounds + 1):
+            _run_stage(_eda_argv(settings))
+            report = _report()
 
-        if rebalance.is_balanced(report):
-            logger.info(f"eda fix: corpus is balanced after {i - 1} round(s)")
-            break
+            if rebalance.is_balanced(report):
+                logger.info(f"eda fix: corpus is balanced after {i - 1} round(s)")
+                break
 
-        domains = rebalance.lacking(report)
-        if not domains:
-            # Not balanced, but nothing is starved: the spread is the problem and
-            # sourcing cannot target it. Capping would fix the number by deleting
-            # data, which this run does not do.
-            logger.info("eda fix: no sub-domain is starved; nothing to source")
-            break
+            domains = rebalance.lacking(report)
+            if not domains:
+                # Not balanced, but nothing is starved: the spread is the problem and
+                # sourcing cannot target it. Capping would fix the number by deleting
+                # data, which this run does not do.
+                logger.info("eda fix: no sub-domain is starved; nothing to source")
+                break
 
-        before = _counts()
-        target = rebalance.row_target(before, domains, step)
-        logger.info(f"eda fix: round {i}/{rounds}: filling {domains} "
-                    f"to {target} rows/domain")
+            before = _counts()
+            target = rebalance.row_target(before, domains, step)
+            logger.info(f"eda fix: round {i}/{rounds}: filling {domains} "
+                        f"to {target} rows/domain")
 
-        for stage_argv in rebalance.plan_round(domains, target, settings):
-            try:
-                _run_stage(stage_argv)
-            except Exception as exc:                      # noqa: BLE001
-                if stage_argv[0] != "source":
-                    raise
-                # Non-fatal, as in run_all: a discovery service being down never
-                # blocks the build. The round below then sees no new rows and the
-                # loop ends cleanly rather than spinning.
-                logger.warning(f"eda fix: sourcing failed ({exc}); continuing")
-        worked = True
+            for stage_argv in rebalance.plan_round(domains, target, settings):
+                try:
+                    _run_stage(stage_argv)
+                except Exception as exc:                      # noqa: BLE001
+                    if stage_argv[0] != "source":
+                        raise
+                    # Non-fatal, as in run_all: a discovery service being down never
+                    # blocks the build. The round below then sees no new rows and the
+                    # loop ends cleanly rather than spinning.
+                    logger.warning(f"eda fix: sourcing failed ({exc}); continuing")
+            worked = True
 
-        after = _counts()
-        if after == before:
-            logger.info("eda fix: the round found no new sources for "
-                        f"{domains}; the search is exhausted, stopping")
-            break
-    else:
-        logger.info(f"eda fix: round budget ({rounds}) spent")
+            after = _counts()
+            if after == before:
+                logger.info("eda fix: the round found no new sources for "
+                            f"{domains}; the search is exhausted, stopping")
+                break
+        else:
+            logger.info(f"eda fix: round budget ({rounds}) spent")
 
-    # A fix run always leaves a usable dataset, balanced or not. The loop's last
-    # look predates its last clean, so re-run the gate over the fuller corpus
-    # before rebuilding.
-    if worked:
-        _run_stage(_eda_argv(settings))
-    _run_stage(_schema_argv(settings))
-    logger.info("eda fix: complete")
+        # A fix run always leaves a usable dataset, balanced or not. The loop's last
+        # look predates its last clean, so re-run the gate over the fuller corpus
+        # before rebuilding.
+        if worked:
+            _run_stage(_eda_argv(settings))
+        _run_stage(_schema_argv(settings))
+        logger.info("eda fix: complete")
+    finally:
+        control._clear_control()
 
 
 if __name__ == "__main__":

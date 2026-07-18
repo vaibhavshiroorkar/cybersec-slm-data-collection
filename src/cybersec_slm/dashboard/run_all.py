@@ -57,40 +57,56 @@ def _load_plan(path: str) -> list[list[str]]:
 def main(argv: list[str] | None = None) -> None:
     from .. import cli, stages
     from ..eda import SufficiencyError
+    from . import control, run_fix
 
     args = list(argv if argv is not None else sys.argv[1:])
     if not args:
         raise SystemExit("run_all: expected a plan file path")
     _record_run_log()
-    plan = _load_plan(args[0])
+    
+    try:
+        plan = _load_plan(args[0])
 
-    total = len(plan)
-    for i, stage_argv in enumerate(plan, start=1):
-        if not stage_argv:
-            continue
-        key = stage_argv[0]
-        # Emit the stage marker up front so the live monitor advances even when a
-        # stage reports only to stdout (sourcing prints its summary, not to the log).
-        try:
-            marker = stages.get_stage(key).markers[0]
-        except KeyError:
-            marker = key
-        logger.info(f"{marker} full run stage {i}/{total}: {' '.join(stage_argv)}")
-        try:
-            cli.main(stage_argv)
-        except SufficiencyError as exc:
-            logger.error(str(exc))
-            logger.error("full run halted at the EDA sufficiency gate - address "
-                         "the blockers above and re-run.")
-            return
-        except Exception as exc:                       # noqa: BLE001
-            if key == "source":
-                # Non-fatal: a missing discovery service never blocks the build.
-                logger.warning(f"full run: sourcing failed ({exc}); continuing "
-                               "with the existing catalog")
+        total = len(plan)
+        for i, stage_argv in enumerate(plan, start=1):
+            if not stage_argv:
                 continue
-            raise
-    logger.info(f"full run complete ({total} stages)")
+            key = stage_argv[0]
+            # Emit the stage marker up front so the live monitor advances even when a
+            # stage reports only to stdout (sourcing prints its summary, not to the log).
+            try:
+                marker = stages.get_stage(key).markers[0]
+            except KeyError:
+                marker = key
+            logger.info(f"{marker} full run stage {i}/{total}: {' '.join(stage_argv)}")
+            try:
+                cli.main(stage_argv)
+            except SufficiencyError as exc:
+                logger.error(str(exc))
+                logger.warning("full run halted at the EDA sufficiency gate - triggering auto-fix loop to balance the corpus.")
+                
+                # Build the fix config and write it to the fix file
+                fix_cfg = control.build_fix_config()
+                with open(control._fix_file(), "w", encoding="utf-8") as f:
+                    json.dump(fix_cfg, f)
+                
+                # Run the fix loop in-process
+                try:
+                    run_fix.main([control._fix_file()])
+                except SystemExit as e:
+                    if e.code != 0:
+                        raise
+                return
+            except Exception as exc:                       # noqa: BLE001
+                if key == "source":
+                    # Non-fatal: a missing discovery service never blocks the build.
+                    logger.warning(f"full run: sourcing failed ({exc}); continuing "
+                                   "with the existing catalog")
+                    continue
+                raise
+        logger.info(f"full run complete ({total} stages)")
+    finally:
+        control._clear_control()
 
 
 if __name__ == "__main__":

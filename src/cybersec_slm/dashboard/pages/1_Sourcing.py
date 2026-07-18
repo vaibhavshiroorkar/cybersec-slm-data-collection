@@ -256,10 +256,6 @@ with edit_tab:
                 st.success(f"Deleted {removed} row(s) from the catalog")
                 st.rerun()
 
-
-
-# ============================================================= Sources.csv =====
-with csv_tab:
     # -------------------------------------------------- Catalog snapshot -------
     with ui.section("Source catalog"):
         ui.stat_grid([
@@ -273,6 +269,10 @@ with csv_tab:
             ui.table(by_dom, height=280)
         else:
             st.caption("No `Sources.csv` for this profile yet.")
+
+
+# ============================================================= Sources.csv =====
+with csv_tab:
 
     # ----------------------------------------- Sub-domains / run config -------
     # What the catalog cost, across every run.
