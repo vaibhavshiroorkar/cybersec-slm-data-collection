@@ -18,6 +18,10 @@ Five stages, each handing its output to the next, each treating its input as
 possibly messy or hostile — so problems are flagged, dropped or quarantined
 rather than slipping downstream.
 
+<p align="center">
+  <img src="assets/pipeline.png" alt="Identify data sources, secure ingestion, cleaning, exploratory data analysis, schema normalization, normalized JSONL dataset" width="260">
+</p>
+
 | Stage | What it does | Output |
 |---|---|---|
 | **Sourcing** *(optional)* | Searches the web through a self-hosted [SearXNG](https://docs.searxng.org/) instance and adds candidate sources to a catalog for review. Keywords, feeds and links are editable per topic. Nothing is trusted automatically. | `sources/profiles/<name>/Sources.csv` |
@@ -25,6 +29,29 @@ rather than slipping downstream.
 | **Cleaning** | Repairs text, flags suspicious records, removes duplicates, redacts personal data, translates non-English into English. | `data/<profile>/clean/` |
 | **EDA gate** | Checks the corpus is good enough: volume, topic balance, no single source dominating. If not, the run stops here. | `logs/<profile>/eda/` |
 | **Normalization** | Maps every record onto one canonical 22-field schema, drops near-duplicates, and writes the final dataset with a provenance manifest. | `data/<profile>/final/dataset.jsonl` |
+
+Three of those stages carry most of the logic. Their flows in detail:
+
+<details>
+<summary><b>Ingestion</b> — permission gate, then API pull / download / scrape per source</summary>
+<p align="center">
+  <img src="assets/injest.png" alt="Ingestion flow: load sources, permission check, fetch via API pull, download or scrape, loop until all sources complete, verify the pull, raw data" width="620">
+</p>
+</details>
+
+<details>
+<summary><b>Cleaning</b> — sanitize, split anomalies, redact PII, then dedupe the whole corpus</summary>
+<p align="center">
+  <img src="assets/clean.png" alt="Cleaning flow: build text, structural sanitization, anomaly check splitting behavioral anomalies to review and structural anomalies to dropped, PII masking, language filtering, global deduplication, deduped corpus" width="620">
+</p>
+</details>
+
+<details>
+<summary><b>Normalization</b> — map to the schema, validate, hash, drop near-duplicates</summary>
+<p align="center">
+  <img src="assets/normalization.png" alt="Normalization flow: source mapper, registry dispatch, Pydantic validation with invalid records logged and a high fail rate pausing the run, SHA-256 content hash, MinHash duplicate check, dataset.jsonl output" width="620">
+</p>
+</details>
 
 A few ideas hold it together:
 
