@@ -133,7 +133,10 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
             continue
         finally:
             if os.path.exists(tmp):
-                os.remove(tmp)
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
     size = os.path.getsize(jsonl)
     rows = count_lines(jsonl)
     logger.info(f"  {os.path.basename(jsonl)}: {rows:,} rows, {size/ONE_MB:.1f} MB "
@@ -145,7 +148,7 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
 
 # ------------------------------------------------------------ handlers -------
 def fetch_hf(ref, domain, desc, lic, folder, log):
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi, get_token
     info = HfApi().dataset_info(ref, files_metadata=True)
     sib = {s.rfilename: (s.size or 0) for s in info.siblings}
     cand = [f for f in sib if f.lower().endswith(EXT_PRIORITY)
@@ -175,7 +178,11 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
             url = f"https://huggingface.co/datasets/{ref}/resolve/main/{rel}"
             orig = os.path.join(folder, (key if len(members) == 1 else f"{key}.part{i}")
                                 + (".original.jsonl" if fext == ".jsonl" else fext))
-            download(url, orig)
+            headers = {}
+            token = get_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            download(url, orig, headers=headers)
             tmp = jsonl + ".part"
             try:
                 to_jsonl(orig, tmp, meta=shard_meta)
@@ -190,7 +197,10 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
                 continue
             finally:
                 if os.path.exists(tmp):
-                    os.remove(tmp)
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
             total = os.path.getsize(jsonl)
         rows = count_lines(jsonl)
         logger.info(f"  {key}.jsonl: {rows:,} rows, {total/ONE_MB:.1f} MB"

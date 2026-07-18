@@ -194,6 +194,9 @@ def build_settings(cfg: dict) -> dict:
         "CONCURRENT_REQUESTS_PER_DOMAIN": 4,
         "LOG_LEVEL": "WARNING",
         "TELNETCONSOLE_ENABLED": False,
+        "RETRY_ENABLED": True,
+        "RETRY_TIMES": 3,
+        "RETRY_HTTP_CODES": [500, 502, 503, 504, 408, 429, 403],
         "FEEDS": {cfg["out_path"]: {"format": "jsonlines", "encoding": "utf-8",
                                     "overwrite": True}},
     }

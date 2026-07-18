@@ -22,9 +22,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from cybersec_slm import llm
 from cybersec_slm.dashboard import charts, control, data, settings_store, ui
-from cybersec_slm.sourcing import blacklist, catalog, review, sheet
+from cybersec_slm.sourcing import blacklist, catalog, sheet
 from cybersec_slm.sourcing import row as row_builder
 
 ui.inject_css()
@@ -36,14 +35,28 @@ cat = catalog.load()
 all_domains = catalog.subdomains(cat)
 cat_summary = data.catalog_summary()
 
-(discover_tab, catalog_tab, licenses_tab, edit_tab, add_tab, filter_tab,
- delete_tab, csv_tab) = st.tabs(["Discover", "Catalog", "Licenses", "Sub-domains",
-                                 "Add source", "Filter", "Delete rows",
-                                 "Sources.csv"])
+(discover_tab, licenses_tab, edit_tab,
+ csv_tab) = st.tabs(["Discover", "Licenses", "Sub-domains",
+                     "Sources.csv"])
 
 # ============================================================== Discover =======
 with discover_tab:
-    with ui.section("Sub-domains to search",
+    # -------------------------------------------------- Catalog snapshot -------
+    with ui.section("Source catalog"):
+        ui.stat_grid([
+            ("Sources in catalog", charts.fmt_int(cat_summary["total"])),
+            ("Sub-domains", charts.fmt_int(len(cat_summary["by_domain"]))),
+        ], cols=2)
+        by_dom = [{"sub-domain": k, "sources": v}
+                  for k, v in sorted(cat_summary["by_domain"].items(),
+                                     key=lambda kv: kv[1], reverse=True)]
+        if by_dom:
+            ui.table(by_dom, height=280)
+        else:
+            st.caption("No `Sources.csv` for this profile yet.")
+
+    # ----------------------------------------- Sub-domains / run config -------
+    with ui.section("Sourcing configuration",
                     "Pick the sub-domains and mode a discovery run should use, "
                     "then Apply to save them. The saved selection drives both the "
                     "Sourcing stage's own run and the full pipeline run launched "
@@ -68,15 +81,11 @@ with discover_tab:
             help="datasets: corpora/repos · text: articles/docs · both")
 
         # Apply merges into the saved source settings rather than replacing them,
-        # so the caps configured in the Overview page's Sourcing modal (per-keyword,
-        # max-per-domain, time budget, ...) survive an edit made here.
+        # so the caps configured in the Overview page's Sourcing modal survive.
         _pending = {**_saved, "mode": mode}
         if selected and set(selected) != set(all_domains):
             _pending["domains"] = selected
         else:
-            # Every sub-domain (or none) selected == no restriction: drop the key so
-            # a later-added sub-domain is searched too, instead of being frozen out
-            # by a stale list.
             _pending.pop("domains", None)
         _dirty = (_pending != _saved)
 
@@ -88,15 +97,16 @@ with discover_tab:
             settings_store.save_stage("source", _pending)
             _scope = ("every sub-domain" if "domains" not in _pending
                       else f"{len(selected)} sub-domain(s)")
-            st.success(f"Saved: Sourcing will search {_scope} in '{mode}' mode.")
+            st.success(f"Saved: {_scope} in '{mode}' mode.")
             st.rerun()
         if not selected:
             st.caption("Select at least one sub-domain to apply.")
         elif not _dirty:
             _scope = ("every sub-domain" if "domains" not in _saved
                       else f"{len(_saved['domains'])} sub-domain(s)")
-            st.caption(f"Saved: Sourcing searches {_scope} in "
-                       f"'{_saved.get('mode', catalog.MODES[0])}' mode.")
+            st.caption(f"Saved: {_scope} in "
+                       f"'{_saved.get('mode', catalog.MODES[0])}' mode. "
+                       "Configure countries & fields in the Overview → Configure Sourcing.")
 
     with ui.section("Keyword preview",
                     "The keywords a discovery run would use for the selection above."):
@@ -111,10 +121,7 @@ with discover_tab:
         st.caption("Edit these keywords in the Sub-domains tab. The remaining run "
                    "caps live in the Overview page's Sourcing settings.")
 
-    # What the catalog cost, across every run. The per-run funnel below says where
-    # one run's hits went; it cannot say what the whole catalog took, because 1,020
-    # sources were not found in one run and the newest summary knows nothing of the
-    # ones before it.
+    # What the catalog cost, across every run.
     _tot = data.sourcing_totals()
     if _tot["runs"]:
         with ui.section("What this catalog cost",
@@ -211,23 +218,6 @@ with discover_tab:
                 ui.table([{"sub-domain": r.get("domain"), "keyword": r.get("keyword"),
                            "hits": r.get("hits"), "new": r.get("new")} for r in bk],
                          height=300)
-
-# =============================================================== Catalog =======
-with catalog_tab:
-    with ui.section("Source catalog"):
-        ui.stat_grid([
-            ("Sources in catalog", charts.fmt_int(cat_summary["total"])),
-            ("Sub-domains", charts.fmt_int(len(cat_summary["by_domain"]))),
-        ], cols=2)
-
-        st.markdown("**By sub-domain**")
-        by_dom = [{"sub-domain": k, "sources": v}
-                  for k, v in sorted(cat_summary["by_domain"].items(),
-                                     key=lambda kv: kv[1], reverse=True)]
-        if by_dom:
-            ui.table(by_dom, height=360)
-        else:
-            st.caption("No `Sources.csv` for this profile yet.")
 
 # =============================================================== Licenses ======
 with licenses_tab:
@@ -335,6 +325,11 @@ with edit_tab:
             new_tx = ed2.text_area("Text keywords (one per line)",
                                    value="\n".join(spec.get("text") or []),
                                    height=200, key=f"ed_tx_{pick}")
+            new_links = st.text_area("Direct Links (one per line)",
+                                     value="\n".join(spec.get("links") or []),
+                                     height=100, key=f"ed_links_{pick}",
+                                     help="URLs added directly to the catalog "
+                                          "without going through discovery.")
             new_vocab = st.text_area(
                 "Classification vocabulary (one term per line)",
                 value="\n".join(spec.get("vocab") or []), height=120,
@@ -364,8 +359,8 @@ with edit_tab:
                 try:
                     catalog.update_subdomain(
                         pick, name=new_name.strip(), datasets=_lines(new_ds),
-                        text=_lines(new_tx), vocab=_lines(new_vocab),
-                        code=new_code.strip())
+                        text=_lines(new_tx), links=_lines(new_links),
+                        vocab=_lines(new_vocab), code=new_code.strip())
                 except (KeyError, ValueError) as ex:
                     st.error(str(ex))
                 else:
@@ -387,12 +382,15 @@ with edit_tab:
                  "e.g. `APPLICATION`. Leave blank to derive one automatically.")
         ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
         tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
+        links = st.text_area("Direct Links (one per line)", key="add_links", height=100,
+                             help="URLs added directly to the catalog "
+                                  "without going through discovery.")
         if ui.right_slot().button("Save sub-domain", key="add_save",
                                   disabled=not name.strip(),
                                   use_container_width=True):
             catalog.add_subdomain(
                 name.strip(), datasets=_lines(ds), text=_lines(tx),
-                code=code.strip() or None)
+                links=_lines(links), code=code.strip() or None)
             st.success(f"Saved '{name.strip()}' to sources/keywords.yaml")
             st.rerun()
 
@@ -414,170 +412,10 @@ with edit_tab:
         else:
             st.caption("No sub-domains to remove.")
 
-# ============================================================== Add source =====
-with add_tab:
-    with ui.section("Add a source by hand",
-                    "Appends one row to `sources/Sources.csv`, identical in shape "
-                    "to a discovered one, so the ingest stage picks it up on the "
-                    "next run. Use this for a source discovery cannot find."):
-        if not all_domains:
-            st.info("No sub-domains configured yet. Add one in the Sub-domains tab "
-                    "first, so this source has somewhere to be filed.")
-        else:
-            a1, a2 = st.columns(2)
-            m_name = a1.text_input(
-                "Name *", key="ms_name",
-                help="Short label — the dataset's owner/org for HuggingFace and "
-                     "GitHub sources (e.g. `darkknight25`).")
-            m_dom = a2.selectbox("Sub-Domain *", all_domains, key="ms_dom")
-            m_link = st.text_input(
-                "Dataset Link *", key="ms_link",
-                help="The source URL. It decides how ingestion fetches this "
-                     "source (HuggingFace / Kaggle / GitHub / direct file / site).")
-            m_desc = st.text_area("Description", key="ms_desc", height=80)
 
-            b1, b2, b3 = st.columns(3)
-            m_cat = b1.selectbox("Category", ["(infer from link)",
-                                              *row_builder.CATEGORIES],
-                                 key="ms_cat")
-            m_fmt = b2.selectbox("Original Format", ["(infer from link)",
-                                                     *row_builder.FORMATS],
-                                 key="ms_fmt")
-            m_lic = b3.text_input(
-                "License", key="ms_lic",
-                help="Free text (e.g. `MIT`, `Apache-2.0`, `CC0-1.0`). Ingestion "
-                     "fetches a source only when its license is clearly "
-                     "commercial-use; blank or unrecognised is turned away.")
-            m_syn = st.checkbox(
-                "Is Synthetic?", key="ms_syn",
-                help="Model-generated content. Synthetic sources are cleaned but "
-                     "excluded from the final dataset by the schema stage.")
 
-            with st.expander("More fields (optional)"):
-                st.caption("Left blank, these are filled in by the ingest and "
-                           "clean stages as they measure the source.")
-                e1, e2, e3 = st.columns(3)
-                m_files = e1.text_input("File Count", key="ms_files")
-                m_osize = e2.text_input("Original Size (MB)", key="ms_osize")
-                m_lines = e3.text_input("Total Lines", key="ms_lines")
-                f1, f2, f3 = st.columns(3)
-                m_author = f1.text_input("Author", key="ms_author")
-                m_updated = f2.text_input("Last Updated", key="ms_updated")
-                m_tags = f3.text_input("Tags", key="ms_tags")
-                m_note = st.text_input("Note", key="ms_note")
-
-            _required = [m_name.strip(), m_dom, m_link.strip()]
-            # Reject a link the catalog already has: normalize_url matches the same
-            # source linked slightly differently, which is what discovery dedups on.
-            _dupe = ""
-            if m_link.strip():
-                _existing = sheet.existing_links(data.catalog_path())
-                if sheet.normalize_url(m_link) in _existing:
-                    _dupe = ("This link is already in the catalog. Delete the "
-                             "existing row first if you want to re-add it.")
-                    st.warning(_dupe)
-
-            if ui.right_slot().button("Add source", key="ms_add", type="primary",
-                                      disabled=not all(_required) or bool(_dupe),
-                                      use_container_width=True):
-                try:
-                    new_row = row_builder.build_manual_row(
-                        name=m_name, subdomain=m_dom, link=m_link,
-                        description=m_desc,
-                        category="" if m_cat.startswith("(") else m_cat,
-                        original_format="" if m_fmt.startswith("(") else m_fmt,
-                        license=m_lic, is_synthetic=m_syn,
-                        extra={"File Count": m_files,
-                               "Original Size (MB)": m_osize,
-                               "Total Lines": m_lines, "Author": m_author,
-                               "Last Updated": m_updated, "Tags": m_tags,
-                               "Note": m_note})
-                except ValueError as ex:
-                    st.error(str(ex))
-                else:
-                    sheet.append_rows(data.catalog_path(), [new_row])
-                    st.success(f"Added '{new_row['Name']}' to sources/Sources.csv "
-                               f"under {new_row['Sub-Domain']} · "
-                               f"{new_row['Category']}"
-                               + (f" / {new_row['Original Format']}"
-                                  if new_row["Original Format"] else ""))
-                    st.rerun()
-            if not all(_required):
-                st.caption("Name, Sub-Domain, and Dataset Link are required.")
-
-# ================================================================== Filter =====
-with filter_tab:
-    with ui.section(
-            "Filter the catalog by a rule",
-            "State a condition in plain English and a model judges every row "
-            "against it. Nothing moves until you apply the result."):
-        st.caption(
-            "The catalog is judged on its metadata (Name, Sub-Domain, "
-            "Description, link, Category), never on the records themselves, and "
-            "Descriptions are search snippets: a source that is genuinely in "
-            "scope but never says so will be declined. Read the report before "
-            "applying it.")
-
-        _cond = st.text_input(
-            "Condition", key="rev_condition",
-            placeholder="the data must concern India",
-            help="Judged per row. Anything you can state in a sentence works: a "
-                 "geography, a document type, a quality bar.")
-
-        _c = st.columns([1, 1, 2])
-        _go = _c[0].button("Judge the catalog", key="rev_scan",
-                           disabled=not _cond.strip(),
-                           help="Reads every row and records a verdict. Costs one "
-                                "model call per row and changes nothing.")
-        if not llm.is_available():
-            st.warning("No model configured: set $NVIDIA_API_KEY and install the "
-                       "agent extra (uv sync --extra agent).")
-
-        if _go:
-            with st.spinner(f"Judging {cat_summary['total']} source(s)..."):
-                try:
-                    st.session_state["_rev"] = review.run_scan(_cond.strip())
-                except Exception as _e:                      # noqa: BLE001
-                    st.session_state["_rev"] = None
-                    st.error(f"Review failed: {_e}")
-
-        _rev = st.session_state.get("_rev")
-        if _rev:
-            _counts = _rev["counts"]
-            ui.stat_grid([
-                ("Approved", charts.fmt_int(_counts.get(review.APPROVE))),
-                ("Declined", charts.fmt_int(_counts.get(review.DECLINE))),
-                ("Needs a human", charts.fmt_int(_counts.get(review.REVIEW))),
-                ("Judged", charts.fmt_int(sum(_counts.values()))),
-            ], cols=4)
-            st.caption(f"Report: `{_rev['report']}`. Only high-confidence declines "
-                       "move; 'needs a human' rows are never applied.")
-            ui.table([{"verdict": r["verdict"], "confidence": r["confidence"],
-                       "source": r["name"], "sub-domain": r["sub_domain"],
-                       "why": r["reason"]}
-                      for r in sorted(_rev["results"],
-                                      key=lambda r: (r["verdict"] != review.DECLINE,
-                                                     r["name"]))],
-                     height=340)
-
-            _n = _counts.get(review.DECLINE, 0)
-            st.warning(
-                f"Applying moves {_n} declined source(s) out of Sources.csv and "
-                f"into the profile's Excluded.csv, with the model's reason. They "
-                f"are recoverable from there; nothing is deleted.")
-            if st.button(f"Apply: move {_n} declined source(s)", key="rev_apply",
-                         disabled=not _n):
-                try:
-                    _res = review.apply_report(_rev["report"],
-                                               condition=_rev["results"][0]["condition"])
-                    st.success(f"Moved {_res['moved']} source(s) to Excluded.csv.")
-                    st.session_state["_rev"] = None
-                    st.rerun()
-                except Exception as _e:                      # noqa: BLE001
-                    st.error(f"Apply failed: {_e}")
-
-# ============================================================= Delete rows =====
-with delete_tab:
+# ============================================================= Sources.csv =====
+with csv_tab:
     cat_rows = data.catalog_rows()
     cat_path = data.catalog_path()
     _LINK_KEYS = ("dataset link", "url", "link", "dataset_link", "source url")
@@ -588,6 +426,114 @@ with delete_tab:
                 return str(v)
         return ""
 
+    with ui.section("Sources.csv"):
+        if not cat_rows:
+            st.caption("No `Sources.csv` for this profile yet.")
+        else:
+            _search = st.text_input(
+                "Search", placeholder="Filter by name, sub-domain, link, license…",
+                key="csv_search")
+            _display_rows = cat_rows
+            if _search.strip():
+                _q = _search.strip().lower()
+                _display_rows = [
+                    r for r in cat_rows
+                    if any(_q in str(v).lower() for v in r.values())
+                ]
+            st.caption(f"{len(_display_rows)} / {len(cat_rows)} rows"
+                       if _search.strip() else f"{len(cat_rows)} rows")
+            ui.table(_display_rows, height=520)
+
+    # --------------------------------------------------------- Add a source ----
+    with ui.section("Add a source by hand",
+                    "Appends one row to `sources/Sources.csv`, identical in shape "
+                    "to a discovered one, so the ingest stage picks it up on the "
+                    "next run. Use this for a source discovery cannot find."):
+        with st.expander("Add a source"):
+            if not all_domains:
+                st.info("No sub-domains configured yet. Add one in the Sub-domains tab "
+                        "first, so this source has somewhere to be filed.")
+            else:
+                a1, a2 = st.columns(2)
+                m_name = a1.text_input(
+                    "Name *", key="ms_name",
+                    help="Short label — the dataset's owner/org for HuggingFace and "
+                         "GitHub sources (e.g. `darkknight25`).")
+                m_dom = a2.selectbox("Sub-Domain *", all_domains, key="ms_dom")
+                m_link = st.text_input(
+                    "Dataset Link *", key="ms_link",
+                    help="The source URL. It decides how ingestion fetches this "
+                         "source (HuggingFace / Kaggle / GitHub / direct file / site).")
+                m_desc = st.text_area("Description", key="ms_desc", height=80)
+
+                b1, b2, b3 = st.columns(3)
+                m_cat = b1.selectbox("Category", ["(infer from link)",
+                                                  *row_builder.CATEGORIES],
+                                     key="ms_cat")
+                m_fmt = b2.selectbox("Original Format", ["(infer from link)",
+                                                         *row_builder.FORMATS],
+                                     key="ms_fmt")
+                m_lic = b3.text_input(
+                    "License", key="ms_lic",
+                    help="Free text (e.g. `MIT`, `Apache-2.0`, `CC0-1.0`). Ingestion "
+                         "fetches a source only when its license is clearly "
+                         "commercial-use; blank or unrecognised is turned away.")
+                m_syn = st.checkbox(
+                    "Is Synthetic?", key="ms_syn",
+                    help="Model-generated content. Synthetic sources are cleaned but "
+                         "excluded from the final dataset by the schema stage.")
+
+                with st.expander("More fields (optional)"):
+                    st.caption("Left blank, these are filled in by the ingest and "
+                               "clean stages as they measure the source.")
+                    e1, e2, e3 = st.columns(3)
+                    m_files = e1.text_input("File Count", key="ms_files")
+                    m_osize = e2.text_input("Original Size (MB)", key="ms_osize")
+                    m_lines = e3.text_input("Total Lines", key="ms_lines")
+                    f1, f2, f3 = st.columns(3)
+                    m_author = f1.text_input("Author", key="ms_author")
+                    m_updated = f2.text_input("Last Updated", key="ms_updated")
+                    m_tags = f3.text_input("Tags", key="ms_tags")
+                    m_note = st.text_input("Note", key="ms_note")
+
+                _required = [m_name.strip(), m_dom, m_link.strip()]
+                _dupe = ""
+                if m_link.strip():
+                    _existing = sheet.existing_links(data.catalog_path())
+                    if sheet.normalize_url(m_link) in _existing:
+                        _dupe = ("This link is already in the catalog. Delete the "
+                                 "existing row first if you want to re-add it.")
+                        st.warning(_dupe)
+
+                if ui.right_slot().button("Add source", key="ms_add", type="primary",
+                                          disabled=not all(_required) or bool(_dupe),
+                                          use_container_width=True):
+                    try:
+                        new_row = row_builder.build_manual_row(
+                            name=m_name, subdomain=m_dom, link=m_link,
+                            description=m_desc,
+                            category="" if m_cat.startswith("(") else m_cat,
+                            original_format="" if m_fmt.startswith("(") else m_fmt,
+                            license=m_lic, is_synthetic=m_syn,
+                            extra={"File Count": m_files,
+                                   "Original Size (MB)": m_osize,
+                                   "Total Lines": m_lines, "Author": m_author,
+                                   "Last Updated": m_updated, "Tags": m_tags,
+                                   "Note": m_note})
+                    except ValueError as ex:
+                        st.error(str(ex))
+                    else:
+                        sheet.append_rows(data.catalog_path(), [new_row])
+                        st.success(f"Added '{new_row['Name']}' to sources/Sources.csv "
+                                   f"under {new_row['Sub-Domain']} · "
+                                   f"{new_row['Category']}"
+                                   + (f" / {new_row['Original Format']}"
+                                      if new_row["Original Format"] else ""))
+                        st.rerun()
+                if not all(_required):
+                    st.caption("Name, Sub-Domain, and Dataset Link are required.")
+
+    # ------------------------------------------------------- Delete rows -------
     with ui.section("Delete catalog rows",
                     "Removes rows from `sources/Sources.csv` instantly. Deleted "
                     "sources can be re-discovered; already-fetched data is untouched."):
@@ -608,7 +554,7 @@ with delete_tab:
                 st.caption("No rows to delete.")
             else:
                 st.caption(f"Rows are numbered 1 to {total} in Sources.csv order "
-                           "(same order as the Sources.csv tab).")
+                           "(same order as the table above).")
                 c1, c2 = st.columns(2)
                 start = c1.number_input("From row", min_value=1, max_value=total,
                                         value=1, step=1, key="del_range_start")
@@ -629,36 +575,3 @@ with delete_tab:
                     removed = sheet.delete_rows(cat_path, positions=positions)
                     st.success(f"Deleted {removed} row(s) from the catalog")
                     st.rerun()
-
-        with st.expander("Delete individual rows"):
-            if not cat_rows:
-                st.caption("No rows to delete.")
-            else:
-                labels: list[str] = []
-                label_link: dict[str, str] = {}
-                for i, r in enumerate(cat_rows):
-                    link = _row_link(r)
-                    label = (f"{(r.get('Name') or '?')[:40]} · "
-                             f"{r.get('Sub-Domain', '')} · {link}")
-                    if label in label_link:
-                        label = f"{label}  #{i}"
-                    label_link[label] = link
-                    labels.append(label)
-                picked = st.multiselect("Rows to delete", labels, key="del_rows")
-                if st.button(f"Delete {len(picked)} selected row(s)",
-                             disabled=not picked, key="del_rows_go",
-                             type="secondary"):
-                    links = [label_link[la] for la in picked if label_link.get(la)]
-                    removed = sheet.delete_rows(cat_path, links=links)
-                    st.success(f"Deleted {removed} row(s) from the catalog")
-                    st.rerun()
-
-# ============================================================= Sources.csv =====
-with csv_tab:
-    with ui.section("Sources.csv"):
-        rows = data.catalog_rows()
-        if not rows:
-            st.caption("No `Sources.csv` for this profile yet.")
-        else:
-            st.caption(f"{len(rows)} rows")
-            ui.table(rows, height=520)

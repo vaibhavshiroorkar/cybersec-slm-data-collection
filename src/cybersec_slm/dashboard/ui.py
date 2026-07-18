@@ -422,26 +422,54 @@ def _stage_widgets(stage: str, base: dict) -> dict:
             s["mode"] = st.selectbox(
                 "mode", catalog.MODES, index=_mode_idx, key=f"{stage}_mode",
                 help="datasets: corpora/repos · text: articles/docs · both")
-        if "target_per_domain" in allowed:
-            tpd = int(st.number_input(
-                "fill each sub-domain up to N valid rows (0 = off)", 0, 1_000_000,
-                value=_clamp(int(base.get("target_per_domain") or 0), 0, 1_000_000),
-                key=f"{stage}_targetdom",
-                help="Fill mode: top each Sub-Domain up to this many "
-                     "commercial-valid rows, filling only the deficit."))
-            if tpd:
-                s["target_per_domain"] = tpd
+        if stage == "source":
+            _COUNTRIES = [
+                "Global",
+                "India", "United States", "United Kingdom", "China", "Germany",
+                "France", "Japan", "Australia", "Canada", "Brazil", "Singapore",
+                "South Korea", "Netherlands", "Switzerland", "Sweden", "Israel",
+                "UAE", "Saudi Arabia", "Russia", "South Africa", "Nigeria",
+                "Kenya", "Indonesia", "Malaysia", "Thailand", "Pakistan",
+                "Bangladesh", "Sri Lanka", "Philippines", "Vietnam",
+            ]
+            _FIELDS = [
+                "Finance", "Banking", "Insurance", "Healthcare", "Legal",
+                "Government", "Education", "Cybersecurity", "Defence",
+                "Telecom", "Energy", "Retail", "Manufacturing", "Real Estate",
+                "Agriculture", "Transport", "Media", "Technology",
+            ]
+            _saved_countries = base.get("countries", [])
+            _saved_fields = base.get("fields", [])
+            cf1, cf2 = st.columns(2)
+            sel_countries = cf1.multiselect(
+                "countries (empty = any)",
+                options=_COUNTRIES,
+                default=[c for c in _saved_countries if c in _COUNTRIES],
+                key=f"{stage}_countries",
+                help="'Global' targets internationally-scoped sources. "
+                     "Leave empty to search all geographies.")
+            sel_fields = cf2.multiselect(
+                "fields (empty = any)",
+                options=_FIELDS,
+                default=[f for f in _saved_fields if f in _FIELDS],
+                key=f"{stage}_fields",
+                help="Restrict discovery to these industry verticals. "
+                     "Leave empty to search all fields.")
+            if sel_countries:
+                s["countries"] = sel_countries
+            if sel_fields:
+                s["fields"] = sel_fields
         # Row-level run: pick specific sources within (or across) the sub-domains.
         if "sources_only" in allowed and stage in ("ingest", "clean"):
             _row_selection(stage, base, picked_domains, s)
         if "workers" in allowed:
             _wdef = 12 if stage == "source" else 4
             worker_help = (
-                "enrichment thread pool (license/metadata fetch)"
+                "Logical network threads, NOT CPU cores. Sourcing is I/O-bound, so you can safely set this higher than your core count."
                 if stage == "source"
-                else "number of parallel worker processes (CPU cores) used to clean sources"
+                else "Physical CPU cores. Cleaning is heavily CPU-bound, so physical cores are used to avoid hyperthreading contention."
                 if stage == "clean"
-                else "process pool size (default: min(cpu, 8))")
+                else "Logical CPU cores (hyperthreads) used for parallel processing (default: min(logical cpu, 8)).")
             worker_label = (
                 "clean workers" if stage == "clean"
                 else "workers")
@@ -460,13 +488,6 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 "source timeout (s)", 30, 7200,
                 value=_clamp(int(base.get("source_timeout", 1800)), 30, 7200),
                 key=f"{stage}_timeout"))
-        if "limit" in allowed:
-            lim = int(st.number_input(
-                "per-file record limit (0 = no cap)", 0, 10_000_000,
-                value=_clamp(int(base.get("limit", 0)), 0, 10_000_000),
-                key=f"{stage}_limit"))
-            if lim:
-                s["limit"] = lim
         if "max_source_gb" in allowed:
             gb = float(st.number_input(
                 "max source size in GB (0 = no cap)", 0.0, 1000.0,
@@ -480,18 +501,6 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                                 key=f"{stage}_sources")
             if src.strip():
                 s["sources"] = src.strip()
-        if "per_keyword" in allowed:
-            s["per_keyword"] = int(st.number_input(
-                "results per keyword", 1, 50,
-                value=_clamp(int(base.get("per_keyword", 5)), 1, 50),
-                key=f"{stage}_perkw"))
-        if "max_per_domain" in allowed:
-            m = int(st.number_input(
-                "max new sources per sub-domain (0 = no cap)", 0, 100_000,
-                value=_clamp(int(base.get("max_per_domain", 0)), 0, 100_000),
-                key=f"{stage}_maxdom"))
-            if m:
-                s["max_per_domain"] = m
         if "max_total" in allowed:
             t = int(st.number_input(
                 "gather until N new sources total (0 = single pass)", 0, 1_000_000,
@@ -508,30 +517,7 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                      "(whichever is hit first)."))
             if mm > 0:
                 s["max_minutes"] = mm
-        if "time_range" in allowed:
-            _tr = ["any", "day", "week", "month", "year"]
-            _cur = str(base.get("time_range", "year") or "year")
-            tr = st.selectbox(
-                "freshness (prefer results within)", _tr,
-                index=_tr.index(_cur) if _cur in _tr else _tr.index("year"),
-                key=f"{stage}_timerange",
-                help="Falls back to unfiltered when a query would return nothing.")
-            if tr != "year":
-                s["time_range"] = tr
-        if "no_site_scope" in allowed:
-            scope_on = st.checkbox(
-                "scope datasets queries to licensable hosts",
-                value=not bool(base.get("no_site_scope", False)),
-                key=f"{stage}_sitescope",
-                help="HuggingFace, GitHub, Kaggle, Zenodo, arXiv, data.gov, UCI. "
-                     "Falls back to an unscoped query when a scoped one finds nothing.")
-            s["no_site_scope"] = not scope_on
-        if "no_quality_filter" in allowed:
-            qf_on = st.checkbox(
-                "drop low-quality results (social/listing/search pages)",
-                value=not bool(base.get("no_quality_filter", False)),
-                key=f"{stage}_qualfilter")
-            s["no_quality_filter"] = not qf_on
+
         if "searxng_url" in allowed:
             url = st.text_input(
                 "SearXNG URL (blank = env SEARXNG_URL / localhost:8080)",
@@ -617,20 +603,6 @@ def _stage_widgets(stage: str, base: dict) -> dict:
             parsed = [t.strip() for t in langs.split(",") if t.strip()]
             if parsed:
                 s["allowed_langs"] = parsed
-        if "pii_engine" in allowed:
-            engines = ["regex", "presidio"]
-            current = str(base.get("pii_engine", "regex"))
-            s["pii_engine"] = st.selectbox(
-                "PII engine",
-                engines,
-                index=engines.index(current) if current in engines else 0,
-                key=f"{stage}_piiengine",
-                help="regex (default) redacts emails, public IPs, valid cards and "
-                     "SSNs at about 0.2 ms per record. presidio adds a spaCy NER "
-                     "pass for person names on top, at roughly 300x that cost, and "
-                     "needs `uv sync --extra pii-ner`. Person names in this corpus "
-                     "are mostly public author bylines, so regex is the right "
-                     "default; pick presidio for a deliberate audit pass.")
         if "no_auto_rebalance" in allowed:
             # Auto-rebalance is off by default; the flag is passed unless enabled.
             enable = st.checkbox("enable auto-rebalance",
@@ -695,6 +667,67 @@ def _stage_widgets(stage: str, base: dict) -> dict:
     return s
 
 
+def _render_llm_filter() -> None:
+    import streamlit as st
+    from cybersec_slm import llm
+    from cybersec_slm.dashboard import charts, data
+    from cybersec_slm.sourcing import review
+
+    st.caption(
+        "State a condition in plain English and a model judges every row against it. "
+        "Nothing moves until you apply the result."
+    )
+    _cond = st.text_input(
+        "Condition", key="rev_condition",
+        placeholder="the data must concern India",
+        help="Judged per row on metadata."
+    )
+
+    _c = st.columns([1, 1, 2])
+    _go = _c[0].button("Judge the catalog", key="rev_scan", disabled=not _cond.strip())
+    if not llm.is_available():
+        st.warning("No model configured: set $NVIDIA_API_KEY.")
+
+    if _go:
+        cat_summary = data.catalog_summary()
+        with st.spinner(f"Judging {cat_summary['total']} source(s)..."):
+            try:
+                st.session_state["_rev"] = review.run_scan(_cond.strip())
+            except Exception as _e:
+                st.session_state["_rev"] = None
+                st.error(f"Review failed: {_e}")
+
+    _rev = st.session_state.get("_rev")
+    if _rev:
+        _counts = _rev["counts"]
+        from cybersec_slm.dashboard.ui import stat_grid, table
+        stat_grid([
+            ("Approved", charts.fmt_int(_counts.get(review.APPROVE))),
+            ("Declined", charts.fmt_int(_counts.get(review.DECLINE))),
+            ("Needs a human", charts.fmt_int(_counts.get(review.REVIEW))),
+            ("Judged", charts.fmt_int(sum(_counts.values()))),
+        ], cols=4)
+        st.caption(f"Report: `{_rev['report']}`.")
+        table([{"verdict": r["verdict"], "confidence": r["confidence"],
+                   "source": r["name"], "sub-domain": r["sub_domain"],
+                   "why": r["reason"]}
+                  for r in sorted(_rev["results"],
+                                  key=lambda r: (r["verdict"] != review.DECLINE,
+                                                 r["name"]))],
+                 height=340)
+
+        _n = _counts.get(review.DECLINE, 0)
+        st.warning(f"Applying moves {_n} declined source(s) to Excluded.csv.")
+        if st.button(f"Apply: move {_n} declined source(s)", key="rev_apply", disabled=not _n):
+            try:
+                _res = review.apply_report(_rev["report"], condition=_rev["results"][0]["condition"])
+                st.success(f"Moved {_res['moved']} source(s) to Excluded.csv.")
+                st.session_state["_rev"] = None
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Apply failed: {_e}")
+
+
 def stage_config_dialog(stage: str) -> None:
     """Open a modal that configures every setting for one pipeline ``stage``.
 
@@ -725,6 +758,12 @@ def stage_config_dialog(stage: str) -> None:
             settings_store.save_stage(stage, s)
             st.toast(f"Saved {label} settings")
             st.rerun()
+        
+        if stage == "source":
+            st.divider()
+            _is_rev = bool(st.session_state.get("_rev"))
+            with st.expander("Advanced: Filter Catalog via LLM", expanded=_is_rev):
+                _render_llm_filter()
 
     _dialog()
 

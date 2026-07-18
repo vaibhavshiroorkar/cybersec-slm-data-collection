@@ -50,7 +50,7 @@ from tenacity import (  # noqa: E402
 
 _RETRY = dict(stop=stop_after_attempt(4),
               wait=wait_exponential(multiplier=1, min=2, max=30),
-              retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+              retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException, httpx.StreamError)),
               reraise=True)
 
 
@@ -91,12 +91,14 @@ def _screened_hops(url: str, timeout: int, opener):
 @retry(**_RETRY)
 def http_get(url: str, timeout: int = 180) -> httpx.Response:
     """GET a screened URL, following (and re-screening) redirects by hand."""
-    def _open(u, t):
-        return httpx.get(u, headers=HEADERS, follow_redirects=False, timeout=t)
+    with httpx.Client(http2=True, headers=HEADERS, timeout=timeout) as client:
+        def _open(u, t):
+            return client.get(u, follow_redirects=False, timeout=t)
 
-    r = _screened_hops(url, timeout, _open)
-    r.raise_for_status()
-    return r
+        r = _screened_hops(url, timeout, _open)
+        r.raise_for_status()
+        r.read()  # Load into memory before client exits context
+        return r
 
 
 class DownloadTooLarge(RuntimeError):
@@ -118,44 +120,49 @@ def _max_download_bytes() -> int:
 
 
 @retry(**_RETRY)
-def download(url: str, dest: str) -> tuple[int, str]:
+def download(url: str, dest: str, headers: dict | None = None) -> tuple[int, str]:
     """Stream a screened URL to disk; return (bytes, sha256).
 
     Aborts past the byte cap and deletes the partial file, so a source that
     streams forever costs the run one failure rather than the whole volume.
+    Uses an isolated httpx.Client to prevent socket corruption across workers.
     """
     import hashlib
     h = hashlib.sha256()
     size = 0
     cap = _max_download_bytes()
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    
+    req_headers = dict(HEADERS)
+    if headers:
+        req_headers.update(headers)
 
-    def _open(u, t):
-        ctx = httpx.stream("GET", u, headers=HEADERS, follow_redirects=False,
-                           timeout=t)
-        return ctx.__enter__()
+    with httpx.Client(http2=True, headers=req_headers) as client:
+        def _open(u, t):
+            req = client.build_request("GET", u, timeout=t)
+            return client.send(req, stream=True, follow_redirects=False)
 
-    r = _screened_hops(url, 180, _open)
-    try:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_bytes(1 << 16):
-                size += len(chunk)
-                if size > cap:
-                    raise DownloadTooLarge(
-                        f"{url!r} exceeded the {cap / 1048576:,.0f} MB download "
-                        f"cap; aborting")
-                f.write(chunk); h.update(chunk)
-    except DownloadTooLarge:
-        # Leaving a truncated file behind would be read as a real, valid source.
+        r = _screened_hops(url, 180, _open)
         try:
-            os.remove(dest)
-        except OSError:
-            pass
-        raise
-    finally:
-        if hasattr(r, "close"):
-            r.close()
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_bytes(1 << 16):
+                    size += len(chunk)
+                    if size > cap:
+                        raise DownloadTooLarge(
+                            f"{url!r} exceeded the {cap / 1048576:,.0f} MB download "
+                            f"cap; aborting")
+                    f.write(chunk); h.update(chunk)
+        except DownloadTooLarge:
+            # Leaving a truncated file behind would be read as a real, valid source.
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            raise
+        finally:
+            if hasattr(r, "close"):
+                r.close()
     return size, h.hexdigest()
 
 

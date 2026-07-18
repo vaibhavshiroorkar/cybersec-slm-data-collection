@@ -160,6 +160,44 @@ def _enforced() -> bool:
     return True
 
 
+def _fetch_hf_license(ref: str) -> str | None:
+    try:
+        from huggingface_hub import dataset_info
+        info = dataset_info(ref, token=os.environ.get("HF_TOKEN"))
+        if info and getattr(info, "cardData", None):
+            lic = info.cardData.get("license", None)
+            if isinstance(lic, list):
+                return " ".join(str(l) for l in lic)
+            elif lic:
+                return str(lic)
+    except Exception as e:
+        logger.debug(f"Failed to fetch HF license for {ref}: {e}")
+    return None
+
+
+def _fetch_github_license(url: str) -> str | None:
+    if not url: return None
+    import requests
+    m = re.search(r"github\.com/([^/]+)/([^/]+)", url)
+    if m:
+        owner, repo = m.groups()
+        repo = repo.replace(".git", "")
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/license"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            r = requests.get(api_url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                lic = data.get("license", {})
+                return lic.get("spdx_id") or lic.get("name")
+        except Exception as e:
+            logger.debug(f"Failed to fetch GitHub license for {url}: {e}")
+    return None
+
+
 def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     """Return ``(allowed, reason)`` for a source descriptor's license.
 
@@ -169,4 +207,27 @@ def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     """
     if not _enforced():
         return True, "license-gate-disabled"
-    return classify_license(descriptor.get("license"))
+        
+    lic_str = descriptor.get("license")
+    
+    # 1. Classify the existing string first
+    verdict = license_verdict(lic_str)
+    if verdict == "ok":
+        return True, classify_license(lic_str)[1]
+    elif verdict == "blocked":
+        return False, classify_license(lic_str)[1]
+        
+    # 2. It's unknown/missing. Fetch it if possible!
+    kind = descriptor.get("kind")
+    fetched = None
+    if kind == "hf":
+        fetched = _fetch_hf_license(descriptor.get("ref"))
+    elif kind == "github":
+        fetched = _fetch_github_license(descriptor.get("url") or descriptor.get("start_url"))
+        
+    if fetched:
+        logger.info(f"Dynamically fetched missing license: {fetched!r}")
+        return classify_license(fetched)
+        
+    # Fallback to the original classification which will return False for unknown
+    return classify_license(lic_str)

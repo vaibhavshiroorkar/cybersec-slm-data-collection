@@ -28,11 +28,11 @@ def scrape_pdf(domain, slug, title, lic, url, log):
     logger.info(f"=== PDF: {title} ===")
     r = http_get(url)
     if r.content[:4] != b"%PDF":
-        logger.error(f"  not a PDF (HTTP {r.status_code})")
-        log.record(kind="pdf", name=slug, category=category_of("pdf"), domain=domain,
-                   description=title, source_url=url, origin_format="pdf",
-                   license=lic, status="failed: not pdf")
-        return
+        logger.warning(f"  not a PDF (HTTP {r.status_code}), falling back to website crawler")
+        from . import scrape_html
+        return scrape_html.crawl(domain=domain, slug=slug, start_url=url, lic=lic,
+                                 use_js=False, max_pages=10, allow_prefix=None,
+                                 desc=title, log=log)
     open(os.path.join(folder, slug + ".pdf"), "wb").write(r.content)
     _source_file(folder, title, url, lic)
     out = os.path.join(folder, slug + ".jsonl")

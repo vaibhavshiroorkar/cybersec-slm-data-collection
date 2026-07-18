@@ -15,6 +15,7 @@ lights up the monitor with no extra wiring.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
@@ -420,6 +421,17 @@ def start(stage: str = "all", *, resume: bool = False,
     root = core.data_root()
     logs = _logs_dir()
     os.makedirs(logs, exist_ok=True)
+    
+    # Archive any previous pipeline logs to keep the root directory clean
+    import glob, shutil
+    archive = os.path.join(logs, "archive")
+    os.makedirs(archive, exist_ok=True)
+    for p in glob.glob(os.path.join(logs, "pipeline.*.log")):
+        try:
+            shutil.move(p, os.path.join(archive, os.path.basename(p)))
+        except OSError:
+            pass
+
     # ``resumed`` is read back off the argv that is actually launched, never off
     # the caller's flag. Each stage of a full run is built from its own page's
     # saved settings, so a saved ``resume: true`` on the Clean page puts
@@ -537,32 +549,76 @@ def _force_rmtree(path: str) -> list[str]:
     return failed
 
 
-def reset() -> dict:
-    """Delete **this profile's** pipeline output (its ``data/`` and ``logs/``).
+def reset(stages: set[str] | None = None) -> dict:
+    """Delete pipeline output for the specified stages (or all if None).
 
-    Scoped to the active profile. It used to delete ``<root>/data`` and
-    ``<root>/logs`` wholesale, which took every *other* profile's corpus with it:
-    resetting ubi destroyed cybersec's 1.9M records, from a button labelled as if
-    it only concerned what was on screen.
-
-    Refuses while a run is active (stop it first). The profile's ``data/`` is
-    cleared completely (read-only files included); its ``logs/`` too, except a log
-    file the current process still holds open, which is reported in ``skipped``
-    rather than silently left behind. The curated catalogs under ``sources/`` are
-    never touched. Returns ``{ok, removed, skipped, profile}``.
+    Scoped to the active profile.
+    Refuses while a run is active (stop it first). Returns ``{ok, removed, skipped, profile}``.
     """
     if status()["running"]:
         return {"ok": False, "error": "stop the running pipeline before resetting"}
     profile = core.active_profile()
     removed: list[str] = []
     skipped: list[str] = []
-    for sub, path in (("data", core.data_dir()), ("logs", core.logs_dir())):
-        if not os.path.isdir(path):
+    
+    if not stages or len(stages) >= 5:
+        for sub, path in (("data", core.data_dir()), ("logs", core.logs_dir())):
+            if not os.path.isdir(path):
+                continue
+            skipped.extend(_force_rmtree(path))
+            if os.path.isdir(path):
+                continue
+            removed.append(sub)
+        return {"ok": True, "removed": removed, "skipped": skipped, "profile": profile}
+
+    data_d = core.data_dir()
+    logs_d = core.logs_dir()
+    targets = []
+    
+    if "sourcing" in stages:
+        targets.extend([
+            os.path.join(logs_d, "discovered"),
+        ] + glob.glob(os.path.join(logs_d, "sourcing-summary-*.json")))
+        
+    if "ingest" in stages:
+        targets.extend([
+            os.path.join(data_d, "raw"),
+            os.path.join(logs_d, "ingest_log.sqlite"),
+            os.path.join(logs_d, "completed_sources.txt")
+        ] + glob.glob(os.path.join(logs_d, "ingest-failure-*.json")))
+        
+    if "clean" in stages:
+        targets.extend([
+            os.path.join(data_d, "clean"),
+            os.path.join(logs_d, "clean_report.csv"),
+            os.path.join(logs_d, "clean_report.json"),
+        ])
+        
+    if "eda" in stages:
+        targets.extend([
+            os.path.join(logs_d, "eda_report.json")
+        ] + glob.glob(os.path.join(logs_d, "eda-*.json")))
+        
+    if "schema" in stages:
+        targets.extend([
+            os.path.join(data_d, "final"),
+            os.path.join(logs_d, "normalize_report.json"),
+            os.path.join(logs_d, "schema_validation.json"),
+        ])
+
+    for path in targets:
+        if not os.path.exists(path):
             continue
-        skipped.extend(_force_rmtree(path))
         if os.path.isdir(path):
-            # A locked entry kept the tree alive (only ever the live log file);
-            # data/ has no such handle, so it is always fully removed here.
-            continue
-        removed.append(sub)
+            sk = _force_rmtree(path)
+            skipped.extend(sk)
+            if not os.path.isdir(path):
+                removed.append(os.path.basename(path))
+        else:
+            try:
+                os.remove(path)
+                removed.append(os.path.basename(path))
+            except OSError:
+                skipped.append(path)
+                
     return {"ok": True, "removed": removed, "skipped": skipped, "profile": profile}

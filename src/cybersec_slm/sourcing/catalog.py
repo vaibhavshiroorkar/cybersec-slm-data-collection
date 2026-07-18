@@ -88,6 +88,7 @@ def _defaults(profile: str | None = None) -> dict:
     t = _taxonomy(profile)
     return {name: {"datasets": list(t.datasets.get(name, [])),
                    "text": list(t.text.get(name, [])),
+                   "links": [],
                    "code": t.codes.get(name, ""),
                    "vocab": sorted(t.vocab.get(name, set()))}
             for name in t.subdomains}
@@ -121,6 +122,7 @@ def _normalize(subs: dict, profile: str | None = None) -> dict:
         out[name] = {
             "datasets": [str(k).strip() for k in (spec.get("datasets") or []) if str(k).strip()],
             "text": [str(k).strip() for k in (spec.get("text") or []) if str(k).strip()],
+            "links": [str(k).strip() for k in (spec.get("links") or []) if str(k).strip()],
             "code": code,
             "vocab": vocab,
         }
@@ -253,7 +255,7 @@ def keyword_sets(mode: str = "datasets",
 
 
 def add_subdomain(name: str, *, datasets: list[str] | None = None,
-                  text: list[str] | None = None, code: str | None = None,
+                  text: list[str] | None = None, links: list[str] | None = None, code: str | None = None,
                   vocab: list[str] | None = None,
                   path: str | None = None) -> dict:
     """Add (or replace) a sub-domain and persist; return the updated catalog.
@@ -265,7 +267,7 @@ def add_subdomain(name: str, *, datasets: list[str] | None = None,
     name = validate_subdomain_name((name or "").strip())
     cat = load(path)
     taken = {str(s.get("code") or "").strip() for s in cat.values()} - {""}
-    cat[name] = {"datasets": list(datasets or []), "text": list(text or []),
+    cat[name] = {"datasets": list(datasets or []), "text": list(text or []), "links": list(links or []),
                 "code": (code or "").strip() or _derive_code(name, taken),
                 "vocab": list(vocab or [])}
     save(cat, path)
@@ -274,7 +276,7 @@ def add_subdomain(name: str, *, datasets: list[str] | None = None,
 
 def update_subdomain(old_name: str, *, name: str | None = None,
                      datasets: list[str] | None = None,
-                     text: list[str] | None = None, code: str | None = None,
+                     text: list[str] | None = None, links: list[str] | None = None, code: str | None = None,
                      vocab: list[str] | None = None,
                      path: str | None = None) -> dict:
     """Edit an existing sub-domain in place (optionally renaming it); persist.
@@ -305,6 +307,8 @@ def update_subdomain(old_name: str, *, name: str | None = None,
         spec["datasets"] = list(datasets)
     if text is not None:
         spec["text"] = list(text)
+    if links is not None:
+        spec["links"] = list(links)
     if vocab is not None:
         spec["vocab"] = list(vocab)
     if code is not None:

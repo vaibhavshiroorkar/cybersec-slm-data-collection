@@ -109,9 +109,9 @@ def build_row(result: Result, default_domain: str, *,
 # Sheet values the Category / Original Format columns take, matching what
 # :func:`~.classify.infer_category_and_format` writes for a discovered source, so
 # a hand-added row is indistinguishable from a crawled one.
-CATEGORIES: tuple[str, ...] = ("Dataset", "Repository", "Document", "Website")
+CATEGORIES: tuple[str, ...] = ("Dataset", "Repository", "Document", "Website", "Feed", "API")
 FORMATS: tuple[str, ...] = ("JSONL", "JSON", "CSV", "PARQUET", "XLSX", "TXT",
-                            "PDF", "XML", "HTML")
+                            "PDF", "XML", "HTML", "RSS", "ATOM")
 
 
 def build_manual_row(*, name: str, subdomain: str, link: str,

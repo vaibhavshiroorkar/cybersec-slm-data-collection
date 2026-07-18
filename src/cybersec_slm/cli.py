@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--allowed-langs", nargs="*", default=None,
                    help="language codes to keep (default: en)")
     c.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
-                   help="PII redaction engine (default: regex). 'presidio' adds a "
+                   help="PII redaction engine (default: presidio). 'presidio' adds a "
                         "scoped spaCy NER pass for person names on top of the regex "
                         "pass, at roughly 300x the cost per record; needs "
                         "`uv sync --extra pii-ner`")
@@ -383,7 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--no-crawler", action="store_true",
                    help="skip website (crawl) sources during ingest for this run")
     a.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
-                   help="PII redaction engine for the clean stage (default: regex). "
+                   help="PII redaction engine for the clean stage (default: presidio). "
                         "'presidio' adds a scoped spaCy NER pass for person names at "
                         "roughly 300x the cost per record; needs "
                         "`uv sync --extra pii-ner`")

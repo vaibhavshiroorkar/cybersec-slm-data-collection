@@ -140,7 +140,10 @@ def _pipeline_logs() -> list[str]:
     # "Starting" forever. The pipeline runs as a separate detached process, so its
     # log has a different pid and is never excluded here.
     own = f"pipeline.{os.getpid()}.log"
-    paths = [p for p in glob.glob(os.path.join(_logs(), "pipeline.*.log"))
+    paths = []
+    for pat in ("pipeline.*.log", "archive/pipeline.*.log"):
+        paths.extend(glob.glob(os.path.join(_logs(), pat)))
+    paths = [p for p in paths
              if os.path.basename(p) != own
              and os.path.exists(p) and os.path.getsize(p) > 0]
     return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
@@ -576,7 +579,7 @@ def _jsonl_stats(path: str) -> tuple[int, int]:
         for r, dirs, fs in os.walk(path):
             dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
             for f in fs:
-                if not f.lower().endswith(".jsonl"):
+                if not f.lower().endswith(".jsonl") or f.lower().endswith(".original.jsonl"):
                     continue
                 try:
                     total += os.path.getsize(os.path.join(r, f))
@@ -1473,7 +1476,7 @@ def _count_jsonl_records(path: str) -> int:
         for root, dirs, files in os.walk(path):
             dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
             for name in files:
-                if name.endswith(".jsonl"):
+                if name.endswith(".jsonl") and not name.endswith(".original.jsonl"):
                     count += _count_file_records(os.path.join(root, name))
     except OSError:
         pass
@@ -1619,17 +1622,20 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
                     continue
                 sources += 1
                 _ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
-                # Records are counted, never joined from `_ln` (the catalog's
-                # figure): see the docstring — it was 149% wrong on the live
-                # corpus and blind to 242 fetched sources. Only the measured path
-                # pays for it; the cheap live path defers to cached.raw_records.
+                # Measured size is fast enough (<5ms) for live refreshes.
+                # Lines are interpolated from the catalog's expectation to stay live
+                # without paying the massive cost of a full JSONL file read.
+                actual_size_mb = _jsonl_stats(src.path)[1] / (1024 * 1024)
                 if measure_size:
                     lines += _count_jsonl_records(src.path)
-                # Measured size means a walk per source; the cheap live path uses
-                # the catalog's per-folder size instead so the funnel can refresh
-                # every second without touching the tree.
-                size_mb += (_jsonl_stats(src.path)[1] / (1024 * 1024)
-                            if measure_size else sz)
+                else:
+                    if sz > 0:
+                        lines += _ln * (actual_size_mb / sz)
+                    elif actual_size_mb > 0:
+                        lines += _count_jsonl_records(src.path)
+                    else:
+                        lines += _ln
+                size_mb += actual_size_mb
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}

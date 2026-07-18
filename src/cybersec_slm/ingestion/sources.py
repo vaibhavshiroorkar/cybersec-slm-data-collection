@@ -344,9 +344,9 @@ def _row_to_descriptor(row: dict) -> dict | None:
         prefix = _val(row, "allow_prefix")
         if not prefix:
             p = urlparse(url)
-            prefix = f"{p.scheme}://{p.netloc}{p.path.rsplit('/', 1)[0]}/"
+            prefix = f"{p.scheme}://{p.netloc}/"
         return dict(kind="website", domain=domain, slug=slug, start_url=url,
-                    license=lic, use_js=_bool(_val(row, "use_js")),
+                    license=lic, use_js=_bool(_val(row, "use_js"), default=True),
                     max_pages=_int(_val(row, "max_pages", default="70"), 70),
                     allow_prefix=prefix, description=desc)
     logger.warning(f"unknown kind {kind!r} for source {name!r}; skipping")

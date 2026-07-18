@@ -257,7 +257,7 @@ with ui.section("Run the full pipeline"):
         st.rerun()
 
     def _do_reset() -> None:
-        res = control.reset()
+        res = control.reset(stages=selected_keys)
         if not res.get("ok"):
             st.error(res["error"])
         else:
@@ -270,12 +270,12 @@ with ui.section("Run the full pipeline"):
         st.rerun()
 
     if b[3].button("Reset", disabled=running, use_container_width=True,
-                   help="Permanently delete the entire data/ folder and logs "
+                   help="Permanently delete the data and logs for the selected stages "
                         "(asks to confirm first)"):
         st.session_state["_confirm_reset"] = True
         st.rerun()
     if st.session_state.get("_confirm_reset") and not running:
-        st.warning("This permanently deletes the entire data/ folder and logs. "
+        st.warning("This permanently deletes data and logs for the selected stages. "
                    "This cannot be undone.")
         rc = st.columns(4)
         if rc[0].button("Yes, reset", use_container_width=True):
@@ -291,7 +291,7 @@ with ui.section("Run the full pipeline"):
     elif cstat.get("stale"):
         st.caption("Previous run ended without a clean stop.")
     else:
-        st.caption("Reset asks to confirm, then deletes the entire data/ folder.")
+        st.caption("Reset asks to confirm, then deletes data for the selected stages.")
 
 # ------------------------------------------------------------------- funnel ----
 def _data_funnel_snapshot(measure_size: bool = True) -> dict:
@@ -339,15 +339,10 @@ def _corpus_funnel() -> None:
     reflowing the rest of the page.
     """
     funnel = _data_funnel_snapshot(measure_size=False)
-    # Keyed on the profile too, not just the root: both profiles share one root, so
-    # a root-only key served the other profile's cached counts after a switch.
+    # The 'raw' metrics (size_mb, lines) now grow live from disk in data_funnel()
+    # using linear interpolation, so they stay perfectly in sync with the live
+    # source count without needing long-TTL cached overrides.
     _scope = data.scope()
-    funnel["raw"]["size_mb"] = cached.raw_size_mb(_scope)
-    # Raw records are counted on disk, not read off the catalog, whose Total Lines
-    # understated the live corpus by 149% and knew nothing of 242 fetched sources.
-    # Same treatment as Size: too costly for a 1s tick, so it comes from the
-    # long-TTL cached count.
-    funnel["raw"]["lines"] = cached.raw_records(_scope)
     # Cleaned records grow live as clean workers write; the clean report only lands
     # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
     funnel["cleaned"]["lines"] = cached.cleaned_records(_scope)
@@ -503,10 +498,26 @@ def _pipeline_log() -> None:
     ui.log_box(data.log_tail(200))
 
 
+@st.dialog("Full Pipeline Log", width="large")
+def _show_full_log() -> None:
+    # Read the full log lines and join them with newlines
+    lines = data.full_log()
+    log_text = "\n".join(lines)
+    # language=None prevents PrismJS from crashing the browser tab on huge logs
+    st.code(log_text, language=None)
+    
+    col1, col2 = st.columns([4, 1])
+    if col2.button("Exit / Close", type="primary", use_container_width=True):
+        st.rerun()
+
+
 with ui.section("Pipeline log"):
     if _sess.get("newest_log"):
-        st.caption(f"session (pid) `{_sess.get('pid') or '?'}`  ·  log file "
-                   f"`logs/{os.path.basename(_sess['newest_log'])}`")
+        _col1, _col2 = st.columns([4, 1])
+        _col1.caption(f"session (pid) `{_sess.get('pid') or '?'}`  ·  log file "
+                      f"`logs/{os.path.basename(_sess['newest_log'])}`")
+        if _col2.button("View full log & Copy", use_container_width=True):
+            _show_full_log()
     _pipeline_log()
 
     with st.expander("Session history"):

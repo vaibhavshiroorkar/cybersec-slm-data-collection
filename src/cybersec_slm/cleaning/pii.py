@@ -223,16 +223,14 @@ def _regex_redact(text: str) -> tuple[str, int]:
 class Redactor:
     """Redact PII from text.
 
-    ``engine`` defaults to ``$CYBERSEC_SLM_PII_ENGINE`` and then to ``"regex"``,
-    which needs no models and builds instantly. ``"presidio"`` adds a scoped NER
-    pass for person names on top of the regex pass (see the module docstring for
-    the cost); if Presidio is not installed the request degrades to regex with a
-    warning rather than failing a run mid-flight.
+    ``engine`` defaults to ``$CYBERSEC_SLM_PII_ENGINE`` and then to ``"presidio"``,
+    which runs a regex pass followed by a scoped NER pass (if text is short enough).
+    If Presidio is not installed, it safely degrades to just regex.
     """
 
     def __init__(self, engine: str | None = None,
                  max_presidio_chars: int | None = None):
-        requested = (engine or os.environ.get(_PII_ENGINE_ENV) or "regex").strip().lower()
+        requested = (engine or os.environ.get(_PII_ENGINE_ENV) or "presidio").strip().lower()
         self.engine = "regex"
         self._analyzer = None
         self._anonymizer = None

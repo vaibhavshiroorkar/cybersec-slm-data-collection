@@ -19,147 +19,33 @@ subdomains:
     - entity resolution sanctions dataset
     - Prevention of Money Laundering Act 2002 indiacode
     - PMLA Maintenance of Records Rules 2005 gazette
-    - AML KYC dataset huggingface
-    - anti money laundering dataset kaggle
+    links:
+    - https://rbi.org.in/Scripts/rss.aspx
+    - https://www.unionbankofindia.bank.in
     text:
-    - anti money laundering India
-    - anti money laundering Indian
-    - anti money laundering RBI
-    - anti money laundering India dataset
-    - anti money laundering India filetype:pdf
-    - site:data.gov.in anti money laundering
-    - site:kaggle.com anti money laundering
-    - site:huggingface.co anti money laundering
-    - site:github.com anti money laundering
-    - site:indiacode.nic.in anti money laundering
-    - site:dataful.in anti money laundering
-    - site:zenodo.org anti money laundering
-    - KYC know your customer India
-    - KYC know your customer Indian
-    - KYC know your customer RBI
-    - KYC know your customer India dataset
-    - KYC know your customer India filetype:pdf
-    - site:data.gov.in KYC know your customer
-    - site:kaggle.com KYC know your customer
-    - site:huggingface.co KYC know your customer
-    - site:github.com KYC know your customer
-    - site:indiacode.nic.in KYC know your customer
-    - site:dataful.in KYC know your customer
-    - site:zenodo.org KYC know your customer
-    - suspicious transaction India
-    - suspicious transaction Indian
-    - suspicious transaction RBI
-    - suspicious transaction India dataset
-    - suspicious transaction India filetype:pdf
-    - site:data.gov.in suspicious transaction
-    - site:kaggle.com suspicious transaction
-    - site:huggingface.co suspicious transaction
-    - site:github.com suspicious transaction
-    - site:indiacode.nic.in suspicious transaction
-    - site:dataful.in suspicious transaction
-    - site:zenodo.org suspicious transaction
-    - customer due diligence India
-    - customer due diligence Indian
-    - customer due diligence RBI
-    - customer due diligence India dataset
-    - customer due diligence India filetype:pdf
-    - site:data.gov.in customer due diligence
-    - site:kaggle.com customer due diligence
-    - site:huggingface.co customer due diligence
-    - site:github.com customer due diligence
-    - site:indiacode.nic.in customer due diligence
-    - site:dataful.in customer due diligence
-    - site:zenodo.org customer due diligence
-    - PMLA prevention of money laundering India
-    - PMLA prevention of money laundering Indian
-    - PMLA prevention of money laundering RBI
-    - PMLA prevention of money laundering India dataset
-    - PMLA prevention of money laundering India filetype:pdf
-    - site:data.gov.in PMLA prevention of money laundering
-    - site:kaggle.com PMLA prevention of money laundering
-    - site:huggingface.co PMLA prevention of money laundering
-    - site:github.com PMLA prevention of money laundering
-    - site:indiacode.nic.in PMLA prevention of money laundering
-    - site:dataful.in PMLA prevention of money laundering
-    - site:zenodo.org PMLA prevention of money laundering
-    - financial intelligence FIU India
-    - financial intelligence FIU Indian
-    - financial intelligence FIU RBI
-    - financial intelligence FIU India dataset
-    - financial intelligence FIU India filetype:pdf
-    - site:data.gov.in financial intelligence FIU
-    - site:kaggle.com financial intelligence FIU
-    - site:huggingface.co financial intelligence FIU
-    - site:github.com financial intelligence FIU
-    - site:indiacode.nic.in financial intelligence FIU
-    - site:dataful.in financial intelligence FIU
-    - site:zenodo.org financial intelligence FIU
-    - beneficial ownership India
-    - beneficial ownership Indian
-    - beneficial ownership RBI
-    - beneficial ownership India dataset
-    - beneficial ownership India filetype:pdf
-    - site:data.gov.in beneficial ownership
-    - site:kaggle.com beneficial ownership
-    - site:huggingface.co beneficial ownership
-    - site:github.com beneficial ownership
-    - site:indiacode.nic.in beneficial ownership
-    - site:dataful.in beneficial ownership
-    - site:zenodo.org beneficial ownership
-    - sanctions screening India
-    - sanctions screening Indian
-    - sanctions screening RBI
-    - sanctions screening India dataset
-    - sanctions screening India filetype:pdf
-    - site:data.gov.in sanctions screening
-    - site:kaggle.com sanctions screening
-    - site:huggingface.co sanctions screening
-    - site:github.com sanctions screening
-    - site:indiacode.nic.in sanctions screening
-    - site:dataful.in sanctions screening
-    - site:zenodo.org sanctions screening
-    - fraud detection banking India
-    - fraud detection banking Indian
-    - fraud detection banking RBI
-    - fraud detection banking India dataset
-    - fraud detection banking India filetype:pdf
-    - site:data.gov.in fraud detection banking
-    - site:kaggle.com fraud detection banking
-    - site:huggingface.co fraud detection banking
-    - site:github.com fraud detection banking
-    - site:indiacode.nic.in fraud detection banking
-    - site:dataful.in fraud detection banking
-    - site:zenodo.org fraud detection banking
-    - financial crime India
-    - financial crime Indian
-    - financial crime RBI
-    - financial crime India dataset
-    - financial crime India filetype:pdf
-    - site:data.gov.in financial crime
-    - site:kaggle.com financial crime
-    - site:huggingface.co financial crime
-    - site:github.com financial crime
-    - site:indiacode.nic.in financial crime
-    - site:dataful.in financial crime
-    - site:zenodo.org financial crime
-    - site:unionbankofindia.bank.in "Anti Money Laundering"
-    - site:unionbankofindia.bank.in "Know Your Customer" policy
-    - site:unionbankofindia.bank.in "KYC" filetype:pdf
-    - site:unionbankofindia.bank.in "customer acceptance policy"
-    - site:unionbankofindia.bank.in "PMLA" policy
+    - customer due diligence explained
+    - know your customer process explained
+    - money laundering typologies explained
+    - beneficial ownership identification explained
+    - sanctions screening explained
+    - transaction monitoring rules explained
+    - politically exposed persons explained
+    - risk based approach anti money laundering explained
+    - trade based money laundering explained
+    - correspondent banking risk explained
     vocab:
-    - aml
-    - beneficial ownership
-    - cdd
     - due diligence
-    - financial crime
-    - kyc
+    - aml
     - money laundering
-    - pmla
+    - terrorist financing
+    - financial crime
+    - beneficial ownership
+    - suspicious transaction
     - politically exposed
     - sanctions
-    - suspicious transaction
-    - terrorist financing
+    - pmla
+    - cdd
+    - kyc
   Compliance and Risk Management:
     code: COMPLIANCE_RISK
     datasets:
@@ -179,170 +65,33 @@ subdomains:
     - Banking Regulation Act 1949 indiacode
     - Reserve Bank of India Act 1934 indiacode
     - financial regulatory filings corpus
+    links:
+    - https://rbi.org.in/Scripts/rss.aspx
+    - https://www.unionbankofindia.bank.in/en/home
     text:
-    - banking regulation India
-    - banking regulation Indian
-    - banking regulation RBI
-    - banking regulation India dataset
-    - banking regulation India filetype:pdf
-    - site:data.gov.in banking regulation
-    - site:kaggle.com banking regulation
-    - site:huggingface.co banking regulation
-    - site:github.com banking regulation
-    - site:indiacode.nic.in banking regulation
-    - site:dataful.in banking regulation
-    - site:zenodo.org banking regulation
-    - credit risk India
-    - credit risk Indian
-    - credit risk RBI
-    - credit risk India dataset
-    - credit risk India filetype:pdf
-    - site:data.gov.in credit risk
-    - site:kaggle.com credit risk
-    - site:huggingface.co credit risk
-    - site:github.com credit risk
-    - site:indiacode.nic.in credit risk
-    - site:dataful.in credit risk
-    - site:zenodo.org credit risk
-    - operational risk India
-    - operational risk Indian
-    - operational risk RBI
-    - operational risk India dataset
-    - operational risk India filetype:pdf
-    - site:data.gov.in operational risk
-    - site:kaggle.com operational risk
-    - site:huggingface.co operational risk
-    - site:github.com operational risk
-    - site:indiacode.nic.in operational risk
-    - site:dataful.in operational risk
-    - site:zenodo.org operational risk
-    - Basel III capital India
-    - Basel III capital Indian
-    - Basel III capital RBI
-    - Basel III capital India dataset
-    - Basel III capital India filetype:pdf
-    - site:data.gov.in Basel III capital
-    - site:kaggle.com Basel III capital
-    - site:huggingface.co Basel III capital
-    - site:github.com Basel III capital
-    - site:indiacode.nic.in Basel III capital
-    - site:dataful.in Basel III capital
-    - site:zenodo.org Basel III capital
-    - RBI master direction India
-    - RBI master direction Indian
-    - RBI master direction RBI
-    - RBI master direction India dataset
-    - RBI master direction India filetype:pdf
-    - site:data.gov.in RBI master direction
-    - site:kaggle.com RBI master direction
-    - site:huggingface.co RBI master direction
-    - site:github.com RBI master direction
-    - site:indiacode.nic.in RBI master direction
-    - site:dataful.in RBI master direction
-    - site:zenodo.org RBI master direction
-    - regulatory compliance India
-    - regulatory compliance Indian
-    - regulatory compliance RBI
-    - regulatory compliance India dataset
-    - regulatory compliance India filetype:pdf
-    - site:data.gov.in regulatory compliance
-    - site:kaggle.com regulatory compliance
-    - site:huggingface.co regulatory compliance
-    - site:github.com regulatory compliance
-    - site:indiacode.nic.in regulatory compliance
-    - site:dataful.in regulatory compliance
-    - site:zenodo.org regulatory compliance
-    - financial stability India
-    - financial stability Indian
-    - financial stability RBI
-    - financial stability India dataset
-    - financial stability India filetype:pdf
-    - site:data.gov.in financial stability
-    - site:kaggle.com financial stability
-    - site:huggingface.co financial stability
-    - site:github.com financial stability
-    - site:indiacode.nic.in financial stability
-    - site:dataful.in financial stability
-    - site:zenodo.org financial stability
-    - NPA non performing assets India
-    - NPA non performing assets Indian
-    - NPA non performing assets RBI
-    - NPA non performing assets India dataset
-    - NPA non performing assets India filetype:pdf
-    - site:data.gov.in NPA non performing assets
-    - site:kaggle.com NPA non performing assets
-    - site:huggingface.co NPA non performing assets
-    - site:github.com NPA non performing assets
-    - site:indiacode.nic.in NPA non performing assets
-    - site:dataful.in NPA non performing assets
-    - site:zenodo.org NPA non performing assets
-    - bank supervision India
-    - bank supervision Indian
-    - bank supervision RBI
-    - bank supervision India dataset
-    - bank supervision India filetype:pdf
-    - site:data.gov.in bank supervision
-    - site:kaggle.com bank supervision
-    - site:huggingface.co bank supervision
-    - site:github.com bank supervision
-    - site:indiacode.nic.in bank supervision
-    - site:dataful.in bank supervision
-    - site:zenodo.org bank supervision
-    - risk management framework India
-    - risk management framework Indian
-    - risk management framework RBI
-    - risk management framework India dataset
-    - risk management framework India filetype:pdf
-    - site:data.gov.in risk management framework
-    - site:kaggle.com risk management framework
-    - site:huggingface.co risk management framework
-    - site:github.com risk management framework
-    - site:indiacode.nic.in risk management framework
-    - site:dataful.in risk management framework
-    - site:zenodo.org risk management framework
-    - prudential norms India
-    - prudential norms Indian
-    - prudential norms RBI
-    - prudential norms India dataset
-    - prudential norms India filetype:pdf
-    - site:data.gov.in prudential norms
-    - site:kaggle.com prudential norms
-    - site:huggingface.co prudential norms
-    - site:github.com prudential norms
-    - site:indiacode.nic.in prudential norms
-    - site:dataful.in prudential norms
-    - site:zenodo.org prudential norms
-    - banking statistics India
-    - banking statistics Indian
-    - banking statistics RBI
-    - banking statistics India dataset
-    - banking statistics India filetype:pdf
-    - site:data.gov.in banking statistics
-    - site:kaggle.com banking statistics
-    - site:huggingface.co banking statistics
-    - site:github.com banking statistics
-    - site:indiacode.nic.in banking statistics
-    - site:dataful.in banking statistics
-    - site:zenodo.org banking statistics
-    - site:unionbankofindia.bank.in "Basel III" filetype:pdf
-    - site:unionbankofindia.bank.in "Risk Management Policy"
-    - site:unionbankofindia.bank.in "Pillar 3" disclosures
-    - site:unionbankofindia.bank.in "capital adequacy"
-    - site:unionbankofindia.bank.in "credit risk" policy
-    - site:unionbankofindia.bank.in compliance policy filetype:pdf
+    - Basel III capital framework explained
+    - operational risk management banking explained
+    - credit risk management explained
+    - market risk management explained
+    - internal capital adequacy assessment process explained
+    - bank stress testing methodology explained
+    - non performing asset classification explained
+    - risk based supervision explained
+    - compliance function in banks explained
+    - regulatory reporting explained
     vocab:
-    - basel
     - capital adequacy
+    - prudential
+    - basel
     - compliance
     - credit risk
+    - regulatory reporting
     - market risk
     - npa
-    - operational risk
-    - provisioning
-    - prudential
-    - regulatory reporting
-    - risk management
     - stress testing
+    - provisioning
+    - operational risk
+    - risk management
   Corporate Governance:
     code: CORP_GOVERNANCE
     datasets:
@@ -358,144 +107,30 @@ subdomains:
     - annual report corpus dataset
     - Companies Act 2013 indiacode
     - corporate ownership structure dataset
+    links:
+    - https://rbi.org.in/Scripts/rss.aspx
+    - https://www.unionbankofindia.bank.in
     text:
-    - corporate governance India
-    - corporate governance Indian
-    - corporate governance RBI
-    - corporate governance India dataset
-    - corporate governance India filetype:pdf
-    - site:data.gov.in corporate governance
-    - site:kaggle.com corporate governance
-    - site:huggingface.co corporate governance
-    - site:github.com corporate governance
-    - site:indiacode.nic.in corporate governance
-    - site:dataful.in corporate governance
-    - site:zenodo.org corporate governance
-    - SEBI LODR listing obligations India
-    - SEBI LODR listing obligations Indian
-    - SEBI LODR listing obligations RBI
-    - SEBI LODR listing obligations India dataset
-    - SEBI LODR listing obligations India filetype:pdf
-    - site:data.gov.in SEBI LODR listing obligations
-    - site:kaggle.com SEBI LODR listing obligations
-    - site:huggingface.co SEBI LODR listing obligations
-    - site:github.com SEBI LODR listing obligations
-    - site:indiacode.nic.in SEBI LODR listing obligations
-    - site:dataful.in SEBI LODR listing obligations
-    - site:zenodo.org SEBI LODR listing obligations
-    - board of directors India
-    - board of directors Indian
-    - board of directors RBI
-    - board of directors India dataset
-    - board of directors India filetype:pdf
-    - site:data.gov.in board of directors
-    - site:kaggle.com board of directors
-    - site:huggingface.co board of directors
-    - site:github.com board of directors
-    - site:indiacode.nic.in board of directors
-    - site:dataful.in board of directors
-    - site:zenodo.org board of directors
-    - Companies Act 2013 India
-    - Companies Act 2013 Indian
-    - Companies Act 2013 RBI
-    - Companies Act 2013 India dataset
-    - Companies Act 2013 India filetype:pdf
-    - site:data.gov.in Companies Act 2013
-    - site:kaggle.com Companies Act 2013
-    - site:huggingface.co Companies Act 2013
-    - site:github.com Companies Act 2013
-    - site:indiacode.nic.in Companies Act 2013
-    - site:dataful.in Companies Act 2013
-    - site:zenodo.org Companies Act 2013
-    - secretarial compliance India
-    - secretarial compliance Indian
-    - secretarial compliance RBI
-    - secretarial compliance India dataset
-    - secretarial compliance India filetype:pdf
-    - site:data.gov.in secretarial compliance
-    - site:kaggle.com secretarial compliance
-    - site:huggingface.co secretarial compliance
-    - site:github.com secretarial compliance
-    - site:indiacode.nic.in secretarial compliance
-    - site:dataful.in secretarial compliance
-    - site:zenodo.org secretarial compliance
-    - related party transactions India
-    - related party transactions Indian
-    - related party transactions RBI
-    - related party transactions India dataset
-    - related party transactions India filetype:pdf
-    - site:data.gov.in related party transactions
-    - site:kaggle.com related party transactions
-    - site:huggingface.co related party transactions
-    - site:github.com related party transactions
-    - site:indiacode.nic.in related party transactions
-    - site:dataful.in related party transactions
-    - site:zenodo.org related party transactions
-    - shareholding pattern India
-    - shareholding pattern Indian
-    - shareholding pattern RBI
-    - shareholding pattern India dataset
-    - shareholding pattern India filetype:pdf
-    - site:data.gov.in shareholding pattern
-    - site:kaggle.com shareholding pattern
-    - site:huggingface.co shareholding pattern
-    - site:github.com shareholding pattern
-    - site:indiacode.nic.in shareholding pattern
-    - site:dataful.in shareholding pattern
-    - site:zenodo.org shareholding pattern
-    - annual report bank India
-    - annual report bank Indian
-    - annual report bank RBI
-    - annual report bank India dataset
-    - annual report bank India filetype:pdf
-    - site:data.gov.in annual report bank
-    - site:kaggle.com annual report bank
-    - site:huggingface.co annual report bank
-    - site:github.com annual report bank
-    - site:indiacode.nic.in annual report bank
-    - site:dataful.in annual report bank
-    - site:zenodo.org annual report bank
-    - insider trading regulation India
-    - insider trading regulation Indian
-    - insider trading regulation RBI
-    - insider trading regulation India dataset
-    - insider trading regulation India filetype:pdf
-    - site:data.gov.in insider trading regulation
-    - site:kaggle.com insider trading regulation
-    - site:huggingface.co insider trading regulation
-    - site:github.com insider trading regulation
-    - site:indiacode.nic.in insider trading regulation
-    - site:dataful.in insider trading regulation
-    - site:zenodo.org insider trading regulation
-    - disclosure requirements India
-    - disclosure requirements Indian
-    - disclosure requirements RBI
-    - disclosure requirements India dataset
-    - disclosure requirements India filetype:pdf
-    - site:data.gov.in disclosure requirements
-    - site:kaggle.com disclosure requirements
-    - site:huggingface.co disclosure requirements
-    - site:github.com disclosure requirements
-    - site:indiacode.nic.in disclosure requirements
-    - site:dataful.in disclosure requirements
-    - site:zenodo.org disclosure requirements
-    - site:unionbankofindia.bank.in "Secretarial Compliance Report" filetype:pdf
-    - site:unionbankofindia.bank.in "Code of Corporate Governance"
-    - site:unionbankofindia.bank.in "Whistle Blower Policy"
-    - site:unionbankofindia.bank.in "board of directors"
-    - site:unionbankofindia.bank.in annual report filetype:pdf
-    - site:unionbankofindia.bank.in "policies" filetype:pdf
+    - corporate governance principles explained
+    - board committee structure explained
+    - related party transactions explained
+    - insider trading regulation explained
+    - director duties and responsibilities explained
+    - board evaluation process explained
+    - audit committee role explained
+    - shareholder rights explained
+    - corporate disclosure obligations explained
     vocab:
-    - annual report
-    - board committee
     - board of directors
-    - companies act
-    - corporate governance
-    - director
     - disclosure
-    - insider trading
-    - related party
+    - board committee
+    - corporate governance
+    - annual report
+    - director
     - shareholder
+    - companies act
+    - related party
+    - insider trading
   Internal Audit:
     code: INTERNAL_AUDIT
     datasets:
@@ -511,141 +146,27 @@ subdomains:
     - control deficiency dataset
     - process mining audit event log dataset
     - audit analytics dataset github
+    links:
+    - https://rbi.org.in/Scripts/rss.aspx
+    - https://www.unionbankofindia.bank.in
     text:
-    - internal audit banking India
-    - internal audit banking Indian
-    - internal audit banking RBI
-    - internal audit banking India dataset
-    - internal audit banking India filetype:pdf
-    - site:data.gov.in internal audit banking
-    - site:kaggle.com internal audit banking
-    - site:huggingface.co internal audit banking
-    - site:github.com internal audit banking
-    - site:indiacode.nic.in internal audit banking
-    - site:dataful.in internal audit banking
-    - site:zenodo.org internal audit banking
-    - risk based internal audit RBIA India
-    - risk based internal audit RBIA Indian
-    - risk based internal audit RBIA RBI
-    - risk based internal audit RBIA India dataset
-    - risk based internal audit RBIA India filetype:pdf
-    - site:data.gov.in risk based internal audit RBIA
-    - site:kaggle.com risk based internal audit RBIA
-    - site:huggingface.co risk based internal audit RBIA
-    - site:github.com risk based internal audit RBIA
-    - site:indiacode.nic.in risk based internal audit RBIA
-    - site:dataful.in risk based internal audit RBIA
-    - site:zenodo.org risk based internal audit RBIA
-    - concurrent audit India
-    - concurrent audit Indian
-    - concurrent audit RBI
-    - concurrent audit India dataset
-    - concurrent audit India filetype:pdf
-    - site:data.gov.in concurrent audit
-    - site:kaggle.com concurrent audit
-    - site:huggingface.co concurrent audit
-    - site:github.com concurrent audit
-    - site:indiacode.nic.in concurrent audit
-    - site:dataful.in concurrent audit
-    - site:zenodo.org concurrent audit
-    - statutory audit banks India
-    - statutory audit banks Indian
-    - statutory audit banks RBI
-    - statutory audit banks India dataset
-    - statutory audit banks India filetype:pdf
-    - site:data.gov.in statutory audit banks
-    - site:kaggle.com statutory audit banks
-    - site:huggingface.co statutory audit banks
-    - site:github.com statutory audit banks
-    - site:indiacode.nic.in statutory audit banks
-    - site:dataful.in statutory audit banks
-    - site:zenodo.org statutory audit banks
-    - audit committee India
-    - audit committee Indian
-    - audit committee RBI
-    - audit committee India dataset
-    - audit committee India filetype:pdf
-    - site:data.gov.in audit committee
-    - site:kaggle.com audit committee
-    - site:huggingface.co audit committee
-    - site:github.com audit committee
-    - site:indiacode.nic.in audit committee
-    - site:dataful.in audit committee
-    - site:zenodo.org audit committee
-    - internal control India
-    - internal control Indian
-    - internal control RBI
-    - internal control India dataset
-    - internal control India filetype:pdf
-    - site:data.gov.in internal control
-    - site:kaggle.com internal control
-    - site:huggingface.co internal control
-    - site:github.com internal control
-    - site:indiacode.nic.in internal control
-    - site:dataful.in internal control
-    - site:zenodo.org internal control
-    - inspection report bank India
-    - inspection report bank Indian
-    - inspection report bank RBI
-    - inspection report bank India dataset
-    - inspection report bank India filetype:pdf
-    - site:data.gov.in inspection report bank
-    - site:kaggle.com inspection report bank
-    - site:huggingface.co inspection report bank
-    - site:github.com inspection report bank
-    - site:indiacode.nic.in inspection report bank
-    - site:dataful.in inspection report bank
-    - site:zenodo.org inspection report bank
-    - audit findings India
-    - audit findings Indian
-    - audit findings RBI
-    - audit findings India dataset
-    - audit findings India filetype:pdf
-    - site:data.gov.in audit findings
-    - site:kaggle.com audit findings
-    - site:huggingface.co audit findings
-    - site:github.com audit findings
-    - site:indiacode.nic.in audit findings
-    - site:dataful.in audit findings
-    - site:zenodo.org audit findings
-    - forensic audit India
-    - forensic audit Indian
-    - forensic audit RBI
-    - forensic audit India dataset
-    - forensic audit India filetype:pdf
-    - site:data.gov.in forensic audit
-    - site:kaggle.com forensic audit
-    - site:huggingface.co forensic audit
-    - site:github.com forensic audit
-    - site:indiacode.nic.in forensic audit
-    - site:dataful.in forensic audit
-    - site:zenodo.org forensic audit
-    - continuous auditing India
-    - continuous auditing Indian
-    - continuous auditing RBI
-    - continuous auditing India dataset
-    - continuous auditing India filetype:pdf
-    - site:data.gov.in continuous auditing
-    - site:kaggle.com continuous auditing
-    - site:huggingface.co continuous auditing
-    - site:github.com continuous auditing
-    - site:indiacode.nic.in continuous auditing
-    - site:dataful.in continuous auditing
-    - site:zenodo.org continuous auditing
-    - site:unionbankofindia.bank.in "Policy for Engagement of Statutory Branch Auditors"
-    - site:unionbankofindia.bank.in "Audit and Inspection"
-    - site:unionbankofindia.bank.in "Statutory Branch Auditors"
-    - site:unionbankofindia.bank.in "concurrent audit"
-    - site:unionbankofindia.bank.in "internal audit" policy
-    - site:unionbankofindia.bank.in "Risk Based Internal Audit"
+    - risk based internal audit explained
+    - internal audit framework explained
+    - concurrent audit banking explained
+    - internal control over financial reporting explained
+    - audit sampling methodology explained
+    - three lines of defence model explained
+    - audit evidence and documentation explained
+    - internal audit charter explained
+    - audit planning methodology explained
     vocab:
-    - audit evidence
-    - audit finding
-    - audit sampling
-    - concurrent audit
-    - control deficiency
-    - internal audit
-    - internal control
     - rbia
     - three lines of defence
+    - internal control
     - workpaper
+    - control deficiency
+    - audit sampling
+    - audit finding
+    - internal audit
+    - audit evidence
+    - concurrent audit

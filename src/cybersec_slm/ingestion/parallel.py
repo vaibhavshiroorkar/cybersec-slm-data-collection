@@ -56,6 +56,7 @@ POLL_INTERVAL_S = 5.0              # wait() granularity for the consume loop
 DEFAULT_SOURCE_TIMEOUT_S = 1800.0  # per-source wall-clock budget (30 min)
 MAX_POOL_REBUILDS = 5              # allow several pool restarts on timeout / broken pool
 MAX_SOURCE_RETRIES = 2             # resubmit transiently-failing sources twice
+RETRY_DELAY_S = 5.0                # wait 5 seconds before resubmitting to pool
 
 
 def _default_workers() -> int:
@@ -150,12 +151,6 @@ def _clean_source(src_dir: str, sid: str, raw_root: str,
 def _clean_chunk(chunk: tuple, sid: str, limit: int | None,
                  drop_non_english: bool, out_dirs: tuple[str, str, str]
                  ) -> tuple[str, list[dict]]:
-    """Pool worker: clean one window into the roots the PARENT resolved.
-
-    The roots are passed in, never read from this process's module globals: a
-    spawned worker rebuilds them from the real data root, so a test (or any caller)
-    that redirected them would otherwise be ignored and the live corpus written to.
-    """
     clean_dir, flagged_dir, dropped_dir = out_dirs
     rows = cleaning_pipeline.clean_chunk(
         chunk, clean_data_dir=clean_dir, flagged_dir=flagged_dir,
@@ -164,25 +159,6 @@ def _clean_chunk(chunk: tuple, sid: str, limit: int | None,
 
 
 def _clean_work(to_clean: list[tuple[str, str]], raw_root: str) -> list[tuple]:
-    """``[(sid, chunk), ...]`` for every source to clean, smallest source first.
-
-    One entry per *window*, not per source: a source whose file is over the shard
-    threshold contributes several, which is what lets the pool put more than one
-    worker on a single huge file.
-
-    Ordering is by SOURCE (smallest first), keeping a source's windows together,
-    because the ledger records a source only once all of its windows are done.
-    Ordering by window size instead interleaves sources, so every worker chews the
-    biggest source's windows at once and *no* source completes for hours — leaving
-    the run with no checkpoint to resume from, no rate to estimate from, and a Quick
-    finish that would discard all of it.
-
-    Smallest-first costs nothing in makespan here. The classic "biggest task first"
-    rule guards against a huge task becoming the straggler, but sharding already
-    caps every window at roughly one budget, so the windows are near-equal and a
-    big source is simply many of them — it still fills every worker when its turn
-    comes.
-    """
     by_source: list[tuple[int, str, list]] = []
     for src_dir, sid in to_clean:
         if not os.path.isdir(src_dir):
@@ -206,22 +182,6 @@ def _label(d) -> str:
 
 def _run_pool(descriptors, *, submit, on_result, workers: int,
               source_timeout: float, summary: dict, ctx=None) -> dict:
-    """Drive a ProcessPoolExecutor over `descriptors`, generically.
-
-    This owns every hard part of the parallel run and knows nothing about fetch
-    vs clean:
-
-    * ``submit(pool, descriptor) -> Future`` submits one descriptor's work.
-    * ``on_result(descriptor, meta) -> bool`` records a finished result; it must
-      return ``False`` for an unknown/failed result so the runner retries it.
-
-    The runner keeps ``workers`` submissions in flight, consumes with
-    ``wait(FIRST_COMPLETED)``, sweeps per-source timeouts, handles a
-    ``BrokenProcessPool`` by re-queueing survivors and rebuilding (up to
-    ``MAX_POOL_REBUILDS``), retries transiently-failing sources up to
-    ``MAX_SOURCE_RETRIES``, and drains any descriptors left unconsumed when a round
-    ends early. It mutates ``summary["failed"]`` and ``summary["timed_out"]``.
-    """
     ctx = ctx or mp.get_context("spawn")
     retries: dict[str, int] = {}
     pending_descriptors = list(descriptors)
@@ -234,6 +194,7 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
         started: dict = {}
         fut_desc: dict = {}
         remaining: set = set()
+        delayed_retries: list[tuple[float, dict]] = []
 
         def _submit(d, pool=pool, started=started, fut_desc=fut_desc,
                     remaining=remaining):
@@ -253,29 +214,36 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
             k = descriptor_key(d)
             if retries.get(k, 0) < MAX_SOURCE_RETRIES:
                 retries[k] = retries.get(k, 0) + 1
-                _submit(d)                 # resubmit into the SAME live pool
+                # Delay the retry to avoid instantly slamming a rate-limited server
+                delayed_retries.append((_now() + RETRY_DELAY_S, d))
             else:
-                # Terminally failed after all retries: record its key so a
-                # ``--resume`` run checkpoints past it instead of re-grinding a
-                # deterministically-failing source (e.g. a shard the JSON writer
-                # cannot serialize) on every restart.
                 summary["failed"] += 1
                 summary.setdefault("failed_keys", []).append(k)
 
         broke = timed_out = False
         try:
-            while remaining:
+            while remaining or delayed_retries:
+                # Process any retries that have waited out their delay period
+                now = _now()
+                ready_to_retry = [item for item in delayed_retries if item[0] <= now]
+                for item in ready_to_retry:
+                    delayed_retries.remove(item)
+                    _submit(item[1])
+
+                # If we have delayed retries but no active futures, sleep briefly
+                if not remaining:
+                    time.sleep(0.5)
+                    continue
+
                 done, _pend = wait(remaining, timeout=POLL_INTERVAL_S,
                                    return_when=FIRST_COMPLETED)
+                
                 for fut in done:
                     remaining.discard(fut)
                     d = fut_desc[fut]
                     try:
                         meta = fut.result()
                     except BrokenProcessPool:
-                        # Pool is dead: re-queue this descriptor (already
-                        # discarded from `remaining`) plus the survivors,
-                        # which the outer handler re-queues, then rebuild.
                         pending_descriptors.append(d)
                         raise
                     except Exception as ex:
@@ -292,6 +260,7 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                         _submit(next(pending_iter))
                     except StopIteration:
                         pass
+                
                 now = _now()
                 overdue = [f for f in remaining
                            if now - started[f] > source_timeout]
@@ -311,11 +280,9 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
             broke = True
         finally:
             _force_shutdown(pool)
-            # A round that ends early (timeout/broke) leaves descriptors still
-            # sitting unconsumed in this round's local iterator - only in-flight
-            # futures got re-queued above. Drain the rest back into
-            # pending_descriptors so they aren't silently dropped from the run.
             pending_descriptors.extend(pending_iter)
+            # Salvage delayed retries back into the pending queue for the next pool rebuild
+            pending_descriptors.extend([item[1] for item in delayed_retries])
 
         if timed_out or broke:
             rebuilds += 1
@@ -323,8 +290,6 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                 logger.error(f"  giving up on {len(pending_descriptors)} sources "
                              f"after {MAX_POOL_REBUILDS} pool rebuilds")
                 summary["failed"] += len(pending_descriptors)
-                # A source that keeps breaking the pool is deterministically bad;
-                # checkpoint the abandoned batch so ``--resume`` skips it.
                 summary.setdefault("failed_keys", []).extend(
                     descriptor_key(d) for d in pending_descriptors)
                 pending_descriptors = []
@@ -340,27 +305,7 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
                domains: list[str] | None = None,
                sources_only: list[str] | None = None,
                scan_hazards: bool = True) -> dict:
-    """Fetch every source to ``data/raw/`` (the ingest stage); no cleaning.
-
-    Each source is fetched and passed through the license + light-EDA gate by a
-    fetch-only worker (``process_source(clean=False)``); its raw folder is left in
-    place for the separate clean stage. Fresh (non-resume) wipes ``data/raw/`` and
-    the resume ledger first; ``resume`` skips sources already fetched. With
-    ``crawl=False`` website (crawl) sources are recorded as skipped, not fetched.
-
-    ``domains`` restricts the run to those Sub-Domains (a *selective* ingest):
-    only their sources are fetched, and a fresh run wipes only those Sub-Domains'
-    ``data/raw/<domain>/`` folders (leaving every other Sub-Domain and the resume
-    ledger untouched).
-
-    ``sources_only`` narrows the run further to specific sources, identified by
-    their catalog ``Dataset Link`` (== :func:`descriptor_key`); it intersects with
-    ``domains``. Because a source's raw folder name is computed at fetch time
-    (:func:`fetch._folder` derives it from owner/name for HF/Kaggle), a fresh
-    row-level run performs *no* directory wipe and simply re-fetches the chosen
-    sources over their existing folders. Cleaning, cross-source dedup, and raw
-    deletion all belong to :func:`run_clean`.
-    """
+    
     os.environ["CYBERSEC_SLM_DATA_ROOT"] = core.DATA_ROOT
     max_mb = max_source_gb * 1024 if max_source_gb else None
     descriptors = sources.load_descriptors(spec or sources.DEFAULT_CATALOG,
@@ -403,12 +348,8 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
             logger.info("ingest: resume - all sources already fetched")
             return {**_empty_summary(), "all_done": True}
     elif picked_sources:
-        # Row-level fresh run: surgical re-fetch of the chosen sources over their
-        # existing folders; no wipe (folder names are only known at fetch time).
         pass
     elif selected:
-        # Selective fresh run: wipe only the chosen Sub-Domains, keep the rest of
-        # data/raw/ and the resume ledger intact.
         for dom in selected:
             _wipe_dir(os.path.join(core.RAW_DATA, dom))
     else:
@@ -441,13 +382,10 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
             summary["skipped"] += 1
             ledger.write(descriptor_key(d) + "\n"); ledger.flush()
         elif status == "rejected":
-            # A gate rejection (not a PDF, no JSONL produced, license-excluded) is
-            # deterministic, so checkpoint it too: ``--resume`` then skips it
-            # instead of re-fetching a source that will only be rejected again.
             summary["rejected"] += 1
             ledger.write(descriptor_key(d) + "\n"); ledger.flush()
         else:
-            return False   # unknown/"failed": _run_pool decides retry vs fail
+            return False 
         return True
 
     def _submit(pool, d):
@@ -458,9 +396,6 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
     try:
         _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
                   source_timeout=source_timeout, summary=summary, ctx=ctx)
-        # Checkpoint terminally-failed sources (crashed the worker or broke the
-        # pool past every retry) so a ``--resume`` run continues past them rather
-        # than re-grinding the same deterministic failures each restart.
         for k in summary.get("failed_keys", []):
             ledger.write(k + "\n")
         ledger.flush()
@@ -478,7 +413,6 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 # ── Stage 3: Clean (whole tree + cross-source dedup) ──────────────────────────
 
 def _split_source_id(sid: str) -> tuple[str, str] | None:
-    """Parse a ``<sub-domain>/<source>`` raw-folder id into its two segments."""
     dom, _, src = str(sid).replace("\\", "/").partition("/")
     dom, src = dom.strip("/ "), src.strip("/ ")
     return (dom, src) if dom and src else None
@@ -489,38 +423,7 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
               domains: list[str] | None = None,
               sources_only: list[str] | None = None,
               workers: int | None = None) -> dict:
-    """Clean the whole ``data/raw/`` tree into ``data/clean/``, then dedup (stage 3).
-
-    The clean stage of the pipeline. Cleans every fetched source in one
-    pass (per-source transforms, per-source dedup disabled), writes
-    ``logs/clean_report.csv``, then runs the single deterministic cross-source
-    dedup pass (:func:`cleaning.pipeline.final_global_dedup`). ``data/raw/`` is
-    **retained** after cleaning by default; pass ``keep_raw=False`` to delete it.
-    Fresh (non-resume) wipes ``data/clean/`` and the dedup + report state first;
-    ``resume`` continues a partial dedup pass.
-
-    ``domains`` restricts the run to those Sub-Domains (a *selective* clean): only
-    their ``data/raw/<domain>/`` subtrees are cleaned, a fresh run wipes only those
-    Sub-Domains' ``data/clean/<domain>/`` folders (every other Sub-Domain's cleaned
-    output is preserved), and ``keep_raw=False`` deletes only the selected raw
-    folders. The cross-source dedup pass still runs over the whole ``data/clean/``
-    tree so cross-domain duplicates are resolved.
-
-    ``sources_only`` narrows the run to specific raw source folders, each given as
-    a ``<sub-domain>/<source>`` path; it takes precedence over ``domains`` (the UI
-    resolves the row selection within the chosen sub-domains). A fresh run wipes
-    only those sources' ``data/clean/<domain>/<source>/`` folders, and
-    ``keep_raw=False`` deletes only those raw source folders.
-
-    Cross-source dedup folds into this stage (there is no separate "dedup" stage).
-
-    ``workers`` is the process-pool size for the per-source cleaning pass; ``None``
-    or ``<= 1`` cleans sequentially. Parallelism does not change the output: each
-    source is cleaned independently in a worker and the single deterministic
-    cross-source dedup pass runs once afterward over the whole clean tree. The CLI
-    (``cybersec-slm clean`` and the full ``all`` run) defaults this to the physical
-    core count (capped at 8) so cleaning uses the real cores unless overridden.
-    """
+    
     raw_root = core.RAW_DATA
     selected = list(domains) if domains else None
     picked = [p for p in (_split_source_id(s) for s in (sources_only or [])) if p]
@@ -549,10 +452,6 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
         logger.warning("clean: no raw data to clean (run `cybersec-slm ingest` first)")
         return {"files": 0, "in": 0, "out": 0, "dedup": {}}
 
-    # clean_one_source scans find_input_files under the given dir with the
-    # process-cached transformers (deduper disabled); passing the raw root cleans
-    # the whole tree, passing one Sub-Domain folder cleans just that Sub-Domain.
-    # Cross-source dedup follows, over the whole clean tree either way.
     if picked:
         sources = []
         for dom, src in picked:
@@ -594,10 +493,6 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
             ledger.flush()
     else:
         work = _clean_work(to_clean, raw_root)
-        # A source is only DONE when every one of its windows is, so the ledger
-        # keeps meaning exactly what it meant before sharding: "this source is
-        # fully cleaned, skip it on resume". Anything less would let a resume skip
-        # a source whose big file was only half done.
         outstanding: dict[str, int] = {}
         for sid, _chunk in work:
             outstanding[sid] = outstanding.get(sid, 0) + 1
@@ -607,8 +502,6 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
                     f"({len(work)} window(s) across {len(outstanding)} source(s)"
                     + (f", {sharded} extra from sharding big files)" if sharded
                        else ")"))
-        # Resolve the output roots HERE, in the parent, and hand them to the
-        # workers (see _clean_chunk).
         out_dirs = (cleaning_pipeline.OUT_CLEAN_DATA, cleaning_pipeline.OUT_FLAGGED,
                     cleaning_pipeline.OUT_DROPPED)
         ctx = mp.get_context("spawn")
@@ -628,16 +521,12 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
                     raise
                 rows.extend(src_rows)
                 outstanding[sid] -= 1
-                if outstanding[sid] == 0:          # every window of this source done
+                if outstanding[sid] == 0:         
                     ledger.write(sid + "\n")
                     ledger.flush()
     ledger.close()
 
     if rows:
-        # Merge over whatever the report already holds: this pass only carries the
-        # sources it cleaned (a resume skips the rest via the ledger, a selective
-        # run touches only its own), so writing `rows` alone would shrink the
-        # report to that subset.
         cleaning_pipeline._write_report(cleaning_pipeline.merge_report_rows(rows))
 
     dedup = cleaning_pipeline.final_global_dedup(
@@ -663,12 +552,6 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
 # ── Sequential clean of an already-fetched raw tree ───────────────────────────
 
 def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
-    """Clean the whole existing data/raw/ tree in one sequential pass (dedup off).
-
-    For callers that fetch separately and then need a single clean pass over
-    everything already on disk. Deterministic cross-source dedup is left to
-    `final_global_dedup`. The CLI clean stage uses `run_clean` instead.
-    """
     from ..cleaning.dedup import Deduper
     from ..cleaning.langfilter import LangFilter
     from ..cleaning.pii import Redactor
@@ -699,7 +582,6 @@ def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
 # ── Phase 3: Deep Global EDA ─────────────────────────────────────────────────
 
 def run_deep_eda(*, enforce: bool = True) -> dict:
-    """Run the enhanced EDA with topic-balance analysis over data/clean/."""
     from ..eda import run_eda
     logger.info("phase 3: deep global EDA")
     return run_eda(enforce=enforce)
@@ -708,7 +590,6 @@ def run_deep_eda(*, enforce: bool = True) -> dict:
 # ── Phase 4: Schema Normalization ─────────────────────────────────────────────
 
 def run_normalize(*, resume: bool = True) -> dict:
-    """Map cleaned records onto the canonical schema and append to final dataset."""
     from ..normalize import run_normalization
     logger.info("phase 4: schema normalization -> data/final/dataset.jsonl")
     return run_normalization(resume=resume)
@@ -729,58 +610,18 @@ def run_v2_pipeline(spec: str | None = None, *,
                     enforce_eda: bool = True,
                     normalize: bool = True,
                     clean_workers: int | None = None) -> dict:
-    """Run the corpus build in sequence: ingest -> clean -> EDA -> schema.
-
-    These are the four stages that consume an already-curated catalog; sourcing is
-    a separate curation step (``cybersec-slm source``) that is not run here.
-    Physically separate stages (no ingest/clean overlap): ingest fetches every
-    source to data/raw/, clean cleans the whole tree and cross-source dedups into
-    data/clean/ (data/raw/ is retained by default; pass keep_raw=False to delete
-    it), then the deep EDA gate and schema normalization run.
-
-    Parameters
-    ----------
-    spec : str | None
-        Path to sources CSV; uses default catalog when omitted.
-    workers : int | None
-        Ingest process pool size; defaults to os.cpu_count().
-    resume : bool
-        Skip sources already fetched in a prior run (ingest) and continue a partial
-        dedup pass (clean).
-    keep_raw : bool
-        Keep data/raw/ after cleaning (default True); pass False to delete it.
-    limit : int | None
-        Cap records per file (for smoke tests).
-    source_timeout : float
-        Per-source wall-clock budget (seconds); a hung source is abandoned.
-    crawl : bool
-        Fetch website (crawl) sources during ingest (default True); False records
-        them as skipped without crawling.
-    enforce_eda : bool
-        Raise SufficiencyError on EDA blockers (default True).
-    normalize : bool
-        Run schema normalization; False stops after EDA.
-    clean_workers : int | None
-        Process-pool size for the clean stage (default: physical cores, max 8; pass
-        1 to force sequential). Cleaning is per-source and independent, and the single
-        deterministic cross-source dedup pass runs once over the whole tree
-        afterward regardless, so raising this speeds cleaning up without changing
-        the output.
-    """
+    
     from ..eda import SufficiencyError
 
-    # Stage 2: fetch every source to data/raw/ (no cleaning).
     ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
                                source_timeout=source_timeout,
                                max_source_gb=max_source_gb, crawl=crawl,
                                scan_hazards=scan_hazards)
 
-    # Stage 3: clean the whole raw tree + cross-source dedup -> data/clean/.
     clean_result = run_clean(keep_raw=keep_raw, limit=limit, resume=resume,
                              drop_non_english=drop_non_english,
                              workers=clean_workers)
 
-    # Stage 4: deep global EDA sufficiency gate.
     try:
         eda_result = run_deep_eda(enforce=enforce_eda)
     except SufficiencyError as exc:
@@ -790,15 +631,9 @@ def run_v2_pipeline(spec: str | None = None, *,
         return {"phase": "eda", "error": str(exc), "ingest": ingest_result,
                 "clean": clean_result}
 
-    # Stage 5: schema normalization (append to final).
     norm_result = {}
     if normalize:
-        # Fresh build: clean regenerates data/clean/ upstream, so normalize fresh
-        # (resume=False) instead of appending/deduping against a stale dataset.
         norm_result = run_normalize(resume=resume)
 
     return {"phase": "complete", "ingest": ingest_result, "clean": clean_result,
             "eda": eda_result, "normalize": norm_result}
-
-
-

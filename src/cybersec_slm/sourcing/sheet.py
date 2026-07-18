@@ -16,9 +16,24 @@ the same dataset linked two slightly different ways is still recognized as one.
 from __future__ import annotations
 
 import os
+import time
 from urllib.parse import urlparse
 
 from ..ingestion.sources import CATALOG_COLUMNS
+
+
+def _atomic_replace(src: str, dst: str, retries: int = 5, delay: float = 1.0) -> None:
+    """Safely replace dst with src, retrying on Windows PermissionError locks."""
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
+
 
 # Header names (lowercased) that may hold a source link, in preference order.
 _LINK_HEADERS = ("dataset link", "url", "link", "dataset_link", "source url")
@@ -121,7 +136,7 @@ def rename_subdomain(csv_path: str, old: str, new: str) -> int:
         os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
         tmp = f"{csv_path}.tmp"
         df.to_csv(tmp, index=False, encoding="utf-8")
-        os.replace(tmp, csv_path)
+        _atomic_replace(tmp, csv_path)
     return changed
 
 
@@ -167,7 +182,7 @@ def delete_rows(csv_path: str, *, links: list[str] | None = None,
         os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
         tmp = f"{csv_path}.tmp"
         remaining.to_csv(tmp, index=False, encoding="utf-8")
-        os.replace(tmp, csv_path)
+        _atomic_replace(tmp, csv_path)
     return removed
 
 
@@ -208,5 +223,5 @@ def append_rows(csv_path: str, rows: list[dict[str, str]]) -> int:
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     tmp = f"{csv_path}.tmp"
     combined.to_csv(tmp, index=False, encoding="utf-8")
-    os.replace(tmp, csv_path)
+    _atomic_replace(tmp, csv_path)
     return len(rows)
