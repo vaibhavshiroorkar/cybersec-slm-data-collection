@@ -414,14 +414,7 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 help=help_txt)
             if picked_domains:
                 s["domains"] = picked_domains
-        if "mode" in allowed:
-            from ..sourcing import catalog
-            _cur_mode = str(base.get("mode", catalog.MODES[0]))
-            _mode_idx = (catalog.MODES.index(_cur_mode)
-                         if _cur_mode in catalog.MODES else 0)
-            s["mode"] = st.selectbox(
-                "mode", catalog.MODES, index=_mode_idx, key=f"{stage}_mode",
-                help="datasets: corpora/repos · text: articles/docs · both")
+
         if stage == "source":
             _COUNTRIES = [
                 "Global",
@@ -758,12 +751,6 @@ def stage_config_dialog(stage: str) -> None:
             settings_store.save_stage(stage, s)
             st.toast(f"Saved {label} settings")
             st.rerun()
-        
-        if stage == "source":
-            st.divider()
-            _is_rev = bool(st.session_state.get("_rev"))
-            with st.expander("Advanced: Filter Catalog via LLM", expanded=_is_rev):
-                _render_llm_filter()
 
     _dialog()
 

@@ -122,7 +122,12 @@ def _read_csv(path: str) -> list[dict]:
         return []
     try:
         with open(path, encoding="utf-8", newline="") as f:
-            return list(csv.DictReader(f))
+            rows = []
+            for r in csv.DictReader(f):
+                if None in r:
+                    del r[None]
+                rows.append(r)
+            return rows
     except OSError:
         return []
 

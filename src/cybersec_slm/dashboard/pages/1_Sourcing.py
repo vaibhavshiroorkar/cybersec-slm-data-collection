@@ -35,12 +35,231 @@ cat = catalog.load()
 all_domains = catalog.subdomains(cat)
 cat_summary = data.catalog_summary()
 
-(discover_tab, licenses_tab, edit_tab,
- csv_tab) = st.tabs(["Discover", "Licenses", "Sub-domains",
-                     "Sources.csv"])
+(csv_tab, discover_tab, licenses_tab, edit_tab) = st.tabs([
+    "Sources", "Discover", "Licenses", "Sub-domains"
+])
 
 # ============================================================== Discover =======
 with discover_tab:
+    with ui.section("Taxonomy Keywords", "The keywords currently configured across all sub-domains."):
+        text_rows = [{"sub-domain": d, "keyword": k} for d, spec in cat.items() for k in spec.get("text", [])]
+        with st.expander(f"Text Keywords ({len(text_rows)})"):
+            ui.table(text_rows, height=300)
+
+        ds_rows = [{"sub-domain": d, "keyword": k} for d, spec in cat.items() for k in spec.get("datasets", [])]
+        with st.expander(f"Dataset Keywords ({len(ds_rows)})"):
+            ui.table(ds_rows, height=300)
+
+        link_rows = [{"sub-domain": d, "keyword": k} for d, spec in cat.items() for k in spec.get("links", [])]
+        with st.expander(f"Direct Links ({len(link_rows)})"):
+            ui.table(link_rows, height=300)
+
+        vocab_rows = [{"sub-domain": d, "keyword": k} for d, spec in cat.items() for k in spec.get("vocab", [])]
+        with st.expander(f"Vocabulary ({len(vocab_rows)})"):
+            ui.table(vocab_rows, height=300)
+# =============================================================== Licenses ======
+with licenses_tab:
+    cov = data.license_coverage()
+    bl = data.blacklist_summary()
+
+    running = control.status()["running"]
+
+    with ui.section("License coverage",
+                    "Deep-detect the license for each source from its page "
+                    "(GitHub, Kaggle, arXiv, HuggingFace, and generic HTML), then "
+                    "move confirmed-restrictive sources to the blacklist."):
+        ui.stat_grid([
+            ("Sources", charts.fmt_int(cov["total"])),
+            ("Licensed", charts.fmt_int(cov["filled"])),
+            ("Unknown / blank", charts.fmt_int(cov["unknown"])),
+            ("Red (still in catalog)", charts.fmt_int(cov["red"])),
+            ("Blacklisted", charts.fmt_int(bl["total"])),
+        ], cols=5)
+        if cov["red"]:
+            st.caption(f"{charts.fmt_int(cov['red'])} source(s) carry a "
+                       "confirmed-restrictive license but are still in the catalog "
+                       "— move them with the blacklist action below. This reads 0 "
+                       "once they have been moved.")
+        st.caption("Run a full license backfill from the command line: "
+                   "`cybersec-slm source --backfill` (set `GITHUB_TOKEN` first for "
+                   "full GitHub coverage). The instant tools below need no run.")
+
+    with ui.section("Clean up by license",
+                    "Act on the profile's `Sources.csv` instantly, no run needed. Deleted "
+                    "sources can be re-discovered; already-fetched data is untouched."):
+        blank_links = data.blank_license_links()
+        b1, b2 = st.columns(2)
+        if b1.button(f"Blacklist {cov['red']} confirmed-red source(s)",
+                     disabled=running or not cov["red"], type="secondary",
+                     use_container_width=True, key="lic_bl_reds"):
+            res = blacklist.move_flagged(data.catalog_path())
+            st.success(f"Moved {res['moved']} restrictive source(s) to Blacklist.csv")
+            st.rerun()
+        if b2.button(f"Delete {len(blank_links)} blank-license source(s)",
+                     disabled=running or not blank_links, type="secondary",
+                     use_container_width=True, key="lic_del_blank"):
+            removed = sheet.delete_rows(data.catalog_path(), links=blank_links)
+            st.success(f"Deleted {removed} source(s) with no resolved license")
+            st.rerun()
+        st.caption("Confirmed-red = copyleft / non-commercial / proprietary "
+                   "(never commercially trainable). Blank = license not yet "
+                   "detected; run Backfill first if you want a chance to resolve them.")
+
+    with ui.section("Blacklist",
+                    "Sources with a confirmed-restrictive license, moved out of "
+                    "`sources/Sources.csv` to `sources/Blacklist.csv`."):
+        if not bl["total"]:
+            st.caption("No blacklisted sources yet.")
+        else:
+            st.markdown("**By reason**")
+            ui.table([{"reason": k, "sources": v}
+                      for k, v in sorted(bl["by_reason"].items(),
+                                         key=lambda kv: kv[1], reverse=True)],
+                     height=200)
+            ui.table(data.blacklist_rows(), height=360)
+
+# ============================================================= Sub-domains =====
+with edit_tab:
+    with ui.section("Corpus taxonomy",
+                    "The top-level `domain_name` schema label this whole corpus "
+                    "is filed under (default `CYBERSEC`). Shared by the schema "
+                    "stage — change it once here to repoint the pipeline at a "
+                    "different data domain."):
+        dn = st.text_input("Domain name", value=catalog.domain_name(),
+                           key="domain_name_input")
+        if ui.right_slot().button("Save domain name", key="domain_name_save",
+                                  disabled=not dn.strip(),
+                                  use_container_width=True):
+            catalog.set_domain_name(dn.strip())
+            st.success(f"Saved domain_name='{dn.strip()}' to sources/keywords.yaml")
+            st.rerun()
+
+    def _lines(text: str) -> list[str]:
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    with ui.section("Manage Sub-domains", "Add, edit, remove taxonomy and delete rows."):
+        with st.expander("Add a sub-domain"):
+            name = st.text_input("Sub-domain name", key="add_name")
+            code = st.text_input(
+                "Enum code (blank = auto-derived from the name)", key="add_code",
+                help="The schema's `subdomain_name` enum value for this sub-domain, "
+                     "e.g. `APPLICATION`. Leave blank to derive one automatically.")
+            ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
+            tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
+            links = st.text_area("Direct Links (one per line)", key="add_links", height=100,
+                                 help="URLs added directly to the catalog "
+                                      "without going through discovery.")
+            if ui.right_slot().button("Save sub-domain", key="add_save",
+                                      disabled=not name.strip(),
+                                      use_container_width=True):
+                catalog.add_subdomain(
+                    name.strip(), datasets=_lines(ds), text=_lines(tx),
+                    links=_lines(links), code=code.strip() or None)
+                st.success(f"Saved '{name.strip()}' to sources/keywords.yaml")
+                st.rerun()
+
+        with st.expander("Edit a sub-domain"):
+            if not all_domains:
+                st.caption("No sub-domains to edit. Add one below.")
+            else:
+                pick = st.selectbox("Sub-domain to edit", all_domains, key="ed_pick")
+                spec = cat.get(pick) or {}
+                new_name = st.text_input("Name", value=pick, key=f"ed_name_{pick}")
+                new_code = st.text_input(
+                    "Enum code", value=catalog.code_for(pick, cat),
+                    key=f"ed_code_{pick}",
+                    help="The schema's `subdomain_name` enum value. Changing it "
+                         "changes the label the schema stage files these records "
+                         "under; blank re-derives it from the name.")
+                ed1, ed2 = st.columns(2)
+                new_ds = ed1.text_area("Dataset keywords (one per line)",
+                                       value="\n".join(spec.get("datasets") or []),
+                                       height=200, key=f"ed_ds_{pick}")
+                new_tx = ed2.text_area("Text keywords (one per line)",
+                                       value="\n".join(spec.get("text") or []),
+                                       height=200, key=f"ed_tx_{pick}")
+                new_links = st.text_area("Direct Links (one per line)",
+                                         value="\n".join(spec.get("links") or []),
+                                         height=100, key=f"ed_links_{pick}",
+                                         help="URLs added directly to the catalog "
+                                              "without going through discovery.")
+                new_vocab = st.text_area(
+                    "Classification vocabulary (one term per line)",
+                    value="\n".join(spec.get("vocab") or []), height=120,
+                    key=f"ed_vocab_{pick}",
+                    help="Short, distinctive terms used only to break ties when "
+                         "discovery decides which sub-domain a hit belongs to. "
+                         "Blank falls back to this sub-domain's keywords.")
+
+                renaming = new_name.strip() and new_name.strip() != pick
+                n_rows = cat_summary["by_domain"].get(pick, 0)
+                relabel = True
+                if renaming and n_rows:
+                    relabel = st.checkbox(
+                        f"Also relabel this sub-domain's {n_rows} row(s) in "
+                        "Sources.csv", value=True, key=f"ed_relabel_{pick}",
+                        help="Leave this on unless you want the existing rows to keep "
+                             "the old label. Rows left behind match no configured "
+                             "sub-domain, so a selective run skips them.")
+                if renaming and new_name.strip() in all_domains:
+                    st.error(f"'{new_name.strip()}' already exists. Pick another name.")
+
+                _can_save = bool(new_name.strip()) and new_name.strip() not in (
+                    set(all_domains) - {pick})
+                if ui.right_slot().button("Save changes", key=f"ed_save_{pick}",
+                                          type="primary", disabled=not _can_save,
+                                          use_container_width=True):
+                    try:
+                        catalog.update_subdomain(
+                            pick, name=new_name.strip(), datasets=_lines(new_ds),
+                            text=_lines(new_tx), links=_lines(new_links),
+                            vocab=_lines(new_vocab), code=new_code.strip())
+                    except (KeyError, ValueError) as ex:
+                        st.error(str(ex))
+                    else:
+                        msg = f"Saved '{new_name.strip()}' to sources/keywords.yaml"
+                        if renaming and relabel:
+                            moved = sheet.rename_subdomain(data.catalog_path(), pick,
+                                                           new_name.strip())
+                            msg += f" · relabelled {moved} catalog row(s)"
+                        st.success(msg)
+                        st.rerun()
+
+        with st.expander("Remove a sub-domain from taxonomy"):
+            st.caption("Removes it from the taxonomy. Its `Sources.csv` rows are left "
+                       "alone — delete those separately in the Delete by sub-domain tab.")
+            if all_domains:
+                victim = st.selectbox("Sub-domain to remove", all_domains, key="rm_pick")
+                _victim_rows = cat_summary["by_domain"].get(victim, 0)
+                if _victim_rows:
+                    st.warning(f"{_victim_rows} catalog row(s) are filed under "
+                               f"'{victim}'. They will stay in Sources.csv with a "
+                               "label no configured sub-domain matches, so selective "
+                               "runs will skip them. Rename it instead to keep them.")
+                if st.button("Remove", key="rm_go", type="secondary"):
+                    catalog.remove_subdomain(victim)
+                    st.success(f"Removed '{victim}' from sources/keywords.yaml")
+                    st.rerun()
+            else:
+                st.caption("No sub-domains to remove.")
+
+        with st.expander("Delete by sub-domain (group) from catalog"):
+            st.caption("Delete all catalog rows belonging to specific sub-domains.")
+            cat_path = data.catalog_path()
+            dom_opts = sorted(cat_summary["by_domain"].keys())
+            victims = st.multiselect("Sub-domains to delete (all their rows)",
+                                     dom_opts, key="del_domains")
+            n = sum(cat_summary["by_domain"].get(d, 0) for d in victims)
+            if st.button(f"Delete {n} row(s) in {len(victims)} sub-domain(s)",
+                         disabled=not victims, key="del_dom_go", type="secondary"):
+                removed = sheet.delete_rows(cat_path, subdomains=victims)
+                st.success(f"Deleted {removed} row(s) from the catalog")
+                st.rerun()
+
+
+
+# ============================================================= Sources.csv =====
+with csv_tab:
     # -------------------------------------------------- Catalog snapshot -------
     with ui.section("Source catalog"):
         ui.stat_grid([
@@ -56,71 +275,6 @@ with discover_tab:
             st.caption("No `Sources.csv` for this profile yet.")
 
     # ----------------------------------------- Sub-domains / run config -------
-    with ui.section("Sourcing configuration",
-                    "Pick the sub-domains and mode a discovery run should use, "
-                    "then Apply to save them. The saved selection drives both the "
-                    "Sourcing stage's own run and the full pipeline run launched "
-                    "from the Overview page."):
-        if not all_domains:
-            st.info("No sub-domains configured yet. Add one in the Sub-domains tab.")
-
-        # Seed from the saved source settings so this reflects what a run launched
-        # from the Overview page would search.
-        _saved = settings_store.get_stage("source")
-        _dom_default = [d for d in _saved.get("domains", [])
-                        if d in all_domains] or all_domains
-        _mode_default = _saved.get("mode", catalog.MODES[0])
-        _mode_index = (catalog.MODES.index(_mode_default)
-                       if _mode_default in catalog.MODES else 0)
-
-        col_a, col_b = st.columns([3, 1])
-        selected = col_a.multiselect("Sub-domains", all_domains,
-                                     default=_dom_default, key="src_domains")
-        mode = col_b.selectbox(
-            "Mode", catalog.MODES, index=_mode_index, key="src_mode",
-            help="datasets: corpora/repos · text: articles/docs · both")
-
-        # Apply merges into the saved source settings rather than replacing them,
-        # so the caps configured in the Overview page's Sourcing modal survive.
-        _pending = {**_saved, "mode": mode}
-        if selected and set(selected) != set(all_domains):
-            _pending["domains"] = selected
-        else:
-            _pending.pop("domains", None)
-        _dirty = (_pending != _saved)
-
-        if ui.right_slot().button("Apply", key="src_apply", type="primary",
-                                  disabled=not selected or not _dirty,
-                                  use_container_width=True,
-                                  help="Save these sub-domains and mode as the "
-                                       "Sourcing stage's defaults."):
-            settings_store.save_stage("source", _pending)
-            _scope = ("every sub-domain" if "domains" not in _pending
-                      else f"{len(selected)} sub-domain(s)")
-            st.success(f"Saved: {_scope} in '{mode}' mode.")
-            st.rerun()
-        if not selected:
-            st.caption("Select at least one sub-domain to apply.")
-        elif not _dirty:
-            _scope = ("every sub-domain" if "domains" not in _saved
-                      else f"{len(_saved['domains'])} sub-domain(s)")
-            st.caption(f"Saved: {_scope} in "
-                       f"'{_saved.get('mode', catalog.MODES[0])}' mode. "
-                       "Configure countries & fields in the Overview → Configure Sourcing.")
-
-    with ui.section("Keyword preview",
-                    "The keywords a discovery run would use for the selection above."):
-        kw_rows = [{"sub-domain": d, "keyword": k}
-                   for d in selected for k in catalog.keywords_for(d, mode, cat)]
-        with st.expander(f"Keywords that will run ({len(kw_rows)})",
-                         expanded=not selected):
-            if kw_rows:
-                ui.table(kw_rows, height=300)
-            else:
-                st.caption("Select at least one sub-domain to see its keywords.")
-        st.caption("Edit these keywords in the Sub-domains tab. The remaining run "
-                   "caps live in the Overview page's Sourcing settings.")
-
     # What the catalog cost, across every run.
     _tot = data.sourcing_totals()
     if _tot["runs"]:
@@ -219,203 +373,6 @@ with discover_tab:
                            "hits": r.get("hits"), "new": r.get("new")} for r in bk],
                          height=300)
 
-# =============================================================== Licenses ======
-with licenses_tab:
-    cov = data.license_coverage()
-    bl = data.blacklist_summary()
-
-    running = control.status()["running"]
-
-    with ui.section("License coverage",
-                    "Deep-detect the license for each source from its page "
-                    "(GitHub, Kaggle, arXiv, HuggingFace, and generic HTML), then "
-                    "move confirmed-restrictive sources to the blacklist."):
-        ui.stat_grid([
-            ("Sources", charts.fmt_int(cov["total"])),
-            ("Licensed", charts.fmt_int(cov["filled"])),
-            ("Unknown / blank", charts.fmt_int(cov["unknown"])),
-            ("Red (still in catalog)", charts.fmt_int(cov["red"])),
-            ("Blacklisted", charts.fmt_int(bl["total"])),
-        ], cols=5)
-        if cov["red"]:
-            st.caption(f"{charts.fmt_int(cov['red'])} source(s) carry a "
-                       "confirmed-restrictive license but are still in the catalog "
-                       "— move them with the blacklist action below. This reads 0 "
-                       "once they have been moved.")
-        st.caption("Run a full license backfill from the command line: "
-                   "`cybersec-slm source --backfill` (set `GITHUB_TOKEN` first for "
-                   "full GitHub coverage). The instant tools below need no run.")
-
-    with ui.section("Clean up by license",
-                    "Act on the profile's `Sources.csv` instantly, no run needed. Deleted "
-                    "sources can be re-discovered; already-fetched data is untouched."):
-        blank_links = data.blank_license_links()
-        b1, b2 = st.columns(2)
-        if b1.button(f"Blacklist {cov['red']} confirmed-red source(s)",
-                     disabled=running or not cov["red"], type="secondary",
-                     use_container_width=True, key="lic_bl_reds"):
-            res = blacklist.move_flagged(data.catalog_path())
-            st.success(f"Moved {res['moved']} restrictive source(s) to Blacklist.csv")
-            st.rerun()
-        if b2.button(f"Delete {len(blank_links)} blank-license source(s)",
-                     disabled=running or not blank_links, type="secondary",
-                     use_container_width=True, key="lic_del_blank"):
-            removed = sheet.delete_rows(data.catalog_path(), links=blank_links)
-            st.success(f"Deleted {removed} source(s) with no resolved license")
-            st.rerun()
-        st.caption("Confirmed-red = copyleft / non-commercial / proprietary "
-                   "(never commercially trainable). Blank = license not yet "
-                   "detected; run Backfill first if you want a chance to resolve them.")
-
-    with ui.section("Blacklist",
-                    "Sources with a confirmed-restrictive license, moved out of "
-                    "`sources/Sources.csv` to `sources/Blacklist.csv`."):
-        if not bl["total"]:
-            st.caption("No blacklisted sources yet.")
-        else:
-            st.markdown("**By reason**")
-            ui.table([{"reason": k, "sources": v}
-                      for k, v in sorted(bl["by_reason"].items(),
-                                         key=lambda kv: kv[1], reverse=True)],
-                     height=200)
-            ui.table(data.blacklist_rows(), height=360)
-
-# ============================================================= Sub-domains =====
-with edit_tab:
-    with ui.section("Corpus taxonomy",
-                    "The top-level `domain_name` schema label this whole corpus "
-                    "is filed under (default `CYBERSEC`). Shared by the schema "
-                    "stage — change it once here to repoint the pipeline at a "
-                    "different data domain."):
-        dn = st.text_input("Domain name", value=catalog.domain_name(),
-                           key="domain_name_input")
-        if ui.right_slot().button("Save domain name", key="domain_name_save",
-                                  disabled=not dn.strip(),
-                                  use_container_width=True):
-            catalog.set_domain_name(dn.strip())
-            st.success(f"Saved domain_name='{dn.strip()}' to sources/keywords.yaml")
-            st.rerun()
-
-    def _lines(text: str) -> list[str]:
-        return [ln.strip() for ln in text.splitlines() if ln.strip()]
-
-    with ui.section("Edit a sub-domain",
-                    "Change a sub-domain's name, schema code, or keywords. "
-                    "Renaming can relabel its `Sources.csv` rows in the same edit "
-                    "so they stay inside the taxonomy."):
-        if not all_domains:
-            st.caption("No sub-domains to edit. Add one below.")
-        else:
-            pick = st.selectbox("Sub-domain to edit", all_domains, key="ed_pick")
-            spec = cat.get(pick) or {}
-            # Widget keys carry the picked sub-domain so switching the selectbox
-            # re-seeds every field from that sub-domain instead of holding the
-            # previous one's text.
-            new_name = st.text_input("Name", value=pick, key=f"ed_name_{pick}")
-            new_code = st.text_input(
-                "Enum code", value=catalog.code_for(pick, cat),
-                key=f"ed_code_{pick}",
-                help="The schema's `subdomain_name` enum value. Changing it "
-                     "changes the label the schema stage files these records "
-                     "under; blank re-derives it from the name.")
-            ed1, ed2 = st.columns(2)
-            new_ds = ed1.text_area("Dataset keywords (one per line)",
-                                   value="\n".join(spec.get("datasets") or []),
-                                   height=200, key=f"ed_ds_{pick}")
-            new_tx = ed2.text_area("Text keywords (one per line)",
-                                   value="\n".join(spec.get("text") or []),
-                                   height=200, key=f"ed_tx_{pick}")
-            new_links = st.text_area("Direct Links (one per line)",
-                                     value="\n".join(spec.get("links") or []),
-                                     height=100, key=f"ed_links_{pick}",
-                                     help="URLs added directly to the catalog "
-                                          "without going through discovery.")
-            new_vocab = st.text_area(
-                "Classification vocabulary (one term per line)",
-                value="\n".join(spec.get("vocab") or []), height=120,
-                key=f"ed_vocab_{pick}",
-                help="Short, distinctive terms used only to break ties when "
-                     "discovery decides which sub-domain a hit belongs to. "
-                     "Blank falls back to this sub-domain's keywords.")
-
-            renaming = new_name.strip() and new_name.strip() != pick
-            n_rows = cat_summary["by_domain"].get(pick, 0)
-            relabel = True
-            if renaming and n_rows:
-                relabel = st.checkbox(
-                    f"Also relabel this sub-domain's {n_rows} row(s) in "
-                    "Sources.csv", value=True, key=f"ed_relabel_{pick}",
-                    help="Leave this on unless you want the existing rows to keep "
-                         "the old label. Rows left behind match no configured "
-                         "sub-domain, so a selective run skips them.")
-            if renaming and new_name.strip() in all_domains:
-                st.error(f"'{new_name.strip()}' already exists. Pick another name.")
-
-            _can_save = bool(new_name.strip()) and new_name.strip() not in (
-                set(all_domains) - {pick})
-            if ui.right_slot().button("Save changes", key=f"ed_save_{pick}",
-                                      type="primary", disabled=not _can_save,
-                                      use_container_width=True):
-                try:
-                    catalog.update_subdomain(
-                        pick, name=new_name.strip(), datasets=_lines(new_ds),
-                        text=_lines(new_tx), links=_lines(new_links),
-                        vocab=_lines(new_vocab), code=new_code.strip())
-                except (KeyError, ValueError) as ex:
-                    st.error(str(ex))
-                else:
-                    msg = f"Saved '{new_name.strip()}' to sources/keywords.yaml"
-                    if renaming and relabel:
-                        moved = sheet.rename_subdomain(data.catalog_path(), pick,
-                                                       new_name.strip())
-                        msg += f" · relabelled {moved} catalog row(s)"
-                    st.success(msg)
-                    st.rerun()
-
-    with ui.section("Add a sub-domain",
-                    "Sub-domains and keywords persist to `sources/keywords.yaml`. "
-                    "Adding one that already exists replaces it."):
-        name = st.text_input("Sub-domain name", key="add_name")
-        code = st.text_input(
-            "Enum code (blank = auto-derived from the name)", key="add_code",
-            help="The schema's `subdomain_name` enum value for this sub-domain, "
-                 "e.g. `APPLICATION`. Leave blank to derive one automatically.")
-        ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
-        tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
-        links = st.text_area("Direct Links (one per line)", key="add_links", height=100,
-                             help="URLs added directly to the catalog "
-                                  "without going through discovery.")
-        if ui.right_slot().button("Save sub-domain", key="add_save",
-                                  disabled=not name.strip(),
-                                  use_container_width=True):
-            catalog.add_subdomain(
-                name.strip(), datasets=_lines(ds), text=_lines(tx),
-                links=_lines(links), code=code.strip() or None)
-            st.success(f"Saved '{name.strip()}' to sources/keywords.yaml")
-            st.rerun()
-
-    with ui.section("Remove a sub-domain",
-                    "Removes it from the taxonomy. Its `Sources.csv` rows are left "
-                    "alone — delete those separately in the Delete rows tab."):
-        if all_domains:
-            victim = st.selectbox("Sub-domain to remove", all_domains, key="rm_pick")
-            _victim_rows = cat_summary["by_domain"].get(victim, 0)
-            if _victim_rows:
-                st.warning(f"{_victim_rows} catalog row(s) are filed under "
-                           f"'{victim}'. They will stay in Sources.csv with a "
-                           "label no configured sub-domain matches, so selective "
-                           "runs will skip them. Rename it instead to keep them.")
-            if st.button("Remove", key="rm_go", type="secondary"):
-                catalog.remove_subdomain(victim)
-                st.success(f"Removed '{victim}' from sources/keywords.yaml")
-                st.rerun()
-        else:
-            st.caption("No sub-domains to remove.")
-
-
-
-# ============================================================= Sources.csv =====
-with csv_tab:
     cat_rows = data.catalog_rows()
     cat_path = data.catalog_path()
     _LINK_KEYS = ("dataset link", "url", "link", "dataset_link", "source url")
@@ -444,11 +401,11 @@ with csv_tab:
                        if _search.strip() else f"{len(cat_rows)} rows")
             ui.table(_display_rows, height=520)
 
-    # --------------------------------------------------------- Add a source ----
-    with ui.section("Add a source by hand",
-                    "Appends one row to `sources/Sources.csv`, identical in shape "
-                    "to a discovered one, so the ingest stage picks it up on the "
-                    "next run. Use this for a source discovery cannot find."):
+    _is_rev = bool(st.session_state.get("_rev"))
+    with st.expander("Advanced: Filter Catalog via LLM", expanded=_is_rev):
+        ui._render_llm_filter()
+
+    with ui.section("Manage Sources", "Add new sources and delete catalog rows."):
         with st.expander("Add a source"):
             if not all_domains:
                 st.info("No sub-domains configured yet. Add one in the Sub-domains tab "
@@ -533,20 +490,7 @@ with csv_tab:
                 if not all(_required):
                     st.caption("Name, Sub-Domain, and Dataset Link are required.")
 
-    # ------------------------------------------------------- Delete rows -------
-    with ui.section("Delete catalog rows",
-                    "Removes rows from `sources/Sources.csv` instantly. Deleted "
-                    "sources can be re-discovered; already-fetched data is untouched."):
-        with st.expander("Delete by sub-domain (group)"):
-            dom_opts = sorted(cat_summary["by_domain"].keys())
-            victims = st.multiselect("Sub-domains to delete (all their rows)",
-                                     dom_opts, key="del_domains")
-            n = sum(cat_summary["by_domain"].get(d, 0) for d in victims)
-            if st.button(f"Delete {n} row(s) in {len(victims)} sub-domain(s)",
-                         disabled=not victims, key="del_dom_go", type="secondary"):
-                removed = sheet.delete_rows(cat_path, subdomains=victims)
-                st.success(f"Deleted {removed} row(s) from the catalog")
-                st.rerun()
+
 
         with st.expander("Delete by row range"):
             total = len(cat_rows)
@@ -575,3 +519,43 @@ with csv_tab:
                     removed = sheet.delete_rows(cat_path, positions=positions)
                     st.success(f"Deleted {removed} row(s) from the catalog")
                     st.rerun()
+        with st.expander("Delete by field value"):
+            if not cat_rows:
+                st.caption("No rows to delete.")
+            else:
+                fields = sorted(list({str(k) for r in cat_rows for k in r.keys() if k}))
+                sel_field = st.selectbox("Select field", fields, key="del_field_pick")
+                if sel_field:
+                    unique_vals = sorted(list({str(r.get(sel_field, "")).strip() for r in cat_rows if str(r.get(sel_field, "")).strip()}))
+                    if not unique_vals:
+                        st.caption(f"No values found for field '{sel_field}'.")
+                    else:
+                        sel_val = st.selectbox("Select value", unique_vals, key="del_val_pick")
+                        if sel_val:
+                            matching_positions = [i + 1 for i, r in enumerate(cat_rows) if str(r.get(sel_field, "")).strip() == sel_val]
+                            if st.button(f"Delete {len(matching_positions)} row(s) where {sel_field} is '{sel_val}'",
+                                         disabled=not matching_positions, key="del_field_val_go", type="secondary"):
+                                removed = sheet.delete_rows(cat_path, positions=matching_positions)
+                                st.success(f"Deleted {removed} row(s) from the catalog")
+                                st.rerun()
+
+        with st.expander("Reset entire sourcing"):
+            st.caption("Permanently clear the source catalog and discovery logs. This cannot be undone.")
+            if st.button("Reset entire sourcing", type="primary", use_container_width=True, key="reset_sourcing_init"):
+                st.session_state["_confirm_sourcing_reset"] = True
+                st.rerun()
+            if st.session_state.get("_confirm_sourcing_reset"):
+                st.warning("This will completely empty `Sources.csv` and delete all sourcing logs. Are you sure?")
+                rc = st.columns(2)
+                if rc[0].button("Yes, reset sourcing", use_container_width=True, key="reset_sourcing_yes"):
+                    st.session_state["_confirm_sourcing_reset"] = False
+                    if cat_rows:
+                        sheet.delete_rows(cat_path, positions=list(range(1, len(cat_rows) + 1)))
+                    control.reset(stages={"source"})
+                    st.success("Sourcing has been reset.")
+                    st.rerun()
+                if rc[1].button("Cancel", use_container_width=True, key="reset_sourcing_cancel"):
+                    st.session_state["_confirm_sourcing_reset"] = False
+                    st.rerun()
+
+    # --------------------------------------------------------- Add a source ----

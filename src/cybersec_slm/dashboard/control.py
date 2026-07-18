@@ -40,7 +40,7 @@ _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
             "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english",
             "no_crawler", "pii_engine"},
-    "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
+    "source": {"domains", "per_keyword", "max_per_domain", "max_total",
                "max_minutes", "workers", "time_range", "no_site_scope",
                "no_quality_filter", "dry_run", "searxng_url", "language",
                "no_enrich", "backfill", "backfill_all", "no_blacklist", "limit",
@@ -70,7 +70,6 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("source_timeout", "--source-timeout", "value"),
     ("limit", "--limit", "value"),
     ("max_source_gb", "--max-source-gb", "value"),
-    ("mode", "--mode", "value"),
     ("per_keyword", "--per-keyword", "value"),
     ("max_per_domain", "--max-per-domain", "value"),
     ("max_total", "--max-total", "value"),
@@ -563,7 +562,7 @@ def reset(stages: set[str] | None = None) -> dict:
     removed: list[str] = []
     skipped: list[str] = []
     
-    if not stages or len(stages) >= 5:
+    if stages is None or len(stages) >= 5:
         for sub, path in (("data", core.data_dir()), ("logs", core.logs_dir())):
             if not os.path.isdir(path):
                 continue
@@ -577,7 +576,7 @@ def reset(stages: set[str] | None = None) -> dict:
     logs_d = core.logs_dir()
     targets = []
     
-    if "sourcing" in stages:
+    if "source" in stages:
         targets.extend([
             os.path.join(logs_d, "discovered"),
         ] + glob.glob(os.path.join(logs_d, "sourcing-summary-*.json")))
