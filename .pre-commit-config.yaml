@@ -11,6 +11,17 @@ repos:
       - id: gitleaks
         name: gitleaks (scan staged changes for secrets)
 
+  - repo: local
+    hooks:
+      - id: block-plaintext-secrets
+        name: block unencrypted secrets/credentials.yaml
+        entry: >
+          bash -c 'git diff --cached --name-only -- "secrets/credentials.yaml"
+          | grep -q . && echo "Refusing to commit plaintext secrets/credentials.yaml -- encrypt it first: cp secrets/credentials.yaml secrets/credentials.enc.yaml && sops -e -i secrets/credentials.enc.yaml && rm secrets/credentials.yaml" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false
+        always_run: true
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
     hooks:

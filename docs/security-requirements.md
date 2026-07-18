@@ -288,15 +288,42 @@ unprivileged user with only the output volume writable.
 ## Cross-cutting requirements
 
 ### Secrets management
-- Secrets MUST live in `.env` (git-ignored) or the environment, never in code or
-  images. **[present]** `.gitignore` excludes `.env`; `core.py` loads it.
-- CI MUST scan the full git history for committed secrets. **[present]** gitleaks
-  in CI (per README).
+- Secrets MUST be encrypted at rest, never stored as plaintext in code, images,
+  or a bare config file. **[present]** `secrets/credentials.enc.yaml` (SOPS +
+  age); `core.py > _load_encrypted_secrets` decrypts it into `os.environ`
+  before any stage reads a credential. `.gitignore` blocks the plaintext
+  staging file (`secrets/credentials.yaml`) and a pre-commit hook
+  (`block-plaintext-secrets`) refuses to let it be committed as a second line
+  of defense. See `secrets/credentials.yaml.example` for the schema.
+- Each source/domain integration MUST use its own credential, so one leak
+  doesn't expose the rest. **[present]** one block per source in
+  `credentials.enc.yaml` (`nvd`, `github`, `kaggle`, `nvidia`), each mapped to
+  its own env var; add a new block, never reuse an existing one, when a new
+  source needs a credential.
+- Crawler/API credentials MUST be rotated on a schedule, not left to run
+  indefinitely. **[present]** `rotated_at` / `expires_at` fields per credential
+  in `credentials.enc.yaml`; `tools/check_credential_expiry.py` (run weekly by
+  `.github/workflows/credential-expiry.yml`) flags anything expired or within
+  14 days of expiry. Providers without expiring tokens (NVD, Kaggle today) are
+  rotated on a calendar reminder instead — `rotated_at` records when that last
+  happened.
+- CI MUST scan the full git history for committed secrets. **[present]**
+  `.github/workflows/secrets-scan.yml` runs gitleaks server-side on every push
+  and PR. This closes a real gap: this document previously said gitleaks ran
+  "in CI (per README)" but no workflow file existed — only the local
+  pre-commit hook did, which `git commit --no-verify` bypasses.
 - `.env` MUST parse cleanly; a malformed line silently drops the variable.
   **[watch]** a trailing character outside quotes makes python-dotenv skip the
-  whole line (observed on the Kaggle token line).
+  whole line (observed on the Kaggle token line). `.env` now only needs to
+  carry a credential on a machine that hasn't migrated to
+  `credentials.enc.yaml` yet — see precedence note below.
 - Secrets MUST NOT be echoed into logs, transcripts, or command lines. **[present]**
-  no secret is logged; treat credential values as never-print.
+  no secret is logged; treat credential values as never-print;
+  `check_credential_expiry.py` only ever prints source names and dates.
+- Precedence across the three credential sources is: a real shell-exported env
+  var > `secrets/credentials.enc.yaml` > `.env`. Each layer only fills in what
+  the previous layer left unset, so nothing already exported before the
+  process started is ever clobbered.
 
 ### Dependency and supply chain
 - Dependencies MUST be audited for known vulnerabilities. **[present]** `pip-audit`

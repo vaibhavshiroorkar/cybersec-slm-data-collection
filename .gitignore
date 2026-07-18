@@ -10,7 +10,15 @@ service-account*.json
 gcp-*.json
 kaggle.json
 access_token
-secrets/
+
+# secrets/ holds SOPS-encrypted credentials (docs/security-requirements.md >
+# "Secrets management"). Only the .enc.yaml (ciphertext) and the .example
+# template may ever be committed -- the plaintext credentials.yaml used to
+# produce the ciphertext must never be staged. The pre-commit hook
+# (block-plaintext-secrets) enforces this too, as a second line of defense.
+secrets/*
+!secrets/*.enc.yaml
+!secrets/*.yaml.example
 
 # Python
 __pycache__

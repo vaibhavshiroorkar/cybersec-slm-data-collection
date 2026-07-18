@@ -1,0 +1,15 @@
+# SOPS encryption rules. Anything matching path_regex below is transparently
+# encrypted/decrypted by `sops` using the age recipient(s) listed.
+#
+# Generate your own operator key (do this once, per machine):
+#   age-keygen -o ~/.config/sops/age/keys.txt
+# Then replace the placeholder public key below with the one it prints.
+# The private key file NEVER leaves the operator's machine and is NEVER
+# committed -- only the public key belongs in this file.
+#
+# To add a second trusted operator (or a CI service key), add another `age:`
+# entry as a comma-separated list; sops encrypts to every recipient listed,
+# so any of their keys can decrypt.
+creation_rules:
+  - path_regex: secrets/.*\.enc\.yaml$
+    age: age16475zsrqtka5kwv5zudw9ttzerc0jl68k0f6xgazl5eznz8xxdcsap9t4n # REPLACE with your operator public key

@@ -18,6 +18,8 @@ import hashlib
 import importlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 from collections.abc import Iterator
 
@@ -31,10 +33,47 @@ def try_import(name: str):
         return None
 
 
+# --------------------------------------------------- encrypted secrets (SOPS) -
+# Precedence, most to least trusted: a real shell-exported env var > a
+# credential decrypted from secrets/credentials.enc.yaml (SOPS + age) > a
+# leftover value in .env. Each layer only fills in what the previous layer
+# left unset, so nothing already exported before the process started is ever
+# clobbered. See docs/security-requirements.md > "Secrets management".
+#
+# This is a no-op -- never an error -- if the encrypted file, the `sops`
+# binary, or PyYAML isn't present, so a machine that hasn't migrated off
+# .env yet keeps working exactly as before.
+def _load_encrypted_secrets() -> None:
+    enc_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "secrets", "credentials.enc.yaml")
+    if not os.path.exists(enc_path):
+        return
+    _yaml = try_import("yaml")
+    if _yaml is None or shutil.which("sops") is None:
+        return
+    try:
+        _proc = subprocess.run(
+            ["sops", "-d", enc_path], capture_output=True, text=True, timeout=30, check=True)
+        _creds = _yaml.safe_load(_proc.stdout) or {}
+    except Exception:
+        # Never fail pipeline startup over a decrypt problem; a stage that
+        # actually needs a given credential will raise its own clear error
+        # when it finds that env var unset.
+        return
+    for _fields in _creds.values():
+        if isinstance(_fields, dict) and _fields.get("env") and _fields.get("value"):
+            os.environ.setdefault(_fields["env"], str(_fields["value"]))
+
+
+_load_encrypted_secrets()
+
+
 # ------------------------------------------------------------- .env loading ---
-# Load a project .env (if present) so API keys land in os.environ before any
-# stage reads them. python-dotenv is optional; without it, keys must be exported
-# in the shell. Existing environment variables are never overridden.
+# Load a project .env (if present) so any remaining API keys / config land in
+# os.environ before any stage reads them. python-dotenv is optional; without
+# it, keys must be exported in the shell. Existing environment variables
+# (including ones the SOPS step above just set) are never overridden.
 #
 # Resolve the .env deterministically: first search up from the current working
 # directory (find_dotenv), then fall back to the repo root derived from this
