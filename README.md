@@ -1,134 +1,121 @@
 # Cybersecurity SLM Data Pipeline
 
-This project builds the training data for a small cybersecurity language model.
+Training data for a small cybersecurity language model.
 
-There's no shortage of good cybersecurity material on the internet: CVE feeds, NIST
-publications, MITRE catalogs, research datasets, security blogs. The problem is that
-it's scattered across dozens of formats and sites, tangled up with noise, duplicates,
-and personal data, and none of it arrives in the shape a model wants to read. This
-pipeline handles that unglamorous middle work. It gathers the good material from a
-vetted list of sources and turns it into one clean, consistent, training-ready corpus
-you can trust and trace.
+Good cybersecurity material is everywhere — CVE feeds, NIST publications, MITRE
+catalogs, research datasets, security writeups — but it is scattered across
+formats and sites, tangled with noise, duplicates and personal data, and none of
+it arrives in the shape a model wants to read. This pipeline does that unglamorous
+middle work: it gathers the good material, cleans it, and turns it into one
+consistent, training-ready corpus you can trace back to its sources.
 
-It ships as an installable Python package (`cybersec_slm`) driven by a single command,
-`cybersec-slm`. Run the whole thing end to end, or one stage at a time.
+It installs as a Python package (`cybersec_slm`) and runs from one command,
+`cybersec-slm` — the whole pipeline end to end, or a stage at a time.
 
 ## How it works
 
-The work happens in five stages. Each one hands its output to the next, and each one
-treats its input as possibly messy or untrustworthy, so problems get flagged, dropped,
-or quarantined instead of slipping downstream unnoticed.
+Five stages, each handing its output to the next, each treating its input as
+possibly messy or hostile — so problems are flagged, dropped or quarantined
+rather than slipping downstream.
 
-| Stage | In plain terms | Output |
+| Stage | What it does | Output |
 |---|---|---|
-| **Sourcing** *(optional)* | Goes looking for new sources by searching the web through a self-hosted [SearXNG](https://docs.searxng.org/) instance, and adds the candidates to a tracking catalog for a human to review. The sub-domains and their search keywords are editable and generalize to any topic. Nothing here is trusted automatically. | `sources/Sources.csv` |
-| **Ingestion** | Downloads each *approved* source (datasets, PDFs, feeds, crawlable sites) and converts everything to one simple line-per-record format. | `data/raw/` |
-| **Cleaning** | Tidies the text, flags suspicious records, removes duplicates, redacts personal data, and translates non-English text into English. | `data/clean/` (plus `flagged/`, `dropped/`) |
-| **EDA gate** | Checks whether the corpus is actually good enough: enough volume, balanced across topics, not dominated by any single source. If it isn't, the run stops here. | `logs/eda/` |
-| **Normalization** | Maps every record onto one canonical 22-field schema, removes near-duplicates, and writes the final dataset alongside a provenance manifest. | `data/final/dataset.jsonl` |
+| **Sourcing** *(optional)* | Searches the web through a self-hosted [SearXNG](https://docs.searxng.org/) instance and adds candidate sources to a catalog for review. Keywords, feeds and links are editable per topic. Nothing is trusted automatically. | `sources/profiles/<name>/Sources.csv` |
+| **Ingestion** | Fetches each source (datasets, PDFs, RSS/Atom feeds, crawlable sites) and converts everything to one line-per-record format. | `data/<profile>/raw/` |
+| **Cleaning** | Repairs text, flags suspicious records, removes duplicates, redacts personal data, translates non-English into English. | `data/<profile>/clean/` |
+| **EDA gate** | Checks the corpus is good enough: volume, topic balance, no single source dominating. If not, the run stops here. | `logs/<profile>/eda/` |
+| **Normalization** | Maps every record onto one canonical 22-field schema, drops near-duplicates, and writes the final dataset with a provenance manifest. | `data/<profile>/final/dataset.jsonl` |
 
 A few ideas hold it together:
 
-- **Two gates before a fetch.** Every URL is screened before it is requested
-  (`ingestion/urlscreen.py`: no non-HTTP schemes, no embedded credentials, no host
-  resolving to a private or cloud-metadata address, re-checked across redirects),
-  *and* a source is pulled only if its license clearly allows commercial use.
-  Anything else is skipped and logged.
-- **Nothing is thrown away quietly.** Removed records go to `data/dropped/` with a
-  reason, and records that need a human eye go to `data/flagged/`. Everything stays
-  auditable.
-- **Every release is traceable.** The final dataset ships with a content-hashed
-  manifest, a kind of "datasheet" that records where each record came from, under what
-  license, and from which pipeline version. That is what lets a bad batch be scoped and
-  rolled back.
-
-For the full stage-by-stage walk-through, see
-**[docs/architecture/architecture.md](docs/architecture/architecture.md)**.
+- **A source is fetched only if it clears two gates.** Every URL is screened
+  before the request (`ingestion/urlscreen.py`: no non-HTTP schemes, no embedded
+  credentials, no host resolving to a private or cloud-metadata address, re-checked
+  across redirects), *and* its license must clearly allow commercial use. Anything
+  else is skipped and logged.
+- **Nothing is thrown away quietly.** Dropped records go to `data/<profile>/dropped/`
+  with a reason; records needing a human eye go to `flagged/`. Downloads are capped
+  and archives are checked for zip bombs before extraction; executables an archive
+  ships are reported, never run.
+- **Every release is traceable.** The dataset ships with a content-hashed manifest
+  recording where each record came from, under what license, and from which pipeline
+  version — so a bad batch can be scoped and rolled back.
+- **Profiles keep corpora separate.** Each profile (`cybersec`, `ubi`, or one you
+  create) has its own catalog, taxonomy, `data/` and `logs/`. Switching profiles
+  switches everything; one profile's run never touches another's.
 
 ## Quickstart
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
+Needs Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-cp .env.example .env                    # API keys (all optional for a basic run)
-uv sync                                 # install the pipeline
-uv run cybersec-slm all                 # ingest → clean → EDA gate → normalize
-uv run cybersec-slm all --resume        # re-run without re-downloading finished sources
+cp .env.example .env            # API keys — all optional for a basic run
+uv sync                         # install the pipeline
+uv run cybersec-slm all         # ingest -> clean -> EDA gate -> normalize
+uv run cybersec-slm all --resume   # re-run without re-fetching finished sources
 ```
 
-That writes the finished corpus to `data/final/dataset.jsonl`. To run the pipeline,
-watch it live, browse the result, and ask a built-in Q&A agent about the corpus, all in
-the browser:
+The finished corpus lands in `data/<profile>/final/dataset.jsonl`. To drive the
+pipeline, watch it live, browse the result and ask a Q&A agent about it, all in the
+browser:
 
 ```bash
-uv sync --extra dashboard               # installs Streamlit (opt-in extra)
-uv run cybersec-slm dashboard           # -> http://localhost:8501
+uv sync --extra dashboard       # installs Streamlit (opt-in)
+uv run cybersec-slm dashboard   # -> http://localhost:8501
 ```
 
-To run the stages individually, tune them with flags, or deploy with Docker, see
-**[docs/commands.md](docs/commands.md)**, the full command reference.
+Sourcing needs a SearXNG instance; `docker-compose.searxng.yml` brings one up
+preconfigured. Output folders live at the project root and are git-ignored; point
+them elsewhere with `CYBERSEC_SLM_DATA_ROOT`.
 
-> Output folders (`data/`, `logs/`) are created at the project root and are
-> git-ignored. Point them somewhere else with `CYBERSEC_SLM_DATA_ROOT`.
+For every command and flag, see **[docs/commands.md](docs/commands.md)**.
 
-## Project layout
+## Layout
 
 ```
 src/cybersec_slm/
-  core.py        shared utilities: logging, data paths, JSONL + hashing
-  cli.py         the single entry point (source / run / clean / eda / normalize / flow / dashboard / all)
-  sourcing/      SearXNG source discovery (editable keyword catalog) → Sources.csv
-  ingestion/     fetch, scrape, crawl, URL screen + license gate, parallel worker
-  cleaning/      sanitize, anomaly, dedup, pii, langfilter, translate
-  eda/           metrics + the sufficiency gate
-  normalize/     schema, mappers, enrich, dedup, manifest → data/final/dataset.jsonl
-  orchestration/ Prefect build-corpus flow
-  dashboard/     Streamlit control center: run stages, monitor live, explore data, Q&A agent
-sources/         profiles/<name>/: Sources.csv (the catalog), keywords.yaml, Blacklist.csv
-tests/           pytest suite covering every stage
-docs/            architecture, commands, schema, deployment, and security notes
-infra/           Terraform skeleton (ECR / ECS / S3 / IAM / Secrets Manager)
+  core.py         logging, per-profile data paths, JSONL + hashing
+  cli.py          the single entry point (source / ingest / clean / eda / schema / all)
+  sourcing/       SearXNG discovery + the editable keyword/feed catalog -> Sources.csv
+  ingestion/      fetch, scrape, crawl, RSS, URL screen + license gate, binary scan
+  cleaning/       sanitize, anomaly, dedup, pii, langfilter, translate, canary tokens
+  eda/            metrics + the sufficiency gate
+  normalize/      schema, mappers, enrich, dedup, manifest
+  dashboard/      Streamlit control center: run stages, monitor, explore, Q&A, security
+sources/profiles/<name>/   Sources.csv, keywords.yaml, Blacklist.csv, Excluded.csv
+tests/            pytest suite covering every stage
+docs/             architecture, commands, schema, sources, and security notes
 ```
 
 ## Security
 
-Security isn't a layer bolted on at the end — it's part of how each stage behaves, and
-the design consistently favors choices that are traceable, reversible, and auditable.
-Beyond the ingestion gates and the provenance manifest described above, CI scans the
-full git history for secrets (gitleaks) and audits dependencies (pip-audit). The full
-reasoning is in
-[architecture.md](docs/architecture/architecture.md#security-controls), and the honest
-limits of automated PII redaction on a security corpus are documented in
-[pii_limitations.md](docs/pii_limitations.md). A full stage-by-stage security
-specification, with the current control and the best measure to apply at each step,
-lives in [security-requirements.md](docs/security-requirements.md).
+Security is part of how each stage behaves, not a layer at the end. The two fetch
+gates and the provenance manifest above are the spine of it; alongside them, the
+cleaning stage redacts PII and can plant canary tokens to detect leaks, and the
+dashboard's **Security** page proves each control by exercising it (it builds a
+real zip bomb and checks it's refused, points the URL screen at a metadata IP, and
+so on) rather than trusting a checklist.
 
-## Documentation
+The honest limits of automated PII redaction on a security corpus are in
+[pii_limitations.md](docs/pii_limitations.md); the full trust model, per-stage
+threats and the prioritized checklist are in
+[security-requirements.md](docs/security-requirements.md).
+
+## Docs
 
 | Doc | What's in it |
 |---|---|
-| [commands.md](docs/commands.md) | Every command, flag, and run mode; Docker; configuration; development |
-| [security-requirements.md](docs/security-requirements.md) | Stage-by-stage security requirements: current control + best measure at each step, plus cross-cutting findings |
-| [pipeline-flow.md](docs/pipeline-flow.md) | Following the data: a plain-language walk of what happens to a record from catalog to finished dataset |
-| [architecture/architecture.md](docs/architecture/architecture.md) | How the pipeline works, stage by stage, with the data flow and security controls |
-| [architecture/canonical_schema.md](docs/architecture/canonical_schema.md) | The canonical 22-field record schema (the downstream handoff contract) |
-| [operations/deploy.md](docs/operations/deploy.md) | AWS deployment (Prefect Cloud + ECS Fargate, ECR, S3) |
-| [operations/dvc.md](docs/operations/dvc.md) | Versioned corpus releases with DVC + S3 |
-| [pii_limitations.md](docs/pii_limitations.md) | What the automated PII pass does and does not catch |
-| [security-requirements.md](docs/security-requirements.md) | Trust model, per-stage threats, and the prioritized checklist |
-| `docs/sources/source_*.md` | How sources were researched, evaluated, and accepted |
-| [dashboard/README.md](src/cybersec_slm/dashboard/README.md) | The Streamlit dashboard: pages, what each one shows, how it reads data |
+| [commands.md](docs/commands.md) | Every command, flag and run mode; configuration; development |
+| [architecture/architecture.md](docs/architecture/architecture.md) | How the pipeline works, stage by stage, with the data flow |
+| [architecture/canonical_schema.md](docs/architecture/canonical_schema.md) | The 22-field record schema (the downstream handoff contract) |
+| [pipeline-flow.md](docs/pipeline-flow.md) | Following one record from catalog to finished dataset |
+| [security-requirements.md](docs/security-requirements.md) | Trust model, per-stage threats, prioritized checklist |
+| [pii_limitations.md](docs/pii_limitations.md) | What the PII pass does and does not catch |
+| `docs/sources/` | How sources are researched, evaluated and accepted (incl. legal scope) |
 
-## Project status
+## Status
 
-**v1 — complete.** Week 4 (orchestration and deployment) is done, and with it the whole
-v1 pipeline. All five stages are built, wired end to end, and covered by the test suite,
-and the operational layer around them is in place: ingestion sits behind two gates (a
-URL screen and a default-deny commercial-license gate), releases are
-content-hashed into a provenance manifest and can be versioned and shipped through
-Prefect + DVC on AWS, and a Streamlit dashboard drives the pipeline from the browser
-with per-stage run controls, live monitoring, a dataset explorer, and a
-natural-language Q&A agent over the corpus.
-
-From here the work is incremental: adding vetted sources, widening PII coverage, and
-tuning the sufficiency thresholds as the corpus grows.
+The five stages are built, wired end to end, and covered by the test suite, with a
+Streamlit dashboard driving them from the browser. From here the work is
+incremental: adding vetted sources, widening PII coverage, and tuning the
+sufficiency thresholds as the corpus grows.
