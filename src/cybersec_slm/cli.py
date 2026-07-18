@@ -342,15 +342,6 @@ def build_parser() -> argparse.ArgumentParser:
     pr_new.add_argument("--use", action="store_true",
                         help="activate the new profile straight away")
 
-    # ── flow (Prefect orchestration) ──────────────────────────────────────────
-    fl = sub.add_parser("flow",
-                        help="run the Prefect build-corpus flow (needs orchestration extra)")
-    fl.add_argument("--sources", default=None, help="path to a sources .csv")
-    fl.add_argument("--no-enforce-eda", action="store_true",
-                    help="run the EDA gate in report-only mode")
-    fl.add_argument("--dvc-push", action="store_true",
-                    help="snapshot + push the dataset to the DVC remote")
-
     # ── dashboard (Streamlit monitor + explorer) ──────────────────────────────
     db = sub.add_parser("dashboard",
                         help="launch the read-only monitor + dataset explorer "
@@ -577,11 +568,6 @@ def main(argv: list[str] | None = None) -> None:
             eda_config.OWNER = args.owner
         from .eda import run_eda
         run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
-
-    elif args.stage == "flow":
-        from .orchestration.flows import build_corpus
-        build_corpus(args.sources, enforce_eda=not args.no_enforce_eda,
-                     dvc_push=args.dvc_push)
 
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus

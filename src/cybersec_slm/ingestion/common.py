@@ -474,7 +474,7 @@ class IngestLog:
     def export_ledger(self, path: str | None = None) -> str:
         """Write the provenance ledger (one row per produced/skipped file) to CSV.
 
-        Version-controlled / DVC-tracked, this is the trace that lets a toxic or
+        Version-controlled, this is the trace that lets a toxic or
         mis-licensed source be scoped and surgically removed later rather than
         forcing the whole corpus to be discarded (threat model: Licensing and
         Provenance as a Security Control).

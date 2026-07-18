@@ -2,21 +2,22 @@
 
 Training data for a small cybersecurity language model.
 
-Good cybersecurity material is everywhere — CVE feeds, NIST publications, MITRE
-catalogs, research datasets, security writeups — but it is scattered across
-formats and sites, tangled with noise, duplicates and personal data, and none of
-it arrives in the shape a model wants to read. This pipeline does that unglamorous
-middle work: it gathers the good material, cleans it, and turns it into one
-consistent, training-ready corpus you can trace back to its sources.
+Good cybersecurity material is everywhere: CVE feeds, NIST publications, MITRE
+catalogs, research datasets, security writeups. The problem is that it is
+scattered across formats and sites, tangled with noise, duplicates and personal
+data, and none of it arrives in the shape a model wants to read. This pipeline
+does that unglamorous middle work. It gathers the good material, cleans it, and
+turns it into one consistent, training-ready corpus you can trace back to its
+sources.
 
 It installs as a Python package (`cybersec_slm`) and runs from one command,
-`cybersec-slm` — the whole pipeline end to end, or a stage at a time.
+`cybersec-slm`, the whole pipeline end to end, or a stage at a time.
 
 ## How it works
 
-Five stages, each handing its output to the next, each treating its input as
-possibly messy or hostile — so problems are flagged, dropped or quarantined
-rather than slipping downstream.
+Five stages, each handing its output to the next. Every stage assumes its input
+could be messy or hostile, so problems get flagged, dropped or quarantined
+instead of slipping downstream.
 
 <p align="center">
   <img src="assets/pipeline.png" alt="Identify data sources, secure ingestion, cleaning, exploratory data analysis, schema normalization, normalized JSONL dataset" width="260">
@@ -33,21 +34,21 @@ rather than slipping downstream.
 Three of those stages carry most of the logic. Their flows in detail:
 
 <details>
-<summary><b>Ingestion</b> — permission gate, then API pull / download / scrape per source</summary>
+<summary><b>Ingestion</b>: permission gate, then API pull / download / scrape per source</summary>
 <p align="center">
   <img src="assets/injest.png" alt="Ingestion flow: load sources, permission check, fetch via API pull, download or scrape, loop until all sources complete, verify the pull, raw data" width="620">
 </p>
 </details>
 
 <details>
-<summary><b>Cleaning</b> — sanitize, split anomalies, redact PII, then dedupe the whole corpus</summary>
+<summary><b>Cleaning</b>: sanitize, split anomalies, redact PII, then dedupe the whole corpus</summary>
 <p align="center">
   <img src="assets/clean.png" alt="Cleaning flow: build text, structural sanitization, anomaly check splitting behavioral anomalies to review and structural anomalies to dropped, PII masking, language filtering, global deduplication, deduped corpus" width="620">
 </p>
 </details>
 
 <details>
-<summary><b>Normalization</b> — map to the schema, validate, hash, drop near-duplicates</summary>
+<summary><b>Normalization</b>: map to the schema, validate, hash, drop near-duplicates</summary>
 <p align="center">
   <img src="assets/normalization.png" alt="Normalization flow: source mapper, registry dispatch, Pydantic validation with invalid records logged and a high fail rate pausing the run, SHA-256 content hash, MinHash duplicate check, dataset.jsonl output" width="620">
 </p>
@@ -66,7 +67,7 @@ A few ideas hold it together:
   ships are reported, never run.
 - **Every release is traceable.** The dataset ships with a content-hashed manifest
   recording where each record came from, under what license, and from which pipeline
-  version — so a bad batch can be scoped and rolled back.
+  version, so a bad batch can be scoped and rolled back.
 - **Profiles keep corpora separate.** Each profile (`cybersec`, `ubi`, or one you
   create) has its own catalog, taxonomy, `data/` and `logs/`. Switching profiles
   switches everything; one profile's run never touches another's.
@@ -76,7 +77,7 @@ A few ideas hold it together:
 Needs Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-cp .env.example .env            # API keys — all optional for a basic run
+cp .env.example .env            # API keys, all optional for a basic run
 uv sync                         # install the pipeline
 uv run cybersec-slm all         # ingest -> clean -> EDA gate -> normalize
 uv run cybersec-slm all --resume   # re-run without re-fetching finished sources

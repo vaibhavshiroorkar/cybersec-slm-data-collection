@@ -33,8 +33,8 @@ Two ideas shape everything:
 ## One run mode: parallel streaming
 
 Ingestion and cleaning are fused and run in parallel. `cybersec-slm run` and
-`cybersec-slm all` both drive `ingestion/parallel.py::run_streaming`; the Prefect
-`flow` wraps the same per-source function. One worker process per source does
+`cybersec-slm all` both drive `ingestion/parallel.py::run_streaming`. One worker
+process per source does
 fetch → clean → delete raw (`ingestion/worker.py`), sources are isolated (a bad one
 returns `status="failed"` instead of crashing the pool), and after the pool drains a
 single cross-source dedup pass runs over `data/clean/`. `run` stops there; `all` and
@@ -187,18 +187,12 @@ language, the EDA snapshot, pipeline version, git commit, and a sha256 of the
 dataset file. See [canonical_schema.md](canonical_schema.md) for the field-by-field
 contract.
 
-## Orchestration, versioning, deployment
+## Running a build
 
-- **Prefect** (`orchestration/flows.py`): `cybersec-slm flow` wraps the same stage
-  functions in a `build-corpus` flow: load secrets → ingest + clean per source
-  (mapped, retried, isolated) → cross-source dedup → EDA gate → normalize →
-  optional DVC snapshot. Prefect is optional; the decorators degrade to no-ops so
-  the helpers stay unit-testable.
-- **DVC** (`dvc.yaml`): `dvc repro` rebuilds the corpus and versions the outputs
-  to an S3 remote, with the EDA and normalize reports tracked as metrics. See
-  [dvc.md](../operations/dvc.md).
-- **AWS**: Dockerized, with a Terraform skeleton (ECR / ECS / S3 / IAM / Secrets
-  Manager) and CI/CD. See [deploy.md](../operations/deploy.md).
+`cybersec-slm all` drives the whole pipeline in one process; each stage can also
+be run on its own. The image in `Dockerfile` packages the same entry point for
+container runs, reading secrets from the environment at runtime rather than
+baking them in. See [commands.md](../commands.md).
 
 ## Security controls
 
@@ -212,7 +206,7 @@ response toward something traceable, reversible, and auditable.
 | Cleaning | PII redaction (Presidio + regex fallback); documented PII blind spots + sampled manual review; anomaly quarantine to `flagged/`; auditable `dropped/` reasons |
 | EDA | Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned append-only run history |
 | Normalization | Strict schema validation (closed enums); metadata-only reject logs; per-source failure escalation; per-record near-dup scores; content hashing |
-| Release | Provenance manifest (datasheet); DVC-versioned releases for scoped rollback |
+| Release | Provenance manifest (datasheet) with content hashes for scoped rollback |
 | CI / supply chain | Secret scanning (gitleaks, full history); dependency audit (pip-audit); least-privilege CI token |
 | Deployment | ECR immutable tags + scan-on-push; S3 public-access block + SSE + versioning; least-privilege IAM task role; secrets injected at runtime, never baked in |
 

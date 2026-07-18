@@ -665,8 +665,8 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
 def clean_raw_tree(*, keep_raw: bool = False, limit: int | None = None) -> dict:
     """Clean the whole existing data/raw/ tree in one sequential pass (dedup off).
 
-    Used by the Prefect flow, which fetches via its own mapped tasks and then
-    needs a single clean pass. Deterministic cross-source dedup is left to
+    For callers that fetch separately and then need a single clean pass over
+    everything already on disk. Deterministic cross-source dedup is left to
     `final_global_dedup`. The CLI clean stage uses `run_clean` instead.
     """
     from ..cleaning.dedup import Deduper

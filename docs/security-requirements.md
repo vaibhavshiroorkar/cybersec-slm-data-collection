@@ -269,21 +269,19 @@ tool outputs when the corpus is sensitive.
 
 ---
 
-## Orchestration and cloud deployment
+## Container runs
 
-`orchestration/flows.py`, `infra/`, `docs/operations/deploy.md` - optional Prefect
-+ AWS path.
+`Dockerfile` - the packaged image for running the pipeline outside a dev machine.
 
 | Requirement | Level | Status |
 |---|---|---|
-| Secrets MUST be injected at runtime, never baked into images | MUST | [present] documented in `deploy.md`; `flows.SECRET_KEYS` forwards named secrets at runtime. |
-| Container images MUST use immutable tags and scan-on-push | MUST | [present] per the deployment security controls (ECR immutable + scan-on-push). |
-| Object storage MUST block public access and enable SSE + versioning | MUST | [present] per deployment controls (S3 public-access block, SSE, versioning). |
-| The task role MUST be least-privilege | MUST | [present] per deployment controls. |
-| `SECRET_KEYS` MUST list exactly the secrets the remote path needs (no stale entries) | SHOULD | [partial] update `SECRET_KEYS` to drop the removed Google search keys and reflect the current sourcing backend. |
+| Secrets MUST be injected at runtime, never baked into images | MUST | [present] the image copies no `.env`; keys are passed with `--env-file` at run time. |
+| The image MUST NOT run as root | MUST | [present] the Dockerfile creates an unprivileged `app` user (uid 10001) and switches to it. |
+| Writable paths MUST be limited to the output volume | MUST | [present] only `/work` and `/app/src` are chowned to the runtime user. |
+| Container images SHOULD use immutable tags and scan-on-push | SHOULD | [depends on registry] set at the registry, not in this repo. |
 
-**Best measure:** keep secrets runtime-injected and the IAM role least-privilege,
-and prune `SECRET_KEYS` so it matches the current credential set.
+**Best measure:** keep secrets runtime-injected and keep the image running as the
+unprivileged user with only the output volume writable.
 
 ---
 

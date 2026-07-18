@@ -82,7 +82,6 @@ src/cybersec_slm/
   cleaning/          text mapping, sanitize, anomaly, dedup, PII, language filter, translate
   eda/               corpus metrics and the sufficiency gate
   normalize/         schema, mappers, enrich, dedup, synthetic filter, manifest
-  orchestration/     the Prefect build-corpus flow
   dashboard/         read-only Streamlit monitor, dataset explorer, and Q&A agent
 sources/             Sources.csv (the curated catalog) and the research behind it
 tests/               a pytest suite covering every stage
@@ -94,16 +93,14 @@ tools/               small helper scripts (allowlist build, PII sampling, pipeli
 A few top-level files matter too:
 
 - `pyproject.toml` declares the package, its dependencies, and the optional
-  extras (orchestration, dashboard, agent).
-- `dvc.yaml` describes the reproducible corpus build for DVC.
-- `prefect.yaml` describes the Prefect deployment.
+  extras (dashboard, agent).
 - `Dockerfile` builds the container image used for hosted runs.
 - `.github/workflows/` holds the CI (secret scanning, dependency audit, lint,
   tests) and the deploy workflow.
 
-A note on documentation drift: the README, `docs/architecture/architecture.md`,
-and `dvc.yaml` still mention a source allowlist file (`sources/allowlist.yaml`)
-and an `ingestion/allowlist.py` module. Those are no longer part of the code. The
+A note on documentation drift: the README and `docs/architecture/architecture.md`
+still mention a source allowlist file (`sources/allowlist.yaml`) and an
+`ingestion/allowlist.py` module. Those are no longer part of the code. The
 governance gate that actually runs at ingestion today is the commercial-license
 gate (Section 7.4) plus the light EDA gate (Section 7.5), and synthetic sources
 are held out at normalization (Section 10.4). This walkthrough describes what the
@@ -169,7 +166,6 @@ The commands:
 | `validate` | Check `data/clean/` records against the Pydantic schema without writing anything. |
 | `source [--domains ...] [--mode datasets\|text\|both] [--dry-run] ...` | Discover new candidate sources through web search. |
 | `synthetic-scan [--apply]` | Suggest which catalog rows look synthetic (a curation aid). |
-| `flow [--dvc-push] [--no-enforce-eda]` | Run the same pipeline through Prefect (needs the orchestration extra). |
 | `dashboard [--port N] [--headless]` | Launch the Streamlit monitor and explorer (needs the dashboard extra). |
 
 Two flags show up on several commands and are worth understanding once:
@@ -746,46 +742,23 @@ auditable.
 | Cleaning | PII redaction (Presidio with a regex fallback), with documented blind spots and a sampled manual review; anomaly quarantine to `flagged/`; auditable drop reasons in `dropped/`. |
 | EDA | A blocking sufficiency gate (volume), a tracked source-concentration warning with feedback, drift detection, and a versioned append-only run history. |
 | Normalization | Synthetic-source exclusion; strict schema validation with closed enums; metadata-only reject logs; per-source failure escalation; per-record near-dup scores; content hashing. |
-| Release | A provenance manifest (the datasheet) and DVC-versioned releases for scoped rollback. |
+| Release | A provenance manifest (the datasheet) with content hashes for scoped rollback. |
 | CI and supply chain | Secret scanning over the full git history (gitleaks), dependency auditing (pip-audit), and a least-privilege CI token. |
 | Deployment | Immutable ECR image tags with scan-on-push; an S3 bucket with public access blocked, encryption, and versioning; a least-privilege IAM task role; secrets injected at runtime, never baked into the image. |
 
 ---
 
-## 12. Orchestration, versioning, and deployment
-
-### 12.1 Prefect: `orchestration/flows.py`
-
-`cybersec-slm flow` runs the same pipeline through Prefect. The flow is a thin
-wrapper: it adds scheduling, per-source isolation with retries and timeouts,
-secret loading, and an optional DVC snapshot, but the real work still lives in the
-ingestion, cleaning, eda, and normalize modules. Prefect is optional. The module
-imports cleanly without it, because the `@flow` and `@task` decorators degrade to
-no-ops when Prefect is absent, which keeps the plain helper functions unit-testable.
-`load_secrets` best-effort hydrates API keys from AWS Secrets Manager when
-prefect-aws is configured, and falls back to `.env` otherwise.
-
-### 12.2 DVC: `dvc.yaml`
-
-`dvc repro` rebuilds the corpus end to end and versions the outputs to an S3
-remote, with the EDA and normalize reports tracked as metrics. Versioned releases
-are what let a bad batch be rolled back or scoped without discarding the whole
-dataset.
-
-### 12.3 Docker and AWS: `Dockerfile`, `infra/`
+## 12. Running a build in a container
 
 The `Dockerfile` builds a Python 3.13 image, ordered so that editing code rebuilds
 only the fast final layer, not the heavy dependency and browser layers. It
 installs Chromium for the crawler, runs as an unprivileged user, writes everything
 under a mounted `/work` volume, and reads secrets from the environment at runtime.
 
-The `infra/` Terraform skeleton provisions the AWS side: an ECR repository with
-immutable tags and scan-on-push, an S3 bucket that is versioned, encrypted, and
-has public access blocked, a least-privilege ECS task role (read/write only the
-one data bucket, read only the named secrets), Secrets Manager entries whose
-values are set out of band and never in Terraform state, an ECS Fargate cluster,
-and a CloudWatch log group. The intended runtime is a Prefect ECS push work pool
-pointed at that cluster and role.
+There is no scheduler or dataset-versioning tool wired in. Releases are traced
+through the provenance manifest instead: every record carries its source and
+license, and the manifest records a content hash of the dataset file, which is
+what lets a bad batch be scoped and rolled back.
 
 ---
 
@@ -910,10 +883,6 @@ uv run cybersec-slm eda                 # validate + sufficiency gate -> logs/ed
 uv run cybersec-slm normalize           # canonical dataset -> data/final/
 ```
 
-For the AWS path (Prefect Cloud plus ECS Fargate), see
-[operations/deploy.md](operations/deploy.md); for versioned releases with DVC, see
-[operations/dvc.md](operations/dvc.md).
-
 ---
 
 ## 18. Known limits worth naming
@@ -931,5 +900,5 @@ For the AWS path (Prefect Cloud plus ECS Fargate), see
   by far the largest by source count). The sufficiency gate surfaces this as a
   concentration warning with feedback, and the near-term work is adding vetted
   sources to the thin sub-domains until the corpus is balanced across all twelve.
-- **Documentation drift.** As noted in Section 3, some older docs and `dvc.yaml`
-  still reference a source allowlist that is no longer in the code.
+- **Documentation drift.** As noted in Section 3, some older docs still reference
+  a source allowlist that is no longer in the code.

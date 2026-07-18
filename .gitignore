@@ -50,3 +50,6 @@ Thumbs.db
 
 # Claude Code (editor/tool config, not part of the app)
 .claude/
+
+# Streamlit local theme config (machine-local, not part of the app)
+.streamlit/
