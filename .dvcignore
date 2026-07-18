@@ -1,7 +1,0 @@
-# DVC should not hash the large/ephemeral intermediate trees.
-data/raw/
-data/clean/
-data/flagged/
-data/dropped/
-data/_stages/
-.venv/
