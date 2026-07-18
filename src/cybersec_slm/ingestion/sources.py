@@ -63,7 +63,7 @@ def __getattr__(name: str):
 # Shared by the sourcing crawler (which appends rows) and the cleaning driver
 # (which writes the Cleaned* columns back), so the column list lives in one place.
 CATALOG_COLUMNS: tuple[str, ...] = (
-    "Name", "Sub-Domain", "Description", "Dataset Link", "File Count",
+    "Name", "Sub-Domain", "Field", "Country", "Description", "Dataset Link", "File Count",
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
     "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
     "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
