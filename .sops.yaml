@@ -11,5 +11,5 @@
 # entry as a comma-separated list; sops encrypts to every recipient listed,
 # so any of their keys can decrypt.
 creation_rules:
-  - path_regex: secrets/.*\.enc\.yaml$
-    age: age16475zsrqtka5kwv5zudw9ttzerc0jl68k0f6xgazl5eznz8xxdcsap9t4n # REPLACE with your operator public key
+  - path_regex: secrets[/\\].*\.enc\.yaml$
+    age: age1lc9pjcfnzfz52y8sx883mag0f96tev826sayl78tkfdek0uf7u9s9vlmrs

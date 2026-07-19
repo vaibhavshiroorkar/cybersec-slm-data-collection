@@ -15,12 +15,11 @@ repos:
     hooks:
       - id: block-plaintext-secrets
         name: block unencrypted secrets/credentials.yaml
+        language: fail
         entry: >
-          bash -c 'git diff --cached --name-only -- "secrets/credentials.yaml"
-          | grep -q . && echo "Refusing to commit plaintext secrets/credentials.yaml -- encrypt it first: cp secrets/credentials.yaml secrets/credentials.enc.yaml && sops -e -i secrets/credentials.enc.yaml && rm secrets/credentials.yaml" && exit 1 || exit 0'
-        language: system
-        pass_filenames: false
-        always_run: true
+          Refusing to commit plaintext secrets/credentials.yaml -- encrypt it first:
+          cp secrets/credentials.yaml secrets/credentials.enc.yaml && sops -e -i secrets/credentials.enc.yaml && rm secrets/credentials.yaml
+        files: ^secrets/credentials\.yaml$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.6.9
@@ -28,7 +27,6 @@ repos:
       - id: ruff
         args: [--fix]
         files: ^(src|tests)/
-
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
