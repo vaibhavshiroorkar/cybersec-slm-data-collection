@@ -34,3 +34,47 @@ def test_find_input_files_maps_domain_and_source(tmp_path):
 
     (_ap, sub, source, rel), = list(find_input_files(str(raw)))
     assert (sub, source, rel) == ("Cryptography", "acme", "Cryptography/acme/a.jsonl")
+
+
+def test_atomic_replace_retries_transient_permission_error(tmp_path, monkeypatch):
+    """A Windows-style transient lock (PermissionError) on the first attempt is
+    retried and succeeds, instead of aborting the caller (e.g. final_global_dedup)
+    mid-pass. This is the retry sourcing/sheet.py already had; cleaning now shares it."""
+    from cybersec_slm import core
+
+    src = tmp_path / "a.tmp"
+    dst = tmp_path / "a"
+    src.write_text("payload", encoding="utf-8")
+
+    real_replace = core.os.replace
+    calls = {"n": 0}
+
+    def _flaky(s, d):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("file is locked by another process")
+        return real_replace(s, d)
+
+    monkeypatch.setattr(core.os, "replace", _flaky)
+    monkeypatch.setattr(core.time, "sleep", lambda *_a, **_k: None)   # no real delay
+
+    core.atomic_replace(str(src), str(dst))
+
+    assert calls["n"] == 2                       # failed once, retried, succeeded
+    assert dst.read_text(encoding="utf-8") == "payload"
+    assert not src.exists()
+
+
+def test_atomic_replace_reraises_persistent_permission_error(tmp_path, monkeypatch):
+    import pytest
+
+    from cybersec_slm import core
+    src = tmp_path / "a.tmp"
+    src.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(core.os, "replace",
+                        lambda *_a, **_k: (_ for _ in ()).throw(PermissionError("locked")))
+    monkeypatch.setattr(core.time, "sleep", lambda *_a, **_k: None)
+
+    with pytest.raises(PermissionError):
+        core.atomic_replace(str(src), str(tmp_path / "a"), retries=3)

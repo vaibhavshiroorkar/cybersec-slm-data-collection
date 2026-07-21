@@ -20,6 +20,7 @@ from ..core import (  # noqa: F401
     RAW_DATA,
     STAGES,
     JsonlWriter,
+    atomic_replace,
     iter_jsonl,
     json_dumps,
     logger,

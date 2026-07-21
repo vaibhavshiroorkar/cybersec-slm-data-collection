@@ -27,8 +27,9 @@ import json
 import os
 from statistics import median
 
-from ..cleaning.common import PARSE_ERROR, find_input_files, text_of
-from ..core import DROPPED, iter_jsonl, logger
+from ..cleaning.anomaly import garbage_ratio
+from ..cleaning.common import find_input_files, text_of
+from ..core import DROPPED, count_lines, json_loads, logger
 from . import hazard_scan
 from .license_gate import classify_license
 from .sources import source_identity, synthetic_identities
@@ -40,44 +41,54 @@ MAX_EMPTY_RATE = 0.80          # reject if >80% records have no usable text
 MAX_MEDIAN_GARBAGE = 0.50      # reject if median garbage ratio >0.50
 
 
-def _garbage_ratio(text: str) -> float:
-    """Fraction of chars that are not alphanumeric, whitespace, or common punctuation."""
-    if not text:
-        return 0.0
-    bad = sum(1 for c in text
-              if not (c.isalnum() or c.isspace() or c in ".,;:!?'\"()[]{}-_/\\@#%&*+=<>|~`$^"))
-    return bad / len(text)
+def _collect_records(folder: str, *, max_records: int = SAMPLE_SIZE):
+    """Load a *representative* sample of up to ``max_records`` valid records.
 
+    The reject decision must reflect the whole source, not its head. A source whose
+    leading records are a metadata / feature-table block but whose body is good
+    would be wrongly rejected — and, since a reject moves the whole folder to
+    ``data/dropped/``, silently discarded — by a head-only sample. So this cheaply
+    counts every line first (raw bytes, no JSON parse), computes a stride, and
+    parses only every k-th line across all files: bounded parsing, but a sample
+    spread across the entire source rather than its first ``max_records`` rows.
 
-def _collect_records(folder: str, *, max_records: int = SAMPLE_SIZE) -> list[dict]:
-    """Load up to ``max_records`` valid records from a source folder."""
+    Returns ``(records, total_lines, sampled_parse_errors)`` where ``total_lines``
+    is the full line count (every input file) and ``sampled_parse_errors`` is the
+    number of malformed lines seen *within the sample*.
+    """
+    per_file = [(ap, count_lines(ap))
+                for ap, _sub, _source, _rel in find_input_files(folder)]
+    total = sum(n for _, n in per_file)
+    if total == 0:
+        return [], 0, 0
+    stride = max(1, total // max_records)
     records: list[dict] = []
     parse_errors = 0
-    total = 0
-    for ap, _sub, _source, _rel in find_input_files(folder):
-        for rec in iter_jsonl(ap):
-            total += 1
-            if rec.get(PARSE_ERROR):
-                parse_errors += 1
-                continue
-            records.append(rec)
-            if len(records) >= max_records:
-                break
+    gidx = 0                                   # global raw-line index (matches count_lines)
+    for ap, _n in per_file:
         if len(records) >= max_records:
             break
+        with open(ap, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                take = gidx % stride == 0
+                gidx += 1
+                if not take:
+                    continue
+                s = line.strip()
+                if not s:
+                    continue
+                try:
+                    obj = json_loads(s)
+                except (json.JSONDecodeError, ValueError):
+                    parse_errors += 1
+                    continue
+                if not isinstance(obj, dict):
+                    parse_errors += 1
+                    continue
+                records.append(obj)
+                if len(records) >= max_records:
+                    break
     return records, total, parse_errors
-
-
-def _count_all_records(folder: str) -> tuple[int, int]:
-    """Count total records and parse errors in the folder (full scan)."""
-    total = 0
-    parse_errors = 0
-    for ap, _sub, _source, _rel in find_input_files(folder):
-        for rec in iter_jsonl(ap):
-            total += 1
-            if rec.get(PARSE_ERROR):
-                parse_errors += 1
-    return total, parse_errors
 
 
 def _has_jsonl_files(folder: str) -> bool:
@@ -151,16 +162,17 @@ def assess_source(folder: str, descriptor: dict, *,
         logger.warning(f"  light-eda REJECT {label}: {report['reject_reason']}")
         return False, report
 
-    # --- Sample records ---
-    records, total_sampled, parse_errors = _collect_records(folder)
-    report["record_count"] = total_sampled
+    # --- Sample records (representative stride sample across the whole source) ---
+    records, total_records, parse_errors = _collect_records(folder)
+    report["record_count"] = total_records
     report["parse_error_count"] = parse_errors
 
     # --- Check 2: any valid records? ---
     if not records:
         report["passed"] = False
         report["reject_reason"] = (
-            f"0 valid records ({parse_errors} parse errors out of {total_sampled})"
+            f"0 valid records ({parse_errors} parse errors in a sample of "
+            f"{total_records} total)"
         )
         logger.warning(f"  light-eda REJECT {label}: {report['reject_reason']}")
         return False, report
@@ -181,7 +193,7 @@ def assess_source(folder: str, descriptor: dict, *,
     # --- Check 4: garbage ratio (sampled) ---
     text_records = [rec for rec in records if text_of(rec).strip()]
     if text_records:
-        garbage_ratios = [_garbage_ratio(text_of(rec)) for rec in text_records]
+        garbage_ratios = [garbage_ratio(text_of(rec)) for rec in text_records]
         med_garbage = median(garbage_ratios)
         report["median_garbage_ratio"] = round(med_garbage, 3)
         if med_garbage > MAX_MEDIAN_GARBAGE:
@@ -232,8 +244,8 @@ def assess_source(folder: str, descriptor: dict, *,
         logger.info(f"  light-eda FLAG {label}: {len(hazards)} security hazard(s) "
                     f"across {len(type_counts)} type(s)")
 
-    logger.info(f"  light-eda PASS {label}: {total_sampled} records, "
-                f"{parse_errors} parse errors, "
+    logger.info(f"  light-eda PASS {label}: {total_records} records, "
+                f"{parse_errors} sampled parse errors, "
                 f"empty_rate={empty_rate:.1%}, "
                 f"median_garbage={report['median_garbage_ratio']:.2f}")
     return True, report

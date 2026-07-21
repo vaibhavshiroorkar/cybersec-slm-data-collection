@@ -83,6 +83,22 @@ def test_pass_good_source(tmp_path):
     assert report["record_count"] == 10
 
 
+def test_pass_source_with_bad_head_but_good_body(tmp_path):
+    """The reject gate must sample representatively, not just the head. A source
+    whose first records are prose-less (a concatenated metadata/feature-table
+    block) but whose body is good must PASS — head-only sampling would wrongly
+    reject it and discard the whole source to data/dropped/."""
+    bad_head = [{"features": [0, 1, 2], "label": 1} for _ in range(400)]
+    good_body = [{"text": f"A detailed record about compliance topic {i} with "
+                          f"plenty of natural-language prose content to keep."}
+                 for i in range(1200)]
+    folder = _source_folder(tmp_path, bad_head + good_body)
+    passed, report = light_eda.assess_source(folder, _descriptor(),
+                                             synthetic_ids=frozenset())
+    assert passed, report["reject_reason"]
+    assert report["record_count"] == 1600      # full count, not the sample size
+
+
 # ── Flag tests ───────────────────────────────────────────────────────────────
 
 def test_flag_synthetic_source(tmp_path, monkeypatch):

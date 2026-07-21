@@ -28,6 +28,7 @@ from .common import (
     RAW_DATA,
     REPORTS,
     JsonlWriter,
+    atomic_replace,
     find_input_files,
     iter_jsonl,
     json_dumps,
@@ -425,7 +426,7 @@ def _save_dedup_done(path: str, done: set[str]) -> None:
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(sorted(done), f)
-    os.replace(tmp, path)
+    atomic_replace(tmp, path)
 
 
 def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
@@ -505,7 +506,7 @@ def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
         finally:
             if dropped_fh is not None:
                 dropped_fh.close()
-        os.replace(tmp, ap)
+        atomic_replace(tmp, ap)
         done.add(rel)
         # Amortized checkpoint: persist at most every DEDUP_CKPT_INTERVAL_S so a
         # large corpus doesn't re-serialize the whole hash set once per file. A

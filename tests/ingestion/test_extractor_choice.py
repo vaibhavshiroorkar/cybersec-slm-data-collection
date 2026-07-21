@@ -128,7 +128,9 @@ def test_default_when_nothing_chooses(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         scrape_html.crawl("Dom", "slug", "http://example.com", "MIT", False, 5,
                           "/", "desc", log=None)
-    assert seen["extractor"] == "default"           # unchanged behaviour by default
+    # trafilatura (real main-content detection) is the default now; it falls back
+    # to extract_default() on its own when it finds nothing.
+    assert seen["extractor"] == "trafilatura"
 
 
 def test_cli_offers_only_the_known_extractors():

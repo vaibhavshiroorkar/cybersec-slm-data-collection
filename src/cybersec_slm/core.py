@@ -19,6 +19,7 @@ import importlib
 import json
 import os
 import sys
+import time
 from collections.abc import Iterator
 
 
@@ -269,6 +270,26 @@ def json_dumps(obj) -> str:
         except TypeError:        # exotic type / >64-bit int -> stdlib handles
             pass
     return json.dumps(obj, ensure_ascii=False)
+
+
+def atomic_replace(src: str, dst: str, *, retries: int = 5, delay: float = 1.0) -> None:
+    """``os.replace(src, dst)`` that retries a Windows ``PermissionError``.
+
+    On Windows a file briefly held open by another process (an antivirus scan, an
+    editor, another reader) makes ``os.replace`` raise ``PermissionError`` even
+    though the write itself is fine. Retrying a few times rides out that transient
+    lock instead of aborting a whole pass mid-corpus. The final attempt re-raises,
+    so a genuine, persistent failure is never swallowed.
+    """
+    for attempt in range(retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
 
 
 def iter_jsonl(path: str) -> Iterator[dict]:

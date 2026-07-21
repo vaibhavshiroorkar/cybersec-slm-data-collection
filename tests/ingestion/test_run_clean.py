@@ -124,6 +124,33 @@ def test_run_clean_cleans_and_dedups(tmp_path, monkeypatch):
     pipeline.reset_cleaner_cache()
 
 
+def test_one_failing_source_does_not_abort_the_parallel_clean(tmp_path, monkeypatch):
+    """A single source whose clean raises must not take down the whole stage: the
+    other sources still clean, the failure is reported, and the failed source is
+    NOT ledgered (so --resume re-cleans it instead of silently dropping it)."""
+    _wire(monkeypatch, tmp_path)
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+
+    real_clean_chunk = parallel._clean_chunk
+
+    def _flaky(chunk, sid, *a, **k):
+        if sid == "Test/s2":
+            raise RuntimeError("boom in s2")
+        return real_clean_chunk(chunk, sid, *a, **k)
+
+    monkeypatch.setattr(parallel, "_clean_chunk", _flaky)
+
+    result = parallel.run_clean(workers=2)       # must not raise
+
+    assert result["failed"] == 1
+    assert result["failed_sources"] == ["Test/s2"]
+    cleaned = (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").read_text(
+        encoding="utf-8").split()
+    assert "Test/s1" in cleaned                   # the good source still cleaned + ledgered
+    assert "Test/s2" not in cleaned               # the failed source is NOT ledgered
+    pipeline.reset_cleaner_cache()
+
+
 def test_run_clean_resume_skips_already_cleaned_sources(tmp_path, monkeypatch):
     raw, dup, distinct = _wire(monkeypatch, tmp_path)
     # First run cleans both sources and writes the checkpoint.

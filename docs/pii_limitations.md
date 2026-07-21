@@ -35,10 +35,12 @@ Blind Spots").
    regex rule to `cleaning/pii.py` and re-run cleaning for the affected sources.
 3. **Provenance**: because every record is traceable via the ingest ledger and the
    normalize `content_hash`, a leak found late can be scoped to its source and
-   removed surgically (see `logs/provenance/ledger.csv`).
+   removed surgically (see `logs/<profile>/provenance/ledger.csv`).
 
 ## Out of scope (handled elsewhere)
 
 - Emails, credit cards, phone numbers, person names: covered by the default
   Presidio/regex pass with acceptable recall.
-- License compliance: tracked separately in `sources/allowlist.yaml` + the ledger.
+- License compliance: enforced by the ingestion license gate
+  (`src/cybersec_slm/ingestion/license_gate.py`, default-deny) against each row's
+  `License` in the active profile's `sources/profiles/<profile>/Sources.csv`.

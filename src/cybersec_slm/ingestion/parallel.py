@@ -544,16 +544,25 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     os.makedirs(core.LOGS, exist_ok=True)
     ledger = open(CLEANED_LEDGER, "a", encoding="utf-8")
     rows: list[dict] = []
+    # A source whose clean raises is recorded here and NOT written to the ledger,
+    # so a single bad source neither aborts the whole stage nor is skipped on a
+    # later --resume (which would silently drop it from the corpus).
+    failed_sids: set[str] = set()
     if workers is None or workers <= 1:
         for src_dir, sid in to_clean:
             if not os.path.isdir(src_dir):
                 logger.warning(f"clean: no raw data for source {sid}")
                 continue
             logger.info(f"clean: {sid} -> {cleaning_pipeline.OUT_CLEAN_DATA}")
-            src_rows = cleaning_pipeline.clean_one_source(
-                src_dir, raw_root=raw_root,
-                clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
-                drop_non_english=drop_non_english)
+            try:
+                src_rows = cleaning_pipeline.clean_one_source(
+                    src_dir, raw_root=raw_root,
+                    clean_data_dir=cleaning_pipeline.OUT_CLEAN_DATA, limit=limit,
+                    drop_non_english=drop_non_english)
+            except Exception as ex:               # noqa: BLE001 - one source never aborts the stage
+                logger.error(f"clean: failed for {sid}: {type(ex).__name__}: {ex}; skipping")
+                failed_sids.add(sid)
+                continue
             rows += src_rows
             ledger.write(sid + "\n")
             ledger.flush()
@@ -579,18 +588,24 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
             }
             for fut in as_completed(futures):
                 sid = futures[fut]
+                outstanding[sid] -= 1
                 try:
                     _, src_rows = fut.result()
-                except Exception as ex:
-                    logger.error(f"clean: worker failed for {sid}: {type(ex).__name__}: {ex}")
-                    ledger.close()
-                    raise
+                except Exception as ex:           # noqa: BLE001 - one window never aborts the stage
+                    logger.error(f"clean: worker failed for {sid}: "
+                                 f"{type(ex).__name__}: {ex}; skipping this window")
+                    failed_sids.add(sid)
+                    continue
                 rows.extend(src_rows)
-                outstanding[sid] -= 1
-                if outstanding[sid] == 0:         
+                # Ledger a source only when every one of its windows succeeded, so a
+                # source with a failed window is re-cleaned on resume, not skipped.
+                if outstanding[sid] == 0 and sid not in failed_sids:
                     ledger.write(sid + "\n")
                     ledger.flush()
     ledger.close()
+    if failed_sids:
+        logger.warning(f"clean: {len(failed_sids)} source(s) failed and were not "
+                       f"ledgered (will retry on --resume): {sorted(failed_sids)}")
 
     if rows:
         cleaning_pipeline._write_report(cleaning_pipeline.merge_report_rows(rows))
@@ -611,8 +626,10 @@ def run_clean(*, keep_raw: bool = True, limit: int | None = None,
     total_in = sum(r.get("in", 0) for r in rows)
     total_out = sum(r.get("out", 0) for r in rows)
     logger.info(f"clean: done files={len(rows)} in={total_in} out={total_out} "
+                f"failed={len(failed_sids)} "
                 f"exact_dups={dedup.get('exact_dups')} kept={dedup.get('kept')}")
-    return {"files": len(rows), "in": total_in, "out": total_out, "dedup": dedup}
+    return {"files": len(rows), "in": total_in, "out": total_out, "dedup": dedup,
+            "failed": len(failed_sids), "failed_sources": sorted(failed_sids)}
 
 
 # ── Sequential clean of an already-fetched raw tree ───────────────────────────
