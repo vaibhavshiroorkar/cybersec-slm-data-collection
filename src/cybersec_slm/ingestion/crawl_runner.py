@@ -184,6 +184,12 @@ class SiteSpider(scrapy.Spider):
 
 
 def build_settings(cfg: dict) -> dict:
+    # Requests-in-flight per domain. AutoThrottle *adapts* delay to try to hit
+    # AUTOTHROTTLE_TARGET_CONCURRENCY -- left unset, Scrapy defaults that to
+    # 1.0, which silently overrides CONCURRENT_REQUESTS_PER_DOMAIN and
+    # throttles every crawl down to ~1 in-flight request no matter what this
+    # is set to. Setting both to the same value keeps them in agreement.
+    concurrency = cfg.get("concurrency_per_domain", 4)
     settings = {
         "ROBOTSTXT_OBEY": True,
         "USER_AGENT": cfg["user_agent"],
@@ -191,7 +197,10 @@ def build_settings(cfg: dict) -> dict:
         "CLOSESPIDER_TIMEOUT": cfg["close_timeout"],
         "DOWNLOAD_DELAY": cfg["download_delay"],
         "AUTOTHROTTLE_ENABLED": True,
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 4,
+        "AUTOTHROTTLE_START_DELAY": cfg["download_delay"],
+        "AUTOTHROTTLE_MAX_DELAY": 10,
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": concurrency,
+        "CONCURRENT_REQUESTS_PER_DOMAIN": concurrency,
         "LOG_LEVEL": "WARNING",
         "TELNETCONSOLE_ENABLED": False,
         "RETRY_ENABLED": True,

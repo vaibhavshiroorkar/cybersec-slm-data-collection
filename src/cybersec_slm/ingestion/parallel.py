@@ -66,7 +66,20 @@ _NON_RETRYABLE_MARKERS = (
 
 
 def _default_workers() -> int:
-    return max(2, min(8, os.cpu_count() or 4))
+    """Concurrent sources in the ingest pool.
+
+    Previously hard-capped at 8 regardless of machine size, which throttled
+    throughput on anything bigger than an 8-core box for no real reason: each
+    worker spends nearly all its time blocked on network I/O (an HTTP fetch or
+    a Scrapy subprocess), not CPU, so running well past the core count is
+    normal and safe. The ceiling here just guards against an unconsidered
+    default hammering a lot of third-party hosts at once on a very large
+    machine; raise or lower it with $CYBERSEC_SLM_MAX_WORKERS, or pass
+    --workers explicitly to override this function entirely.
+    """
+    cpu = os.cpu_count() or 4
+    ceiling = int(os.environ.get("CYBERSEC_SLM_MAX_WORKERS", 32))
+    return max(2, min(ceiling, cpu * 2))
 
 
 def _now() -> float:

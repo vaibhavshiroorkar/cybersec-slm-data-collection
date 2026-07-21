@@ -56,15 +56,27 @@ class BackendConfig:
     engines: str = ""             # for SearXNG: comma-separated engine list
     searxng_url: str = ""         # SearXNG instance URL
     max_pages: int = 5            # SearXNG pagination depth
+    sleep_seconds: float = 1.0    # SearXNG: delay between paginated requests
     country: str = ""             # force Country label for all rows from this backend
     license: str = ""             # force License for all rows from this backend
     # Country-signal keywords: if any appear in name/desc → mark as primary country
     country_signal_keywords: list[str] = field(default_factory=list)
+    # Pattern backend only: HTTP-verify each generated URL resolves (status <400)
+    # before accepting it. Off by default to preserve the "no network calls"
+    # fast path; strongly recommended for any id_range/items pattern that is a
+    # guess rather than a confirmed listing, since nothing else checks liveness.
+    verify: bool = False
+    verify_workers: int = 20
+    verify_timeout: float = 6.0
 
 
 @dataclass
 class QualityConfig:
     min_relevance_score: float = 0.25
+    # Independent floor on keyword_score alone (0-1). Host trust (0.30 weight)
+    # can no longer single-handedly clear min_relevance_score for a row with
+    # zero topical match once this is set above 0. Default 0.0 = old behaviour.
+    min_keyword_score: float = 0.0
     reject_off_topic_hosts: bool = True
     reject_listing_pages: bool = True
     off_topic_signals: list[str] = field(default_factory=list)
@@ -158,15 +170,20 @@ def _parse_backend_config(d: dict) -> BackendConfig:
         engines=d.get("engines", ""),
         searxng_url=d.get("url", d.get("searxng_url", "")),
         max_pages=d.get("max_pages", 5),
+        sleep_seconds=d.get("sleep_seconds", 1.0),
         country=d.get("country", ""),
         license=d.get("license", ""),
         country_signal_keywords=d.get("country_signal_keywords", []),
+        verify=d.get("verify", False),
+        verify_workers=d.get("verify_workers", 20),
+        verify_timeout=d.get("verify_timeout", 6.0),
     )
 
 
 def _parse_quality(d: dict) -> QualityConfig:
     return QualityConfig(
         min_relevance_score=d.get("min_relevance_score", 0.25),
+        min_keyword_score=d.get("min_keyword_score", 0.0),
         reject_off_topic_hosts=d.get("reject_off_topic_hosts", True),
         reject_listing_pages=d.get("reject_listing_pages", True),
         off_topic_signals=[s.lower() for s in d.get("off_topic_signals", [])],

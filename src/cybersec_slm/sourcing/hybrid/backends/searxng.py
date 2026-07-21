@@ -14,6 +14,14 @@ The SearXNG URL is resolved from:
   1. config.api_backends.searxng.url (from YAML)
   2. SEARXNG_URL environment variable
   3. http://localhost:8080 (default)
+
+The 1-second-per-page pause was previously hardcoded to be polite to the
+upstream engines SearXNG proxies. When `engines` is restricted to API-based
+engines (github, arxiv, openairedatasets, semantic scholar — the ones that
+actually work per the module README) rather than the CAPTCHA-walled general
+web engines, that pause can usually be shortened without getting throttled.
+It's now `config.api_backends.searxng.sleep_seconds` (default 1.0, set to 0
+to disable).
 """
 
 from __future__ import annotations
@@ -98,6 +106,7 @@ class SearXNGBackend(Backend):
         engines = bc.engines
         max_pages = bc.max_pages
         per_kw = bc.per_keyword_limit
+        sleep_s = bc.sleep_seconds
         signals = [s.lower() for s in bc.country_signal_keywords]
         primary = config.primary_country
         tags_str = config.default_tags
@@ -150,6 +159,7 @@ class SearXNGBackend(Backend):
                                 note=f"SearXNG discovery – kw:{kw} – page:{page}",
                             ))
 
-                        time.sleep(1.0)
+                        if sleep_s > 0:
+                            time.sleep(sleep_s)
 
         return rows

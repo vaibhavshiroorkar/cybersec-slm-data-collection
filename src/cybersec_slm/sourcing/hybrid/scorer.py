@@ -163,7 +163,19 @@ def passes_quality(name: str, description: str, url: str,
         if any(host == b or host.endswith("." + b) for b in q.blocked_hosts):
             return False, f"blocked host ({host})"
 
-    score = relevance_score(name, description, url, country, config)
+    # Host trust (weight 0.30) can clear min_relevance_score on its own even
+    # when the row has *zero* topical match — a trusted-host repo/dataset that
+    # is completely off-subject still slides through. min_keyword_score is an
+    # independent floor on the keyword component alone, so trust can no longer
+    # fully substitute for actual relevance. Default 0.0 preserves the old
+    # behaviour for configs that don't set it.
+    ks = keyword_score(name, description, config)
+    if ks < q.min_keyword_score:
+        return False, f"keyword relevance too low ({ks:.2f} < {q.min_keyword_score})"
+
+    hs = host_score(url, config)
+    cs = country_score(country, name, description, config)
+    score = 0.40 * ks + 0.30 * hs + 0.30 * cs
     if score < q.min_relevance_score:
         return False, f"relevance too low ({score:.2f} < {q.min_relevance_score})"
 

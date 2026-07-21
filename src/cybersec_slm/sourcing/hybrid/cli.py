@@ -54,6 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Suppress progress output.",
     )
+    p.add_argument(
+        "--parallel",
+        action="store_true",
+        default=False,
+        help=(
+            "Fetch from all planned backends concurrently instead of one at "
+            "a time. Each backend hits an independent API/rate-limit, so "
+            "wall-clock time drops from sum(latency) to roughly max(latency). "
+            "Recommended once GITHUB_TOKEN is set, since the slowest backend "
+            "(unauthenticated GitHub) is the usual bottleneck in sequential mode."
+        ),
+    )
     return p
 
 
@@ -84,7 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     sourcer = HybridSourcer(cfg, verbose=not args.quiet)
 
     try:
-        total = sourcer.run(dry_run=args.dry_run, limit=args.limit)
+        total = sourcer.run(dry_run=args.dry_run, limit=args.limit,
+                           parallel=args.parallel)
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Partial results written.", file=sys.stderr)
         return 130

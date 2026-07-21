@@ -12,6 +12,13 @@ stargazers_count, html_url — no enrichment call needed.
 
 Country inference: topic or description signals → primary country.
 License: pulled directly from repo.license.spdx_id.
+
+Rate-limit handling: on a 403/429 we read the standard GitHub rate-limit
+headers (`Retry-After`, or `X-RateLimit-Reset`) and sleep exactly until the
+window reopens (capped, so a clock-skew edge case can't stall the run for
+minutes) instead of a blind fixed sleep, then retry the *same* page up to
+twice before giving up on it — the old behaviour discarded the rest of that
+keyword's results on the first 403 even though a short wait would recover them.
 """
 
 from __future__ import annotations
@@ -25,6 +32,28 @@ import httpx
 from .base import Backend, make_row
 
 GH_API = "https://api.github.com/search/repositories"
+_MAX_BACKOFF = 90.0       # never sleep longer than this for one retry
+_MAX_RETRIES_PER_PAGE = 2
+
+
+def _rate_limit_wait_seconds(resp: httpx.Response, default: float) -> float:
+    """Compute how long to sleep before retrying, from response headers."""
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(float(retry_after), _MAX_BACKOFF)
+        except ValueError:
+            pass
+    reset = resp.headers.get("X-RateLimit-Reset")
+    remaining = resp.headers.get("X-RateLimit-Remaining")
+    if reset and remaining == "0":
+        try:
+            wait = float(reset) - time.time()
+            if wait > 0:
+                return min(wait + 1.0, _MAX_BACKOFF)
+        except ValueError:
+            pass
+    return default
 
 
 class GitHubBackend(Backend):
@@ -61,6 +90,7 @@ class GitHubBackend(Backend):
                     if len(rows) >= needed:
                         break
                     page = 1
+                    retries = 0
                     while len(rows) < needed and page <= 10:
                         try:
                             resp = client.get(GH_API, params={
@@ -73,13 +103,18 @@ class GitHubBackend(Backend):
                         except httpx.HTTPError:
                             break
 
-                        if resp.status_code == 403:
-                            # Rate limited — wait and retry once
-                            time.sleep(10)
-                            break
+                        if resp.status_code in (403, 429):
+                            if retries >= _MAX_RETRIES_PER_PAGE:
+                                break  # genuinely stuck — move to next keyword
+                            wait = _rate_limit_wait_seconds(
+                                resp, default=10.0 if token else 30.0)
+                            time.sleep(wait)
+                            retries += 1
+                            continue  # retry the same page
                         if resp.status_code != 200:
                             break
 
+                        retries = 0  # reset once a page succeeds
                         data = resp.json()
                         items = data.get("items", [])
                         if not items:

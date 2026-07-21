@@ -30,9 +30,25 @@ from .common import (
 
 BASE = RAW_DATA
 UA = HEADERS["User-Agent"]
-CLOSE_TIMEOUT_S = 600        # Scrapy CLOSESPIDER_TIMEOUT (in-child budget)
+BASE_CLOSE_TIMEOUT_S = 120   # floor: even a tiny site gets this much budget
+PER_PAGE_TIMEOUT_S = 3       # extra seconds of budget per page in max_pages
+MAX_CLOSE_TIMEOUT_S = 1800   # ceiling: one huge site can't hog a worker slot
 SUBPROC_BUFFER_S = 120       # subprocess.run budget = close timeout + buffer
 DOWNLOAD_DELAY_S = 0.3       # politeness delay between requests
+CONCURRENCY_PER_DOMAIN = 4   # in-flight requests per domain (see crawl_runner)
+
+def _close_timeout_for(max_pages: int) -> int:
+    """Scale the in-child crawl budget to the site's page cap.
+
+    A flat 600s budget for every site means a 20-page source and a 500-page
+    source both wait up to 10 minutes before CLOSESPIDER_TIMEOUT fires: the
+    small one holds a worker slot idle long after it's actually done, and the
+    large one may still be cut off mid-crawl. Scaling by max_pages fixes both,
+    within a floor (very small crawls still get a fair shot) and a ceiling (a
+    misconfigured max_pages can't monopolize a worker indefinitely).
+    """
+    return min(MAX_CLOSE_TIMEOUT_S,
+               max(BASE_CLOSE_TIMEOUT_S, int(max_pages) * PER_PAGE_TIMEOUT_S))
 
 
 def _source_file(folder: str, title: str, url: str, lic: str) -> None:
@@ -60,13 +76,19 @@ def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, l
     folder = os.path.join(BASE, domain, slug)
     os.makedirs(folder, exist_ok=True)
     out = os.path.join(folder, slug + ".jsonl")
+    close_timeout = _close_timeout_for(max_pages)
     cfg = {
         "start_url": start_url, "allow_prefix": allow_prefix,
         "max_pages": int(max_pages), "use_js": bool(use_js), "out_path": out,
         "user_agent": UA, "download_delay": DOWNLOAD_DELAY_S,
-        "close_timeout": CLOSE_TIMEOUT_S, "license": lic, "description": desc,
+        "concurrency_per_domain": CONCURRENCY_PER_DOMAIN,
+        "close_timeout": close_timeout, "license": lic, "description": desc,
+        # trafilatura does real main-content detection instead of "everything
+        # not under one of 8 known boilerplate tags", so it's the default now;
+        # extract_trafilatura() falls back to extract_default() on its own if
+        # the optional dependency isn't installed, so this never hard-fails.
         "extractor": (extractor or os.environ.get("CYBERSEC_SLM_EXTRACTOR")
-                      or crawl_runner.EXTRACTOR_DEFAULT),
+                      or crawl_runner.EXTRACTOR_TRAFILATURA),
     }
     logger.info(f"=== WEBSITE: {desc} ({urlparse(start_url).netloc}) ===")
     try:
@@ -74,7 +96,7 @@ def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, l
             [sys.executable, "-m", "cybersec_slm.ingestion.crawl_runner",
              json.dumps(cfg)],
             capture_output=True, text=True,
-            timeout=CLOSE_TIMEOUT_S + SUBPROC_BUFFER_S)
+            timeout=close_timeout + SUBPROC_BUFFER_S)
     except subprocess.TimeoutExpired:
         logger.error(f"  crawl timed out: {slug}")
         _record_failed(log, slug=slug, domain=domain, desc=desc,
