@@ -181,10 +181,10 @@ def test_build_command_defaults_to_all():
 
 def test_build_command_source_flags_and_domains_list():
     cmd = control.build_command("source", settings={
-        "mode": "both", "per_keyword": 8, "max_total": 25,
+        "text_only": True, "per_keyword": 8, "max_total": 25,
         "domains": ["Application Security", "Cloud Security"]})
     s = _joined(cmd)
-    assert "source --mode both --per-keyword 8 --max-total 25" in s
+    assert "source --text-only --per-keyword 8 --max-total 25" in s
     # --domains comes last and lists every value.
     assert s.endswith("--domains Application Security Cloud Security")
 

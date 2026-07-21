@@ -152,6 +152,10 @@ class _Resp:
     def raise_for_status(self):
         return None
 
+    def read(self):
+        self.content = self._body
+        return self._body
+
     def iter_bytes(self, n=None):
         yield self._body
 
@@ -192,7 +196,7 @@ def test_a_redirect_into_a_private_address_is_refused(monkeypatch):
             return _Resp(url, location="http://metadata.test/latest/meta-data/")
         raise AssertionError(f"followed the redirect to {url}")
 
-    monkeypatch.setattr(common.httpx, "get", _get)
+    monkeypatch.setattr(common.httpx.Client, "get", lambda self, url, **kw: _get(url, **kw))
 
     with pytest.raises(urlscreen.BlockedURL):
         common.http_get("http://public.test/data")
@@ -211,7 +215,7 @@ def test_an_ordinary_redirect_is_still_followed(monkeypatch):
             return _Resp(url, location="https://example.test/final")
         return _Resp(url, body=b"landed")
 
-    monkeypatch.setattr(common.httpx, "get", _get)
+    monkeypatch.setattr(common.httpx.Client, "get", lambda self, url, **kw: _get(url, **kw))
 
     r = common.http_get("https://example.test/start")
 
@@ -223,8 +227,8 @@ def test_a_redirect_loop_gives_up_rather_than_spinning(monkeypatch):
     from cybersec_slm.ingestion import common
 
     monkeypatch.setattr(urlscreen, "_resolve", lambda h: ["93.184.216.34"])
-    monkeypatch.setattr(common.httpx, "get",
-                        lambda url, **kw: _Resp(url, location="https://example.test/a"))
+    monkeypatch.setattr(common.httpx.Client, "get",
+                        lambda self, url, **kw: _Resp(url, location="https://example.test/a"))
 
     with pytest.raises(Exception, match="redirect"):
         common.http_get("https://example.test/a")

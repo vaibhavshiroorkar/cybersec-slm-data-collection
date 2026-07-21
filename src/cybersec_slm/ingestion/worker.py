@@ -166,4 +166,14 @@ def process_source(
         result["error"] = f"{type(ex).__name__}: {ex}"
         result["ingest_rows"] = collector.rows
         logger.error(f"  FAILED {label}: {result['error']}")
+    except BaseException as ex:  # Rust panics (pyo3) surface here; don't kill the pool
+        # Mark deterministic failures so the parent skips the retry queue.
+        # NOTE: a true Rust panic aborts the worker process before this runs;
+        # the parent then sees BrokenProcessPool and rebuilds the pool. This
+        # branch only catches Python-level BaseException subclasses that escape
+        # `Exception` (e.g. KeyboardInterrupt during shutdown).
+        result["status"] = "failed"
+        result["error"] = f"{type(ex).__name__}: {ex}"
+        result["ingest_rows"] = collector.rows
+        logger.error(f"  FAILED {label}: {result['error']}")
     return result

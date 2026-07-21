@@ -58,7 +58,7 @@ with fields_tab:
 
         df = pd.DataFrame(schema_store.field_catalog())
         edited = st.data_editor(
-            df, use_container_width=True, hide_index=True,
+            df, width='stretch', hide_index=True,
             key="schema_fields_editor", disabled=("field", "type", "required"),
             column_config={
                 "field": st.column_config.TextColumn("field", width="medium"),
@@ -69,7 +69,7 @@ with fields_tab:
                     "description", width="large"),
             })
         if ui.right_slot().button("Save fields", key="schema_fields_save",
-                                  use_container_width=True):
+                                  width='stretch'):
             schema_store.save_overrides(edited.to_dict("records"))
             st.toast("Saved schema field edits")
 

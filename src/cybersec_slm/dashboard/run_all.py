@@ -84,15 +84,27 @@ def main(argv: list[str] | None = None) -> None:
             except SufficiencyError as exc:
                 logger.error(str(exc))
                 logger.warning("full run halted at the EDA sufficiency gate - triggering auto-fix loop to balance the corpus.")
-                
+
                 # Build the fix config and write it to the fix file
                 fix_cfg = control.build_fix_config()
-                with open(control._fix_file(), "w", encoding="utf-8") as f:
-                    json.dump(fix_cfg, f)
-                
-                # Run the fix loop in-process
+                fix_path = control._fix_file()
                 try:
-                    run_fix.main([control._fix_file()])
+                    os.makedirs(os.path.dirname(fix_path), exist_ok=True)
+                except OSError:
+                    pass
+                with open(fix_path, "w", encoding="utf-8") as f:
+                    json.dump(fix_cfg, f)
+
+                # Run the fix loop in-process. The loop runs every EDA with
+                # --no-enforce so it never re-raises SufficiencyError in
+                # production, but guard it so any error the fix loop cannot
+                # recover from is logged rather than crashing the orchestrator:
+                # the gate already halted the main run, and a crash here would
+                # leave the control file pointing at a dead process.
+                try:
+                    run_fix.main([fix_path])
+                except SufficiencyError as fix_exc:
+                    logger.error(f"eda fix loop halted at the gate: {fix_exc}")
                 except SystemExit as e:
                     if e.code != 0:
                         raise

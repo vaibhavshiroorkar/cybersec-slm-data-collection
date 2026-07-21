@@ -19,14 +19,14 @@ def test_full_plan_runs_five_stages_in_order(tmp_path, monkeypatch):
 
 def test_full_plan_uses_each_pages_saved_settings(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
-    settings_store.save_stage("source", {"per_keyword": 8, "mode": "both"})
+    settings_store.save_stage("source", {"per_keyword": 8, "text_only": True})
     settings_store.save_stage("ingest", {"workers": 4})
     settings_store.save_stage("eda", {"no_enforce": True})
     settings_store.save_stage("schema", {"fresh": True})
     by = {argv[0]: argv for argv in control.build_full_plan()}
     # Flags that were dropped by the flat `all` allowlist now reach their stage.
     assert "--per-keyword" in by["source"] and "8" in by["source"]
-    assert "--mode" in by["source"] and "both" in by["source"]
+    assert "--text-only" in by["source"]
     assert "--workers" in by["ingest"] and "4" in by["ingest"]
     assert "--no-enforce" in by["eda"]         # was silently dropped before
     assert "--fresh" in by["schema"]           # was silently dropped before

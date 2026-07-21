@@ -11,12 +11,12 @@ def test_load_falls_back_to_builtin_defaults(tmp_path):
     cat = catalog.load(str(tmp_path / "missing.yaml"))
     assert set(cat) == set(kw.DOMAIN_KEYWORDS)
     for name, spec in cat.items():
-        assert spec["datasets"] == kw.DOMAIN_KEYWORDS[name]
+        assert spec["keywords"] == kw.DOMAIN_KEYWORDS[name]
 
 
 def test_save_load_round_trip(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    cat = {"My Domain": {"datasets": ["a dataset", "b dataset"], "text": ["c guide"]}}
+    cat = {"My Domain": {"keywords": ["a dataset", "b dataset", "c guide"]}}
     catalog.save(cat, p)
     back = catalog.load(p)
     expected = {"My Domain": {**cat["My Domain"], "links": [], "code": "", "vocab": []}}
@@ -25,12 +25,12 @@ def test_save_load_round_trip(tmp_path):
 
 def test_add_and_remove_subdomain(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"Keep": {"datasets": ["x"], "text": []}}, p)
+    catalog.save({"Keep": {"keywords": ["x"]}}, p)
 
-    catalog.add_subdomain("New", datasets=["one", "two"], text=["three"], path=p)
+    catalog.add_subdomain("New", keywords=["one", "two", "three"], path=p)
     cat = catalog.load(p)
     assert catalog.subdomains(cat) == ["Keep", "New"]
-    assert catalog.keywords_for("New", "both", cat) == ["one", "two", "three"]
+    assert catalog.keywords_for("New", cat) == ["one", "two", "three"]
 
     catalog.remove_subdomain("Keep", path=p)
     assert catalog.subdomains(catalog.load(p)) == ["New"]
@@ -38,22 +38,18 @@ def test_add_and_remove_subdomain(tmp_path):
 
 def test_keyword_sets_pairs_modes_with_qualifiers(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"D": {"datasets": ["ds"], "text": ["tx"]}}, p)
+    catalog.save({"D": {"keywords": ["ds", "tx"]}}, p)
     cat = catalog.load(p)
 
-    ds_sets = catalog.keyword_sets("datasets", cat)
-    assert ds_sets == [({"D": ["ds"]}, kw.QUERY_QUALIFIER)]
-
-    both = catalog.keyword_sets("both", cat)
-    assert [q for _, q in both] == [kw.QUERY_QUALIFIER, kw.TEXT_QUERY_QUALIFIER]
+    ds_sets = catalog.keyword_sets(cat)
+    assert ds_sets == [({"D": ["ds", "tx"]}, kw.QUERY_QUALIFIER)]
 
 
 def test_normalize_drops_blank_keywords(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"D": {"datasets": ["  ", "kept", ""], "text": None}}, p)
+    catalog.save({"D": {"keywords": ["  ", "kept", ""]}}, p)
     cat = catalog.load(p)
-    assert cat["D"]["datasets"] == ["kept"]
-    assert cat["D"]["text"] == []
+    assert cat["D"]["keywords"] == ["kept"]
 
 
 def test_default_catalog_has_codes_and_vocab_for_builtin_domains(tmp_path):
@@ -69,7 +65,7 @@ def test_pre_existing_yaml_without_code_still_gets_historical_codes(tmp_path):
     built-in domain's historical enum code and vocab, not a freshly-derived
     slug -- the downstream snorkel LabelModel contract depends on this."""
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"AML-KYC": {"datasets": ["d"], "text": ["t"]}}, p)
+    catalog.save({"AML-KYC": {"keywords": ["d", "t"]}}, p)
     # Emulate a file saved before this migration by stripping the keys save()
     # would have added, matching a real pre-existing keywords.yaml on disk.
     import yaml
@@ -87,7 +83,7 @@ def test_pre_existing_yaml_without_code_still_gets_historical_codes(tmp_path):
 
 def test_code_for_derives_a_stable_slug_when_unset(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"My New Thing": {"datasets": [], "text": []}}, p)
+    catalog.save({"My New Thing": {"keywords": []}}, p)
     cat = catalog.load(p)
     assert cat["My New Thing"]["code"] == ""             # not persisted by load()
     assert catalog.code_for("My New Thing", cat) == "MY_NEW_THING"
@@ -95,8 +91,8 @@ def test_code_for_derives_a_stable_slug_when_unset(tmp_path):
 
 def test_code_for_disambiguates_slug_collisions(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"A/B": {"datasets": [], "text": [], "code": "A_B"},
-                 "A B": {"datasets": [], "text": []}}, p)
+    catalog.save({"A/B": {"keywords": [], "code": "A_B"},
+                 "A B": {"keywords": []}}, p)
     cat = catalog.load(p)
     assert catalog.code_for("A B", cat) == "A_B_2"        # "A_B" already taken
 
@@ -124,7 +120,7 @@ def test_domain_name_defaults_to_the_builtin_when_unset(tmp_path):
 
 def test_set_domain_name_round_trips_and_preserves_subdomains(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"Keep": {"datasets": ["x"], "text": []}}, p)
+    catalog.save({"Keep": {"keywords": ["x"]}}, p)
     catalog.set_domain_name("MEDTECH", p)
     assert catalog.domain_name(p) == "MEDTECH"
     # set_domain_name must not disturb the subdomains it re-saves alongside.
@@ -133,7 +129,7 @@ def test_set_domain_name_round_trips_and_preserves_subdomains(tmp_path):
 
 def test_add_subdomain_preserves_the_saved_domain_name(tmp_path):
     p = str(tmp_path / "keywords.yaml")
-    catalog.save({"Keep": {"datasets": ["x"], "text": []}}, p)
+    catalog.save({"Keep": {"keywords": ["x"]}}, p)
     catalog.set_domain_name("MEDTECH", p)
     catalog.add_subdomain("New", path=p)
     assert catalog.domain_name(p) == "MEDTECH"
@@ -141,18 +137,17 @@ def test_add_subdomain_preserves_the_saved_domain_name(tmp_path):
 
 # ------------------------------------------------------------ update/rename ---
 def _seed_one(path: str) -> None:
-    catalog.save({"Old Name": {"datasets": ["ds1", "ds2"], "text": ["tx1"],
+    catalog.save({"Old Name": {"keywords": ["ds1", "ds2", "tx1"],
                                "code": "OLD", "vocab": ["term"]},
-                  "Other": {"datasets": ["o"], "text": [], "code": "OTHER"}}, path)
+                  "Other": {"keywords": ["o"], "code": "OTHER"}}, path)
 
 
 def test_update_subdomain_edits_keywords_without_renaming(tmp_path):
     p = str(tmp_path / "keywords.yaml")
     _seed_one(p)
-    catalog.update_subdomain("Old Name", datasets=["new1"], text=["new2"], path=p)
+    catalog.update_subdomain("Old Name", keywords=["new1", "new2"], path=p)
     cat = catalog.load(p)
-    assert cat["Old Name"]["datasets"] == ["new1"]
-    assert cat["Old Name"]["text"] == ["new2"]
+    assert cat["Old Name"]["keywords"] == ["new1", "new2"]
     assert cat["Old Name"]["code"] == "OLD"          # untouched
     assert cat["Old Name"]["vocab"] == ["term"]      # untouched
 
@@ -166,7 +161,7 @@ def test_update_subdomain_renames_and_keeps_the_existing_code(tmp_path):
     cat = catalog.load(p)
     assert "Old Name" not in cat
     assert cat["New Name"]["code"] == "OLD"
-    assert cat["New Name"]["datasets"] == ["ds1", "ds2"]
+    assert cat["New Name"]["keywords"] == ["ds1", "ds2", "tx1"]
     assert cat["New Name"]["vocab"] == ["term"]
 
 
@@ -175,7 +170,7 @@ def test_update_subdomain_none_means_leave_alone(tmp_path):
     _seed_one(p)
     catalog.update_subdomain("Old Name", path=p)          # no fields at all
     assert catalog.load(p)["Old Name"] == {
-        "datasets": ["ds1", "ds2"], "text": ["tx1"], "links": [], "code": "OLD",
+        "keywords": ["ds1", "ds2", "tx1"], "links": [], "code": "OLD",
         "vocab": ["term"]}
 
 
@@ -194,7 +189,7 @@ def test_update_subdomain_rejects_a_rename_onto_an_existing_subdomain(tmp_path):
     _seed_one(p)
     with pytest.raises(ValueError, match="already exists"):
         catalog.update_subdomain("Old Name", name="Other", path=p)
-    assert catalog.load(p)["Other"]["datasets"] == ["o"]   # not clobbered
+    assert catalog.load(p)["Other"]["keywords"] == ["o"]   # not clobbered
 
 
 def test_update_subdomain_rejects_an_unknown_subdomain(tmp_path):

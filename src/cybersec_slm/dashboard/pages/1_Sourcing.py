@@ -41,6 +41,67 @@ cat_summary = data.catalog_summary()
 
 # ============================================================== Discover =======
 with discover_tab:
+    with ui.section("Discover", "Pick the sub-domains and mode a run searches, "
+                                "then Apply to save them. They persist to the "
+                                "profile's pipeline settings and feed the full "
+                                "pipeline run launched from the Overview page."):
+        _src_saved = settings_store.get_stage("source")
+        _all_subs = all_domains
+        _saved_domains = [d for d in _src_saved.get("domains", []) if d in _all_subs]
+        _saved_mode = _src_saved.get("mode", "both")
+        _is_text_only = _saved_mode == "text"
+        _saved_countries = _src_saved.get("countries", [])
+        
+        _COUNTRIES = [
+            "Global", "India", "United States", "United Kingdom", "China", "Germany",
+            "France", "Japan", "Australia", "Canada", "Brazil", "Singapore",
+            "South Korea", "Netherlands", "Switzerland", "Sweden", "Israel",
+            "UAE", "Saudi Arabia", "Russia", "South Africa", "Nigeria",
+            "Kenya", "Indonesia", "Malaysia", "Thailand", "Pakistan",
+            "Bangladesh", "Sri Lanka", "Philippines", "Vietnam",
+        ]
+
+        _d1, _d2 = st.columns(2)
+        _picked = _d1.multiselect(
+            "Sub-domains to search (empty = all)", _all_subs,
+            default=_saved_domains, key="src_domains",
+            help="Discovery searches only these Sub-Domains; empty searches "
+                 "every configured Sub-Domain.")
+        _picked_countries = _d2.multiselect(
+            "Countries to target (empty = any)", _COUNTRIES,
+            default=[c for c in _saved_countries if c in _COUNTRIES], key="src_countries",
+            help="Filter sources by these countries."
+        )
+        _text_only = st.checkbox(
+            "Text data only", value=_is_text_only, key="src_text_only",
+            help="If checked, only takes data sources which have text in them (ignores heavy number filled data).")
+        _strict_license = st.checkbox(
+            "Strict commercial license only", value=not _src_saved.get("no_strict_license", False), key="src_strict_license",
+            help="If checked, drops all sources with 'unknown' licenses during discovery. Uncheck to vastly increase volume at the cost of manual license review later.")
+        
+        _apply_d1, _apply_d2 = st.columns([3, 1])
+        if _apply_d2.button("Apply", key="src_apply", type="primary",
+                            width='stretch',
+                            disabled=not _all_subs):
+            _merged = {**_src_saved}
+            if _picked and set(_picked) != set(_all_subs):
+                _merged["domains"] = list(_picked)
+            else:
+                _merged.pop("domains", None)
+            
+            _merged["mode"] = "text" if _text_only else "both"
+            _merged["countries"] = _picked_countries
+            _merged["no_strict_license"] = not _strict_license
+            
+            settings_store.save_stage("source", _merged)
+            st.toast("Saved source settings")
+            st.rerun()
+        _apply_d1.caption(
+            f"Saved: sub-domains = {', '.join(_saved_domains) or 'all'}"
+            f"  ·  Countries = {', '.join(_saved_countries) or 'any'}"
+            f"  ·  Text data only = {_is_text_only}"
+            f"  ·  Strict license = {not _src_saved.get('no_strict_license', False)}")
+
     with ui.section("Taxonomy Keywords", "The keywords currently configured across all sub-domains."):
         text_rows = [{"sub-domain": d, "keyword": k} for d, spec in cat.items() for k in spec.get("text", [])]
         with st.expander(f"Text Keywords ({len(text_rows)})"):
@@ -91,13 +152,13 @@ with licenses_tab:
         b1, b2 = st.columns(2)
         if b1.button(f"Blacklist {cov['red']} confirmed-red source(s)",
                      disabled=running or not cov["red"], type="secondary",
-                     use_container_width=True, key="lic_bl_reds"):
+                     width='stretch', key="lic_bl_reds"):
             res = blacklist.move_flagged(data.catalog_path())
             st.success(f"Moved {res['moved']} restrictive source(s) to Blacklist.csv")
             st.rerun()
         if b2.button(f"Delete {len(blank_links)} blank-license source(s)",
                      disabled=running or not blank_links, type="secondary",
-                     use_container_width=True, key="lic_del_blank"):
+                     width='stretch', key="lic_del_blank"):
             removed = sheet.delete_rows(data.catalog_path(), links=blank_links)
             st.success(f"Deleted {removed} source(s) with no resolved license")
             st.rerun()
@@ -129,7 +190,7 @@ with edit_tab:
                            key="domain_name_input")
         if ui.right_slot().button("Save domain name", key="domain_name_save",
                                   disabled=not dn.strip(),
-                                  use_container_width=True):
+                                  width='stretch'):
             catalog.set_domain_name(dn.strip())
             st.success(f"Saved domain_name='{dn.strip()}' to sources/keywords.yaml")
             st.rerun()
@@ -144,16 +205,15 @@ with edit_tab:
                 "Enum code (blank = auto-derived from the name)", key="add_code",
                 help="The schema's `subdomain_name` enum value for this sub-domain, "
                      "e.g. `APPLICATION`. Leave blank to derive one automatically.")
-            ds = st.text_area("Dataset keywords (one per line)", key="add_ds", height=140)
-            tx = st.text_area("Text keywords (one per line)", key="add_tx", height=140)
+            kw = st.text_area("Keywords (one per line)", key="add_kw", height=140)
             links = st.text_area("Direct Links (one per line)", key="add_links", height=100,
                                  help="URLs added directly to the catalog "
                                       "without going through discovery.")
             if ui.right_slot().button("Save sub-domain", key="add_save",
                                       disabled=not name.strip(),
-                                      use_container_width=True):
+                                      width='stretch'):
                 catalog.add_subdomain(
-                    name.strip(), datasets=_lines(ds), text=_lines(tx),
+                    name.strip(), keywords=_lines(kw),
                     links=_lines(links), code=code.strip() or None)
                 st.success(f"Saved '{name.strip()}' to sources/keywords.yaml")
                 st.rerun()
@@ -171,13 +231,9 @@ with edit_tab:
                     help="The schema's `subdomain_name` enum value. Changing it "
                          "changes the label the schema stage files these records "
                          "under; blank re-derives it from the name.")
-                ed1, ed2 = st.columns(2)
-                new_ds = ed1.text_area("Dataset keywords (one per line)",
-                                       value="\n".join(spec.get("datasets") or []),
-                                       height=200, key=f"ed_ds_{pick}")
-                new_tx = ed2.text_area("Text keywords (one per line)",
-                                       value="\n".join(spec.get("text") or []),
-                                       height=200, key=f"ed_tx_{pick}")
+                new_kw = st.text_area("Keywords (one per line)",
+                                      value="\n".join(spec.get("keywords") or []),
+                                      height=200, key=f"ed_kw_{pick}")
                 new_links = st.text_area("Direct Links (one per line)",
                                          value="\n".join(spec.get("links") or []),
                                          height=100, key=f"ed_links_{pick}",
@@ -208,11 +264,11 @@ with edit_tab:
                     set(all_domains) - {pick})
                 if ui.right_slot().button("Save changes", key=f"ed_save_{pick}",
                                           type="primary", disabled=not _can_save,
-                                          use_container_width=True):
+                                          width='stretch'):
                     try:
                         catalog.update_subdomain(
-                            pick, name=new_name.strip(), datasets=_lines(new_ds),
-                            text=_lines(new_tx), links=_lines(new_links),
+                            pick, name=new_name.strip(), keywords=_lines(new_kw),
+                            links=_lines(new_links),
                             vocab=_lines(new_vocab), code=new_code.strip())
                     except (KeyError, ValueError) as ex:
                         st.error(str(ex))
@@ -464,7 +520,7 @@ with csv_tab:
 
                 if ui.right_slot().button("Add source", key="ms_add", type="primary",
                                           disabled=not all(_required) or bool(_dupe),
-                                          use_container_width=True):
+                                          width='stretch'):
                     try:
                         new_row = row_builder.build_manual_row(
                             name=m_name, subdomain=m_dom, link=m_link,
@@ -541,20 +597,20 @@ with csv_tab:
 
         with st.expander("Reset entire sourcing"):
             st.caption("Permanently clear the source catalog and discovery logs. This cannot be undone.")
-            if st.button("Reset entire sourcing", type="primary", use_container_width=True, key="reset_sourcing_init"):
+            if st.button("Reset entire sourcing", type="primary", width='stretch', key="reset_sourcing_init"):
                 st.session_state["_confirm_sourcing_reset"] = True
                 st.rerun()
             if st.session_state.get("_confirm_sourcing_reset"):
                 st.warning("This will completely empty `Sources.csv` and delete all sourcing logs. Are you sure?")
                 rc = st.columns(2)
-                if rc[0].button("Yes, reset sourcing", use_container_width=True, key="reset_sourcing_yes"):
+                if rc[0].button("Yes, reset sourcing", width='stretch', key="reset_sourcing_yes"):
                     st.session_state["_confirm_sourcing_reset"] = False
                     if cat_rows:
                         sheet.delete_rows(cat_path, positions=list(range(1, len(cat_rows) + 1)))
                     control.reset(stages={"source"})
                     st.success("Sourcing has been reset.")
                     st.rerun()
-                if rc[1].button("Cancel", use_container_width=True, key="reset_sourcing_cancel"):
+                if rc[1].button("Cancel", width='stretch', key="reset_sourcing_cancel"):
                     st.session_state["_confirm_sourcing_reset"] = False
                     st.rerun()
 

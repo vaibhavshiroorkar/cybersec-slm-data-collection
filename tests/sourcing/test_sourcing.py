@@ -37,14 +37,14 @@ def test_every_domain_has_ample_dataset_keywords():
 
 
 def test_default_engines_are_github_first_and_reliable():
-    ds = kw.default_engines(is_datasets=True)
+    ds = kw.default_engines()
     assert ds.split(",")[0] == "github"            # highest commercial-valid yield
     for eng in ("openairedatasets", "arxiv", "semantic scholar"):
         assert eng in ds
     # None of the rate-limited general web engines are in the default set.
     for dead in ("google", "duckduckgo", "brave", "startpage", "bing"):
         assert dead not in ds
-    txt = kw.default_engines(is_datasets=False)
+    txt = kw.default_engines()
     assert "github" in txt
 
 
@@ -498,10 +498,10 @@ def test_discover_quality_filter_drops_junk(tmp_path, monkeypatch):
     from cybersec_slm.sourcing import run
     from cybersec_slm.sourcing.search import Result
 
-    monkeypatch.setattr(run, "searxng_search", lambda *a, **k: [
+    monkeypatch.setattr(run, "searxng_search", lambda query, pageno=1, **k: [
         Result(title="junk", link="https://www.youtube.com/watch?v=x", snippet="s"),
         Result(title="good", link="https://huggingface.co/datasets/a/b", snippet="s"),
-    ])
+    ] if pageno == 1 else [])
 
     dom = run.catalog.subdomains(run.catalog.load())[0]
     summ = run.discover(str(tmp_path / "S.csv"), domains=[dom], per_keyword=2,
@@ -573,7 +573,7 @@ def test_site_routing_is_a_no_op_for_a_profile_without_site_engines(monkeypatch)
 
     monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
     assert not kw.SITE_ENGINES
-    assert kw.engines_for_keyword("site:example.com x") == kw.default_engines(True)
+    assert kw.engines_for_keyword("site:example.com x") == kw.default_engines()
 
 
 def test_an_explicit_engines_override_wins_over_site_routing(tmp_path, monkeypatch):
@@ -597,6 +597,7 @@ def test_discover_fill_reaches_per_domain_target(tmp_path, monkeypatch):
     n = {"i": 0}
 
     def fake_search(query, *, pageno=1, **k):
+        if pageno > 1: return []
         n["i"] += 1
         return [Result(title="T", link=f"https://example.com/item{n['i']}", snippet="s")]
 
@@ -633,6 +634,7 @@ def test_discover_fill_counts_only_commercial_valid(tmp_path, monkeypatch):
     n = {"i": 0}
 
     def fake_search(query, *, pageno=1, **k):
+        if pageno > 1: return []
         n["i"] += 1
         return [Result(title="T", link=f"https://example.com/item{n['i']}", snippet="s")]
 
@@ -675,6 +677,7 @@ def test_discover_fill_skips_already_satisfied_domain(tmp_path, monkeypatch):
     called = {"n": 0}
 
     def fake_search(query, *, pageno=1, **k):
+        if pageno > 1: return []
         called["n"] += 1
         return [Result(title="T", link=f"https://example.com/{called['n']}", snippet="s")]
 
@@ -697,17 +700,14 @@ def test_discover_fill_skips_already_satisfied_domain(tmp_path, monkeypatch):
     assert called["n"] == 0                          # already satisfied -> never searched
 
 
-def test_build_query_site_scopes_datasets_only():
+def test_build_query_site_scopes():
     from cybersec_slm.sourcing.keywords import (
         QUERY_QUALIFIER,
-        TEXT_QUERY_QUALIFIER,
         site_clause,
     )
 
     clause = site_clause()
     assert "site:huggingface.co" in clause and "site:github.com" in clause
-    # datasets qualifier is the site-scoped one; text is not.
-    assert QUERY_QUALIFIER != TEXT_QUERY_QUALIFIER
 
 
 # ----------------------------------------------------------- search parsing ---

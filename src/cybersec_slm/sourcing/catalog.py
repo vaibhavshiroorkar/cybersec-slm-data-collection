@@ -41,7 +41,6 @@ import re
 from . import keywords as kw
 
 CATALOG_NAME = "keywords.yaml"
-MODES: tuple[str, ...] = kw.MODES               # ("datasets", "text", "both")
 
 # A Sub-Domain name is used verbatim as a directory component — ingestion writes
 # to ``data/raw/<Sub-Domain>/<source>/`` (see ingestion.worker) and cleaning walks
@@ -86,8 +85,7 @@ def _taxonomy(profile: str | None = None):
 def _defaults(profile: str | None = None) -> dict:
     """Build the catalog from a profile's built-in lists (the code fallback)."""
     t = _taxonomy(profile)
-    return {name: {"datasets": list(t.datasets.get(name, [])),
-                   "text": list(t.text.get(name, [])),
+    return {name: {"keywords": list(t.keywords.get(name, [])),
                    "links": [],
                    "code": t.codes.get(name, ""),
                    "vocab": sorted(t.vocab.get(name, set()))}
@@ -119,9 +117,17 @@ def _normalize(subs: dict, profile: str | None = None) -> dict:
         vocab = [str(k).strip() for k in (spec.get("vocab") or []) if str(k).strip()]
         if not vocab and name in default_vocab:
             vocab = sorted(default_vocab[name])
+        legacy_datasets = [str(k).strip() for k in (spec.get("datasets") or []) if str(k).strip()]
+        legacy_text = [str(k).strip() for k in (spec.get("text") or []) if str(k).strip()]
+        new_keywords = [str(k).strip() for k in (spec.get("keywords") or []) if str(k).strip()]
+        
+        # combine and dedup while preserving order
+        combined = legacy_datasets + legacy_text + new_keywords
+        seen = set()
+        deduped_keywords = [x for x in combined if not (x in seen or seen.add(x))]
+        
         out[name] = {
-            "datasets": [str(k).strip() for k in (spec.get("datasets") or []) if str(k).strip()],
-            "text": [str(k).strip() for k in (spec.get("text") or []) if str(k).strip()],
+            "keywords": deduped_keywords,
             "links": [str(k).strip() for k in (spec.get("links") or []) if str(k).strip()],
             "code": code,
             "vocab": vocab,
@@ -226,87 +232,71 @@ def subdomains(cat: dict | None = None) -> list[str]:
     return sorted((cat if cat is not None else load()).keys())
 
 
-def keywords_for(name: str, mode: str = "datasets", cat: dict | None = None) -> list[str]:
-    """Keywords for one sub-domain in ``mode`` (``datasets``/``text``/``both``)."""
+def keywords_for(name: str, cat: dict | None = None) -> list[str]:
+    """Keywords for one sub-domain."""
     cat = cat if cat is not None else load()
     spec = cat.get(name, {})
-    if mode == "both":
-        return list(spec.get("datasets", [])) + list(spec.get("text", []))
-    return list(spec.get(mode, []))
+    return list(spec.get("keywords", []))
 
 
-def keyword_sets(mode: str = "datasets",
-                 cat: dict | None = None) -> list[tuple[dict[str, list[str]], str]]:
-    """Return ``[(keyword_dict, qualifier), ...]`` for ``mode`` from the catalog.
+def keyword_sets(cat: dict | None = None) -> list[tuple[dict[str, list[str]], str]]:
+    """Return ``[(keyword_dict, qualifier)]`` from the catalog.
 
     Mirrors :func:`cybersec_slm.sourcing.keywords.keyword_sets` but reads the live
-    (persisted) catalog and pairs each mode with its query qualifier.
+    (persisted) catalog.
     """
     cat = cat if cat is not None else load()
-    if mode not in MODES:
-        raise ValueError(f"unknown mode {mode!r}; valid: {MODES}")
-    modes = ["datasets", "text"] if mode == "both" else [mode]
-    qualifiers = {"datasets": kw.QUERY_QUALIFIER, "text": kw.TEXT_QUERY_QUALIFIER}
     out: list[tuple[dict[str, list[str]], str]] = []
-    for m in modes:
-        kwdict = {name: list(spec.get(m, [])) for name, spec in cat.items()}
-        out.append((kwdict, qualifiers[m]))
+    
+    k_dict = {name: spec.get("keywords", []) for name, spec in cat.items()}
+    out.append((k_dict, kw.QUERY_QUALIFIER))
     return out
 
 
-def add_subdomain(name: str, *, datasets: list[str] | None = None,
-                  text: list[str] | None = None, links: list[str] | None = None, code: str | None = None,
-                  vocab: list[str] | None = None,
+def add_subdomain(name: str, *, keywords: list[str] | None = None, links: list[str] | None = None, 
+                  code: str | None = None, vocab: list[str] | None = None,
                   path: str | None = None) -> dict:
     """Add (or replace) a sub-domain and persist; return the updated catalog.
 
-    ``code`` is the schema enum code for this sub-domain; when omitted, one is
-    derived from ``name`` (see :func:`_derive_code`) and persisted so it stays
-    stable across future loads.
+    ``code`` is derived automatically if omitted.
     """
-    name = validate_subdomain_name((name or "").strip())
     cat = load(path)
-    taken = {str(s.get("code") or "").strip() for s in cat.values()} - {""}
-    cat[name] = {"datasets": list(datasets or []), "text": list(text or []), "links": list(links or []),
-                "code": (code or "").strip() or _derive_code(name, taken),
-                "vocab": list(vocab or [])}
+    c = str(code or "").strip() or code_for(name, cat)
+    v = [str(k).strip() for k in (vocab or []) if str(k).strip()]
+    if not v and not c:
+        v = _defaults().get(name, {}).get("vocab", [])
+    cat[name] = {
+        "keywords": [str(k).strip() for k in (keywords or []) if str(k).strip()],
+        "links": [str(k).strip() for k in (links or []) if str(k).strip()],
+        "code": c,
+        "vocab": sorted(v),
+    }
     save(cat, path)
     return cat
 
 
 def update_subdomain(old_name: str, *, name: str | None = None,
-                     datasets: list[str] | None = None,
-                     text: list[str] | None = None, links: list[str] | None = None, code: str | None = None,
+                     keywords: list[str] | None = None,
+                     links: list[str] | None = None, code: str | None = None,
                      vocab: list[str] | None = None,
                      path: str | None = None) -> dict:
     """Edit an existing sub-domain in place (optionally renaming it); persist.
 
-    Every field is optional and ``None`` means "leave as it is", so a caller can
-    rename without restating the keywords (or rewrite the keywords without
-    touching the name). ``name`` renames the sub-domain, keeping its existing
-    ``code`` so the schema enum value a rename produces does not silently change
-    under already-normalized records — pass ``code`` explicitly to change it too.
-
-    Raises ``KeyError`` when ``old_name`` is not in the catalog and ``ValueError``
-    when a rename would collide with another existing sub-domain (which would
-    otherwise silently overwrite it).
-
-    Note this only renames the *taxonomy* entry; catalog rows in ``Sources.csv``
-    still carry the old Sub-Domain label. See
-    :func:`cybersec_slm.sourcing.sheet.rename_subdomain` for relabelling those.
+    Values omitted fall back to the existing catalog's values. ``old_name`` must
+    exist. If ``name`` is new, the existing sub-domain is deleted and reinserted
+    under the new name, preserving its order.
     """
     cat = load(path)
     if old_name not in cat:
         raise KeyError(f"unknown sub-domain: {old_name!r}")
+
     spec = dict(cat[old_name])
     new_name = validate_subdomain_name((name or "").strip() or old_name)
     if new_name != old_name and new_name in cat:
         raise ValueError(f"sub-domain {new_name!r} already exists")
 
-    if datasets is not None:
-        spec["datasets"] = list(datasets)
-    if text is not None:
-        spec["text"] = list(text)
+    if keywords is not None:
+        spec["keywords"] = list(keywords)
     if links is not None:
         spec["links"] = list(links)
     if vocab is not None:

@@ -180,8 +180,7 @@ NSLKDD_COLS = [
     "dst_host_serror_rate", "dst_host_srv_serror_rate", "dst_host_rerror_rate",
     "dst_host_srv_rerror_rate", "class", "difficulty_level",
 ]
-EXT_PRIORITY = (".parquet", ".jsonl", ".csv", ".json", ".xlsx",
-                ".yar", ".yara", ".yml", ".yaml", ".md", ".txt")
+EXT_PRIORITY = () # Deprecated: ingestion now accepts all file formats
 # Rule / markup / doc files read as a single text record each (one file -> one
 # record). Recovers detection rules (YARA/Sigma) and prose docs (Markdown) that
 # would otherwise be dropped as having no recognized data column.
@@ -232,7 +231,17 @@ def _read_unknown(path: str) -> pd.DataFrame:
                 return df
         except Exception:
             continue
-    raise ValueError(f"Unsupported file type: {path}")
+            
+    # If all structured attempts fail, try to read it as raw text
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read().strip()
+        if content:
+            return pd.DataFrame([{"text": content, "_file": os.path.basename(path)}])
+    except Exception as e:
+        logger.warning(f"Failed to read {path} as text: {e}")
+        
+    return pd.DataFrame(columns=["text"])
 
 
 def _read_textfile(path: str) -> pd.DataFrame:

@@ -125,7 +125,7 @@ def table(rows, height: int | None = None) -> None:
     df.index = range(1, len(df) + 1)
     df.index.name = "#"
     kwargs = {"height": height} if height else {}
-    st.dataframe(df, use_container_width=True, hide_index=False, **kwargs)
+    st.dataframe(df, width='stretch', hide_index=False, **kwargs)
 
 
 def stat_grid(pairs, cols: int = 4) -> None:
@@ -414,6 +414,17 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 help=help_txt)
             if picked_domains:
                 s["domains"] = picked_domains
+
+        if stage == "source":
+            _MODES = ["datasets", "text", "both"]
+            _saved_mode = base.get("mode", "datasets")
+            if _saved_mode not in _MODES:
+                _saved_mode = "datasets"
+            s["mode"] = st.selectbox(
+                "mode", _MODES, index=_MODES.index(_saved_mode),
+                key=f"{stage}_mode",
+                help="datasets: search for dataset hosts; text: search for "
+                     "long-form text; both: run both query sets.")
 
         if stage == "source":
             _COUNTRIES = [
@@ -747,7 +758,7 @@ def stage_config_dialog(stage: str) -> None:
         base = settings_store.get_stage(stage)
         s = _stage_widgets(stage, base)
         if st.button("Save as defaults", key=f"{stage}_modal_save",
-                     type="primary", use_container_width=True):
+                     type="primary", width='stretch'):
             settings_store.save_stage(stage, s)
             st.toast(f"Saved {label} settings")
             st.rerun()
@@ -760,7 +771,7 @@ def right_slot():
 
     Usage::
 
-        if ui.right_slot().button("Save", use_container_width=True):
+        if ui.right_slot().button("Save", width='stretch'):
             ...
     """
     import streamlit as st
@@ -779,7 +790,7 @@ def save_settings_button(stage: str, settings: dict, *, key: str,
 
     from . import settings_store
 
-    if right_slot().button(label, key=key, use_container_width=True,
+    if right_slot().button(label, key=key, width='stretch',
                            help="Persist these settings; reused for this stage's "
                                 "own runs and for the full pipeline run."):
         settings_store.save_stage(stage, settings)

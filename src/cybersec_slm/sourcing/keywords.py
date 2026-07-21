@@ -21,23 +21,21 @@ import time and will not follow a later switch.
 
 Exposed (all derived from the active profile's ``Taxonomy``):
 
-    DOMAIN_KEYWORDS       {Sub-Domain: [keyword, ...]}   -- "datasets" mode
-    DOMAIN_TEXT_KEYWORDS  {Sub-Domain: [keyword, ...]}   -- "text" mode
+    DOMAIN_KEYWORDS       {Sub-Domain: [keyword, ...]}
     DOMAIN_VOCAB          {Sub-Domain: {term, ...}}      -- classification tie-break
     DOMAIN_CODES          {Sub-Domain: "ENUM_CODE"}      -- schema subdomain_name
     DOMAINS               (Sub-Domain, ...)              -- declared order
     DEFAULT_DOMAIN_NAME   str                            -- schema domain_name
     SITE_SCOPE_HOSTS      (host, ...)                    -- site: scope bias
     RESTRICTED_HOSTS      {host: why}                    -- licensing bar
-    DATASET_ENGINES / TEXT_ENGINES  (engine, ...)        -- SearXNG engines
-    QUERY_QUALIFIER / TEXT_QUERY_QUALIFIER  str          -- per-mode qualifier
+    ENGINES               (engine, ...)                  -- SearXNG engines
+    QUERY_QUALIFIER       str                            -- query qualifier
 """
 
 from __future__ import annotations
 
 from .taxonomies import Taxonomy
 
-MODES: tuple[str, ...] = ("datasets", "text", "both")
 
 
 def taxonomy(profile: str | None = None) -> Taxonomy:
@@ -50,20 +48,17 @@ def taxonomy(profile: str | None = None) -> Taxonomy:
 # mutable containers so a caller mutating what it got cannot corrupt the frozen
 # built-in every other caller shares.
 _VIEW = {
-    "DOMAIN_KEYWORDS": lambda t: {k: list(v) for k, v in t.datasets.items()},
-    "DOMAIN_TEXT_KEYWORDS": lambda t: {k: list(v) for k, v in t.text.items()},
+    "DOMAIN_KEYWORDS": lambda t: {k: list(v) for k, v in t.keywords.items()},
     "DOMAIN_VOCAB": lambda t: {k: set(v) for k, v in t.vocab.items()},
     "DOMAIN_CODES": lambda t: dict(t.codes),
     "DOMAINS": lambda t: t.subdomains,
     "DEFAULT_DOMAIN_NAME": lambda t: t.domain_name,
     "SITE_SCOPE_HOSTS": lambda t: t.site_scope_hosts,
     "RESTRICTED_HOSTS": lambda t: dict(t.restricted_hosts),
-    "DATASET_ENGINES": lambda t: t.dataset_engines,
-    "TEXT_ENGINES": lambda t: t.text_engines,
+    "ENGINES": lambda t: t.engines,
     "SITE_ENGINES": lambda t: t.site_engines,
     "OWNED_HOSTS": lambda t: t.owned_hosts,
     "QUERY_QUALIFIER": lambda t: t.query_qualifier,
-    "TEXT_QUERY_QUALIFIER": lambda t: t.text_query_qualifier,
 }
 
 
@@ -121,8 +116,8 @@ def is_owned(host: str, profile: str | None = None) -> bool:
                for d in taxonomy(profile).owned_hosts)
 
 
-def default_engines(is_datasets: bool = True) -> str:
-    """Comma-separated default SearXNG engine list for a mode (datasets vs text).
+def default_engines() -> str:
+    """Comma-separated default SearXNG engine list.
 
     These API-based engines are targeted instead of the general web engines, which
     are perpetually rate-limited (brave/google "too many requests", duckduckgo
@@ -132,10 +127,10 @@ def default_engines(is_datasets: bool = True) -> str:
     ``site:`` needs :func:`engines_for_keyword` instead.
     """
     t = taxonomy()
-    return ",".join(t.dataset_engines if is_datasets else t.text_engines)
+    return ",".join(t.engines)
 
 
-def engines_for_keyword(keyword: str, is_datasets: bool = True) -> str:
+def engines_for_keyword(keyword: str) -> str:
     """Engines to run ``keyword`` on: the site-honouring set when it is a dork.
 
     The default engines (github, arxiv, openaire, semantic scholar) *ignore* the
@@ -150,22 +145,14 @@ def engines_for_keyword(keyword: str, is_datasets: bool = True) -> str:
     t = taxonomy()
     if "site:" in (keyword or "").lower() and t.site_engines:
         return ",".join(t.site_engines)
-    return default_engines(is_datasets)
+    return default_engines()
 
 
-def keyword_sets(mode: str = "datasets") -> list[tuple[dict[str, list[str]], str]]:
-    """``[(keyword_dict, qualifier), ...]`` for ``mode``, from the built-in defaults.
+def keyword_sets() -> list[tuple[dict[str, list[str]], str]]:
+    """``[(keyword_dict, qualifier), ...]`` from the built-in defaults.
 
     Mirrors :func:`cybersec_slm.sourcing.catalog.keyword_sets`, which reads the
     live (persisted, user-editable) taxonomy — prefer that one for a real run.
     """
     t = taxonomy()
-    sets = {
-        "datasets": ({k: list(v) for k, v in t.datasets.items()}, t.query_qualifier),
-        "text": ({k: list(v) for k, v in t.text.items()}, t.text_query_qualifier),
-    }
-    if mode == "both":
-        return [sets["datasets"], sets["text"]]
-    if mode in sets:
-        return [sets[mode]]
-    raise ValueError(f"unknown mode {mode!r}; valid: {MODES}")
+    return [({k: list(v) for k, v in t.keywords.items()}, t.query_qualifier)]

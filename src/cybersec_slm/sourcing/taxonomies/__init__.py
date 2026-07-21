@@ -36,9 +36,8 @@ class Taxonomy:
     # The schema's top-level ``domain_name`` enum value (e.g. "CYBERSEC").
     domain_name: str
 
-    # {Sub-Domain: [keyword, ...]} for each discovery mode.
-    datasets: dict[str, list[str]]
-    text: dict[str, list[str]]
+    # {Sub-Domain: [keyword, ...]}
+    keywords: dict[str, list[str]]
 
     # {Sub-Domain: {distinctive term, ...}} — tie-break vocab for classification.
     vocab: dict[str, set[str]]
@@ -48,16 +47,14 @@ class Taxonomy:
     # stay stable once records exist.
     codes: dict[str, str]
 
-    # Hosts a ``datasets``-mode query is soft-scoped to via a ``site:`` clause.
+    # Hosts a query is soft-scoped to via a ``site:`` clause.
     site_scope_hosts: tuple[str, ...]
 
-    # SearXNG engines per mode.
-    dataset_engines: tuple[str, ...]
-    text_engines: tuple[str, ...]
+    # SearXNG engines.
+    engines: tuple[str, ...]
 
     # Query qualifiers appended to bias results toward the right kind of page.
     query_qualifier: str
-    text_query_qualifier: str
 
     # Engines that actually honour the ``site:`` operator, used for keywords that
     # carry one. The API-based engines above (github, arxiv, ...) silently *ignore*
@@ -87,10 +84,17 @@ class Taxonomy:
     # such constraint.
     restricted_hosts: dict[str, str] = field(default_factory=dict)
 
+    # The bulk-harvest spec this profile is seeded with (see
+    # :mod:`cybersec_slm.sourcing.harvest.spec`). A plain dict that lands in the
+    # profile's ``harvest.yaml`` on first seed, editable like ``keywords.yaml``.
+    # ``None`` (the default) means this profile is search-discovery-first and has
+    # no bulk backend wired — the harvest driver no-ops for it.
+    harvest_spec: dict | None = None
+
     @property
     def subdomains(self) -> tuple[str, ...]:
         """Sub-domain names, in this taxonomy's declared order."""
-        return tuple(self.datasets)
+        return tuple(self.keywords)
 
 
 def _load() -> dict[str, Taxonomy]:

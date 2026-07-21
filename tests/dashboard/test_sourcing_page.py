@@ -45,8 +45,7 @@ def catalog_csv(tmp_path, monkeypatch):
 def _taxonomy(**subdomains):
     from cybersec_slm.sourcing import catalog
 
-    catalog.save({name: {"datasets": spec.get("datasets", []),
-                         "text": spec.get("text", []),
+    catalog.save({name: {"keywords": spec.get("keywords", []),
                          "code": spec.get("code", ""),
                          "vocab": spec.get("vocab", [])}
                   for name, spec in subdomains.items()})
@@ -56,13 +55,13 @@ def _taxonomy(**subdomains):
 def test_apply_saves_the_selected_subdomains_and_mode(page):
     from cybersec_slm.dashboard import settings_store
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["cloud ds"]},
-                 "Network Security": {"datasets": ["net ds"]}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["cloud ds"]},
+                 "Network Security": {"keywords": ["net ds"]}})
 
     page.run()
     assert not page.exception
     page.multiselect(key="src_domains").set_value(["Cloud Security"])
-    page.selectbox(key="src_mode").set_value("text").run()
+    page.checkbox(key="src_text_only").set_value(True).run()
     page.button(key="src_apply").click().run()
     assert not page.exception
 
@@ -76,8 +75,8 @@ def test_apply_merges_into_the_existing_source_settings(page):
     page's Sourcing modal."""
     from cybersec_slm.dashboard import settings_store
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["c"]},
-                 "Network Security": {"datasets": ["n"]}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["c"]},
+                 "Network Security": {"keywords": ["n"]}})
     settings_store.save_stage("source", {"per_keyword": 7, "max_minutes": 30.0,
                                          "domains": ["Network Security"]})
 
@@ -97,8 +96,8 @@ def test_apply_with_every_subdomain_selected_clears_the_restriction(page):
     rather than being frozen out by a stale list."""
     from cybersec_slm.dashboard import settings_store
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["c"]},
-                 "Network Security": {"datasets": ["n"]}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["c"]},
+                 "Network Security": {"keywords": ["n"]}})
     settings_store.save_stage("source", {"domains": ["Cloud Security"]})
 
     page.run()
@@ -113,7 +112,7 @@ def test_apply_with_every_subdomain_selected_clears_the_restriction(page):
 def test_edit_renames_a_subdomain_and_relabels_its_catalog_rows(page, catalog_csv):
     from cybersec_slm.sourcing import catalog
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["cloud ds"], "text": ["cloud tx"],
+    _taxonomy(**{"Cloud Security": {"keywords": ["cloud ds"],
                                     "code": "CLOUD", "vocab": ["s3"]}})
     with open(catalog_csv, "w", encoding="utf-8") as f:
         f.write("Name,Sub-Domain,Dataset Link,License\n"
@@ -129,7 +128,7 @@ def test_edit_renames_a_subdomain_and_relabels_its_catalog_rows(page, catalog_cs
     cat = catalog.load()
     assert "Cloud Security" not in cat
     assert cat["Cloud & Platform"]["code"] == "CLOUD"      # code survives a rename
-    assert cat["Cloud & Platform"]["datasets"] == ["cloud ds"]
+    assert cat["Cloud & Platform"]["keywords"] == ["cloud ds"]
     assert cat["Cloud & Platform"]["vocab"] == ["s3"]
 
     import pandas as pd
@@ -140,22 +139,22 @@ def test_edit_renames_a_subdomain_and_relabels_its_catalog_rows(page, catalog_cs
 def test_edit_rewrites_keywords_without_renaming(page):
     from cybersec_slm.sourcing import catalog
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["old"], "code": "CLOUD"}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["old"], "code": "CLOUD"}})
 
     page.run()
-    page.text_area(key="ed_ds_Cloud Security").set_value("first kw\nsecond kw\n\n")
+    page.text_area(key="ed_kw_Cloud Security").set_value("first kw\nsecond kw\n\n")
     page.button(key="ed_save_Cloud Security").click().run()
     assert not page.exception
     cat = catalog.load()
-    assert cat["Cloud Security"]["datasets"] == ["first kw", "second kw"]
+    assert cat["Cloud Security"]["keywords"] == ["first kw", "second kw"]
     assert cat["Cloud Security"]["code"] == "CLOUD"
 
 
 def test_edit_rejects_a_rename_onto_an_existing_subdomain(page):
     from cybersec_slm.sourcing import catalog
 
-    _taxonomy(**{"Cloud Security": {"datasets": ["c"]},
-                 "Network Security": {"datasets": ["n"]}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["c"]},
+                 "Network Security": {"keywords": ["n"]}})
 
     page.run()
     page.text_input(key="ed_name_Cloud Security").set_value("Network Security").run()
@@ -163,12 +162,12 @@ def test_edit_rejects_a_rename_onto_an_existing_subdomain(page):
     assert any("already exists" in e.value for e in page.error)
     assert page.button(key="ed_save_Cloud Security").disabled
     # The collision target is untouched.
-    assert catalog.load()["Network Security"]["datasets"] == ["n"]
+    assert catalog.load()["Network Security"]["keywords"] == ["n"]
 
 
 # ------------------------------------------------------- add a source by hand --
 def test_add_source_appends_a_row_to_the_catalog(page, catalog_csv):
-    _taxonomy(**{"Cloud Security": {"datasets": ["c"]}})
+    _taxonomy(**{"Cloud Security": {"keywords": ["c"]}})
 
     page.run()
     assert not page.exception

@@ -152,6 +152,15 @@ def keywords_path(name: str | None = None) -> str:
     return os.path.join(profile_dir(name), "keywords.yaml")
 
 
+def harvest_path(name: str | None = None) -> str:
+    """Path to ``name``'s editable ``harvest.yaml`` bulk-harvest spec.
+
+    Seeded from the taxonomy's ``harvest_spec`` on first ``ensure``; absent (and the
+    harvest driver no-ops) for a profile with no bulk backend wired.
+    """
+    return os.path.join(profile_dir(name), "harvest.yaml")
+
+
 def taxonomy(name: str | None = None) -> taxonomies.Taxonomy:
     """The built-in :class:`~.taxonomies.Taxonomy` backing profile ``name``.
 
@@ -173,12 +182,10 @@ def taxonomy(name: str | None = None) -> taxonomies.Taxonomy:
     base = taxonomies.get(taxonomies.DEFAULT_PROFILE)
     return taxonomies.Taxonomy(
         domain_name=name.upper(),
-        datasets={}, text={}, vocab={}, codes={},
+        keywords={}, vocab={}, codes={},
         site_scope_hosts=base.site_scope_hosts,
-        dataset_engines=base.dataset_engines,
-        text_engines=base.text_engines,
+        engines=base.engines,
         query_qualifier=base.query_qualifier,
-        text_query_qualifier=base.text_query_qualifier,
         restricted_hosts={},
     )
 
@@ -222,8 +229,7 @@ def ensure(name: str | None = None) -> str:
         tax = taxonomies.get(name)
         # Imported here to avoid a catalog <-> profiles import cycle.
         from . import catalog as _catalog
-        cat = {sub: {"datasets": list(tax.datasets.get(sub, [])),
-                     "text": list(tax.text.get(sub, [])),
+        cat = {sub: {"keywords": list(tax.keywords.get(sub, [])),
                      "code": tax.codes.get(sub, ""),
                      "vocab": sorted(tax.vocab.get(sub, set()))}
                for sub in tax.subdomains}
@@ -231,6 +237,17 @@ def ensure(name: str | None = None) -> str:
 
     seed = taxonomies.get(name).seed_rows if name in taxonomies.TAXONOMIES else ()
     _write_seed_csv(catalog_path(name), seed)
+
+    # Seed the bulk-harvest spec (harvest.yaml) from the taxonomy's harvest_spec,
+    # only when absent — a user's edits survive, and a profile with no harvest_spec
+    # (e.g. cybersec, search-discovery-first) simply gets no file and the harvest
+    # driver no-ops. Imported here to avoid a harvest <-> profiles cycle.
+    h_path = harvest_path(name)
+    if not os.path.exists(h_path) and name in taxonomies.TAXONOMIES:
+        hspec = getattr(taxonomies.get(name), "harvest_spec", None)
+        if hspec:
+            from .harvest import spec as _hspec
+            _hspec.save(dict(hspec), name)
     return d
 
 

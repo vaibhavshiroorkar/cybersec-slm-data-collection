@@ -1604,9 +1604,11 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
     (:func:`cached.raw_records`), so it is paid once per session.
 
     ``measure_size=False`` skips both the per-source ``os.walk`` byte count and the
-    record scan (the slow parts: raw is ~90 GB of .jsonl), returning ``size_mb`` =
-    0.0 and ``lines`` = 0 so the caller can render live *source* counts cheaply and
-    fill both from the cached measurements.
+    record scan (the slow parts: raw is ~90 GB of .jsonl), returning ``size_mb``
+    from the catalog's per-source JSONL size (cheap, no disk walk) and ``lines`` =
+    0 so the caller can render live *source* counts cheaply and fill records and
+    the on-disk size from the cached measurements (:func:`cached.raw_records`,
+    :func:`cached.raw_size_mb`).
     """
     raw_root = _raw()
     if not os.path.isdir(raw_root):
@@ -1627,20 +1629,16 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
                     continue
                 sources += 1
                 _ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
-                # Measured size is fast enough (<5ms) for live refreshes.
-                # Lines are interpolated from the catalog's expectation to stay live
-                # without paying the massive cost of a full JSONL file read.
-                actual_size_mb = _jsonl_stats(src.path)[1] / (1024 * 1024)
                 if measure_size:
+                    # Full path: count records on disk and walk for the real size.
                     lines += _count_jsonl_records(src.path)
+                    size_mb += _jsonl_stats(src.path)[1] / (1024 * 1024)
                 else:
-                    if sz > 0:
-                        lines += _ln * (actual_size_mb / sz)
-                    elif actual_size_mb > 0:
-                        lines += _count_jsonl_records(src.path)
-                    else:
-                        lines += _ln
-                size_mb += actual_size_mb
+                    # Cheap path: no record scan, no byte walk. Size comes from the
+                    # catalog's per-source JSONL Size (MB); records are deferred to
+                    # cached.raw_records. The catalog was 149% wrong on *records*,
+                    # but its *size* is a fine live proxy and avoids the walk.
+                    size_mb += sz
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}

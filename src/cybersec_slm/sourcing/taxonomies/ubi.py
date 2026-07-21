@@ -268,10 +268,65 @@ _SEED_ROWS: tuple[dict, ...] = (
           "reports (own content)"),
 )
 
+
+# Bulk-harvest spec: grow the catalog toward 10,000 license-clean, India,
+# finance rows by paginating data.gov.in's CKAN ``package_search``. Every
+# package on that portal carries GODL-India (already an allow pattern at the
+# license gate), so the harvest stamps the license from the catalog response
+# itself — no per-source fetch, which is what makes it fast enough to top up
+# thousands of rows. The per-domain queries scope each sub-domain to its
+# finance/banking/AML/audit/governance topics, and the quality pre-filter
+# (require_any_keyword) keeps off-topic resources (COVID, UPSC) out — those
+# crept into the 1648 rows that were hand-imported before this harvester
+# existed. The API key is read from DATAGOVINDIA_API_KEY (already in
+# .env.example); it is optional on portals with a public search but required
+# on data.gov.in. See docs/sources/legal_scope.md for the GODL-India basis.
+_HARVEST_SPEC: dict = {
+    "target_total": 10000,
+    "backends": [
+        {
+            "name": "ckan",
+            "base_url": "https://www.data.gov.in",
+            "api_key_env": "DATAGOVINDIA_API_KEY",
+            "action": "package_search",
+            "rows_per_page": 100,
+            "max_results": 12000,          # over-fetch to survive dedup + drops
+            "license": "Government Open Data License - India (GODL)",
+            "country": "India",
+            "field": "Finance",
+            "dedup_by": "resource_id",
+            "quality": {
+                "require_title_min_chars": 8,
+                "require_any_keyword": True,
+            },
+            "per_domain_queries": {
+                "Compliance and Risk Management": [
+                    "banking", "credit risk", "capital adequacy",
+                    "non performing assets", "regulatory reporting",
+                    "Basel", "stress testing", "operational risk",
+                ],
+                "AML-KYC": [
+                    "fraud", "money laundering", "suspicious transactions",
+                    "financial fraud", "know your customer", "sanctions",
+                    "terrorist financing",
+                ],
+                "Internal Audit": [
+                    "audit", "internal audit", "audit findings",
+                    "control deficiency", "internal control", "inspection",
+                ],
+                "Corporate Governance": [
+                    "corporate governance", "board of directors", "annual report",
+                    "shareholding", "companies act", "related party",
+                    "insider trading",
+                ],
+            },
+        },
+    ],
+}
+
 TAXONOMY = Taxonomy(
     domain_name="BANKING_COMPLIANCE",
-    datasets=_DATASETS,
-    text=_TEXT,
+    keywords={k: _DATASETS.get(k, []) + _TEXT.get(k, []) for k in set(_DATASETS) | set(_TEXT)},
     vocab=_VOCAB,
     codes=_CODES,
     # Why these specific hosts:
@@ -288,14 +343,8 @@ TAXONOMY = Taxonomy(
         "data.gov.in", "indiacode.nic.in", "egazette.gov.in", "arxiv.org",
         OWN_CONTENT_HOST,
     ),
-    dataset_engines=("github", "openairedatasets", "arxiv", "semantic scholar"),
-    # Deliberately omits Wikipedia: it is CC-BY-SA, and share-alike is a deny
-    # pattern at the license gate, so indexing it would only manufacture rows that
-    # get blocked. Stack Overflow (used by the cybersec profile) is dropped as
-    # off-topic for banking regulation.
-    text_engines=("github", "arxiv", "semantic scholar", "openairedatasets"),
-    query_qualifier="dataset OR github OR repository OR corpus",
-    text_query_qualifier="guide OR explained OR documentation OR handbook OR paper",
+    engines=("github", "openairedatasets", "arxiv", "semantic scholar"),
+    query_qualifier="dataset OR github OR repository OR corpus OR guide OR handbook",
     # Only a general web engine honours ``site:``. Kept for any future dork, but
     # note these are unreliable for a sweep (see the note on _own above) — prefer a
     # seed row for a host we already know about.
@@ -303,4 +352,5 @@ TAXONOMY = Taxonomy(
     owned_hosts=(OWN_CONTENT_HOST,),
     seed_rows=_SEED_ROWS,
     restricted_hosts=_RESTRICTED_HOSTS,
+    harvest_spec=_HARVEST_SPEC,
 )

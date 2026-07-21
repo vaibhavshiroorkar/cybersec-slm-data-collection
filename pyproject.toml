@@ -134,6 +134,7 @@ en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/dow
 
 [project.scripts]
 cybersec-slm = "cybersec_slm.cli:main"
+hybrid-source = "cybersec_slm.sourcing.hybrid.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cybersec_slm"]

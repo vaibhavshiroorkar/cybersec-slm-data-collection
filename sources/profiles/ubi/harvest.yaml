@@ -1,0 +1,48 @@
+backends:
+- action: package_search
+  api_key_env: DATAGOVINDIA_API_KEY
+  base_url: https://www.data.gov.in
+  country: India
+  dedup_by: resource_id
+  field: Finance
+  license: Government Open Data License - India (GODL)
+  max_results: 12000
+  name: ckan
+  per_domain_queries:
+    AML-KYC:
+    - fraud
+    - money laundering
+    - suspicious transactions
+    - financial fraud
+    - know your customer
+    - sanctions
+    - terrorist financing
+    Compliance and Risk Management:
+    - banking
+    - credit risk
+    - capital adequacy
+    - non performing assets
+    - regulatory reporting
+    - Basel
+    - stress testing
+    - operational risk
+    Corporate Governance:
+    - corporate governance
+    - board of directors
+    - annual report
+    - shareholding
+    - companies act
+    - related party
+    - insider trading
+    Internal Audit:
+    - audit
+    - internal audit
+    - audit findings
+    - control deficiency
+    - internal control
+    - inspection
+  quality:
+    require_any_keyword: true
+    require_title_min_chars: 8
+  rows_per_page: 100
+target_total: 10000

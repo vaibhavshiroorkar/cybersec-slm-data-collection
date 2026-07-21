@@ -151,12 +151,8 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
     from huggingface_hub import HfApi, get_token
     info = HfApi().dataset_info(ref, files_metadata=True)
     sib = {s.rfilename: (s.size or 0) for s in info.siblings}
-    cand = [f for f in sib if f.lower().endswith(EXT_PRIORITY)
-            and not any(s in f.lower() for s in SKIP_SUBSTRINGS)]
-    for ext in EXT_PRIORITY:
-        chosen = [f for f in cand if f.lower().endswith(ext)]
-        if chosen:
-            break
+    cand = [f for f in sib if not any(s in f.lower() for s in SKIP_SUBSTRINGS)]
+    chosen = cand
     # Group sharded files (train-00000-of-N...) so they accumulate into one jsonl
     # instead of overwriting each other.
     groups = {}
@@ -216,12 +212,8 @@ def fetch_kaggle(ref, domain, desc, lic, folder, log):
     files = api.dataset_list_files(ref).files
     sizes = {f.name: (getattr(f, "totalBytes", None) or getattr(f, "total_bytes", 0) or 0)
              for f in files}
-    cand = [n for n in sizes if n.lower().endswith(EXT_PRIORITY)
-            and not any(s in n.lower() for s in SKIP_SUBSTRINGS)]
-    for ext in EXT_PRIORITY:
-        chosen = [f for f in cand if f.lower().endswith(ext)]
-        if chosen:
-            break
+    cand = [n for n in sizes if not any(s in n.lower() for s in SKIP_SUBSTRINGS)]
+    chosen = cand
     url = f"https://www.kaggle.com/datasets/{ref}"
     tmp = os.path.join(folder, "_dl"); os.makedirs(tmp, exist_ok=True)
     for rel in sorted(chosen):
@@ -261,12 +253,7 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         # every artifact, to one built from a clean repo.
         binscan.report(zdir, source=stem, url=url, domain=domain)
         data = [os.path.join(r, f) for r, _d, fs in os.walk(zdir) for f in fs
-                if f.lower().endswith(EXT_PRIORITY)
-                and not any(s in f.lower() for s in SKIP_SUBSTRINGS)]
-        for ext in EXT_PRIORITY:
-            data = [f for f in data if f.lower().endswith(ext)] or data
-            if any(f.lower().endswith(ext) for f in data):
-                break
+                if not any(s in f.lower() for s in SKIP_SUBSTRINGS)]
         # Concatenate every matching file into ONE jsonl per source. A repo that
         # stores its data across thousands of small files otherwise explodes into
         # thousands of outputs; collapse it to a single <source>.jsonl.

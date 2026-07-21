@@ -155,7 +155,7 @@ with ui.section("Run the full pipeline"):
     cfg_cols = st.columns(len(stage_keys))
     for _col, _key, _label in zip(cfg_cols, stage_keys, stage_labels, strict=True):
         if _col.button(f"Configure {_label}", key=f"cfg_{_key}", type="tertiary",
-                       use_container_width=True,
+                       width='stretch',
                        help=f"Open {_label} run settings"):
             ui.stage_config_dialog(_key)
 
@@ -198,12 +198,12 @@ with ui.section("Run the full pipeline"):
     # The two multi-stage recipes live behind More: they are deliberate,
     # occasional actions, and putting them beside Start/Resume/Stop invited a
     # mis-click into a run that reorders the whole pipeline.
-    with b[4].popover("More", use_container_width=True):
+    with b[4].popover("More", width='stretch'):
         st.caption("Multi-stage recipes. Each stops a run in flight first, then "
                    "resumes from its checkpoint, so nothing is refetched or "
                    "recleaned.")
         if st.button("Quick finish", key="more_quick_finish",
-                     use_container_width=True,
+                     width='stretch',
                      help="Pause cleaning and build a dataset from what is already "
                           "cleaned: EDA (observe only) and Schema run over "
                           "data/clean as it stands, then cleaning resumes from its "
@@ -212,7 +212,7 @@ with ui.section("Run the full pipeline"):
                           "never blocks the run, because a partial corpus fails it "
                           "by construction."):
             _do_quick_finish()
-        if st.button("EDA fix", key="more_eda_fix", use_container_width=True,
+        if st.button("EDA fix", key="more_eda_fix", width='stretch',
                      help="Balance the corpus: source only the sub-domains the EDA "
                           "gate reports as starved, ingest and clean what arrives, "
                           "then look again, repeating until it balances or "
@@ -221,7 +221,7 @@ with ui.section("Run the full pipeline"):
             _do_eda_fix()
         st.divider()
         if st.button("Test run", key="more_test_run", disabled=running,
-                     use_container_width=True,
+                     width='stretch',
                      help="Health check after a change: seeds a small synthetic "
                           "corpus into a throwaway data root and runs clean, EDA, "
                           "schema and the schema validator over it, reporting "
@@ -239,20 +239,20 @@ with ui.section("Run the full pipeline"):
                 f"Last test run {_mark} in {_tr.get('seconds')}s"
                 + (f"  ·  broke at: {', '.join(_bad)}" if _bad else "")
                 + f"  ·  {_tr.get('ts', '')}")
-    if b[0].button("Start", disabled=running, use_container_width=True,
+    if b[0].button("Start", disabled=running, width='stretch',
                    help="Run the lit stages in order, keeping existing data: "
                         "ingest and clean skip sources already fetched/cleaned, so "
                         "it never re-fetches from zero or wipes the checkpoint. "
                         "Each stage uses the settings saved in its Configure modal. "
                         "Use Reset for a from-scratch rebuild."):
         _do_start()
-    if b[1].button("Resume", disabled=running, use_container_width=True,
+    if b[1].button("Resume", disabled=running, width='stretch',
                    help="Continue an interrupted run from its checkpoint: skips "
                         "Sourcing discovery and resumes ingest from where it "
                         "stopped, skipping sources already fetched."):
         res = control.start("all", resume=True, settings=run_settings)
         st.rerun() if res.get("ok") else st.error(res["error"])
-    if b[2].button("Stop", disabled=not running, use_container_width=True):
+    if b[2].button("Stop", disabled=not running, width='stretch'):
         control.stop()
         st.rerun()
 
@@ -269,7 +269,7 @@ with ui.section("Run the full pipeline"):
             st.toast(msg)
         st.rerun()
 
-    if b[3].button("Reset", disabled=running, use_container_width=True,
+    if b[3].button("Reset", disabled=running, width='stretch',
                    help="Permanently delete the data and logs for the selected stages "
                         "(asks to confirm first)"):
         st.session_state["_confirm_reset"] = True
@@ -278,10 +278,10 @@ with ui.section("Run the full pipeline"):
         st.warning("This permanently deletes data and logs for the selected stages. "
                    "This cannot be undone.")
         rc = st.columns(4)
-        if rc[0].button("Yes, reset", use_container_width=True):
+        if rc[0].button("Yes, reset", width='stretch'):
             st.session_state["_confirm_reset"] = False
             _do_reset()
-        if rc[1].button("Cancel", use_container_width=True, key="cancel_reset"):
+        if rc[1].button("Cancel", width='stretch', key="cancel_reset"):
             st.session_state["_confirm_reset"] = False
             st.rerun()
 
@@ -412,7 +412,7 @@ def _stage_activity() -> None:
     if not rows:
         st.caption("No stage activity yet. Start a run from the panel above.")
         return
-    st.altair_chart(_timeline_chart(rows), use_container_width=True)
+    st.altair_chart(_timeline_chart(rows), width='stretch')
     st.caption("Each bar spans from when a stage first logged to when the next "
                "one began; the running stage extends to now. Stages a resumed "
                "plan skipped never logged, so they are absent rather than empty.")
@@ -479,7 +479,7 @@ def _live_rate() -> None:
         st.caption(f"Sampling {sample['label']} ({sample['what']})… the rate needs "
                    "a few seconds of history.")
         return
-    st.altair_chart(_rate_chart(rows, sample["unit"]), use_container_width=True)
+    st.altair_chart(_rate_chart(rows, sample["unit"]), width='stretch')
     latest = rows[-1]["rate"]
     st.caption(f"{sample['label']}  ·  {sample['what']}  ·  now "
                f"{latest:,.2f} {sample['unit']}/s  ·  last {len(rows)}s")
@@ -507,7 +507,7 @@ def _show_full_log() -> None:
     st.code(log_text, language=None)
     
     col1, col2 = st.columns([4, 1])
-    if col2.button("Exit / Close", type="primary", use_container_width=True):
+    if col2.button("Exit / Close", type="primary", width='stretch'):
         st.rerun()
 
 
@@ -516,7 +516,7 @@ with ui.section("Pipeline log"):
         _col1, _col2 = st.columns([4, 1])
         _col1.caption(f"session (pid) `{_sess.get('pid') or '?'}`  ·  log file "
                       f"`logs/{os.path.basename(_sess['newest_log'])}`")
-        if _col2.button("View full log & Copy", use_container_width=True):
+        if _col2.button("View full log & Copy", width='stretch'):
             _show_full_log()
     _pipeline_log()
 

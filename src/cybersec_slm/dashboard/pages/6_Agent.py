@@ -53,7 +53,7 @@ else:
     # Example prompts and a reset, shown above the transcript.
     top = st.columns([5, 1])
     top[0].markdown("**Try one of these**")
-    if top[1].button("Clear chat", use_container_width=True,
+    if top[1].button("Clear chat", width='stretch',
                      disabled=not st.session_state["agent_history"]):
         st.session_state["agent_history"] = []
         st.session_state["agent_traces"] = {}
@@ -62,7 +62,7 @@ else:
     pending: str | None = None
     ex_cols = st.columns(len(EXAMPLES))
     for col, ex in zip(ex_cols, EXAMPLES, strict=True):
-        if col.button(ex, use_container_width=True, key=f"ex_{ex}"):
+        if col.button(ex, width='stretch', key=f"ex_{ex}"):
             pending = ex
     st.divider()
 

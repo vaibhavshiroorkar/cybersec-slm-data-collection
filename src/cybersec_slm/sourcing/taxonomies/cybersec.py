@@ -418,18 +418,15 @@ _CODES: dict[str, str] = {'Application Security': 'APPLICATION',
 
 TAXONOMY = Taxonomy(
     domain_name='CYBERSEC',
-    datasets=_DATASETS,
-    text=_TEXT,
+    keywords={k: _DATASETS.get(k, []) + _TEXT.get(k, []) for k in set(_DATASETS) | set(_TEXT)},
     vocab=_VOCAB,
     codes=_CODES,
     site_scope_hosts=(
         'huggingface.co', 'github.com', 'gitlab.com', 'kaggle.com',
         'zenodo.org', 'arxiv.org', 'data.gov', 'archive.ics.uci.edu',
     ),
-    dataset_engines=('github', 'openairedatasets', 'arxiv', 'semantic scholar'),
-    text_engines=('github', 'stackoverflow', 'arxiv', 'semantic scholar'),
-    query_qualifier='dataset OR github OR repository OR corpus',
-    text_query_qualifier='guide OR tutorial OR explained OR documentation OR writeup',
+    engines=('github', 'openairedatasets', 'arxiv', 'semantic scholar', 'stackoverflow'),
+    query_qualifier='dataset OR github OR repository OR corpus OR guide OR tutorial OR documentation',
     # The cybersecurity corpus draws on open dataset hosts only; no on-topic host
     # needed a licensing bar, so discovery relies on the license gate alone.
     restricted_hosts={},

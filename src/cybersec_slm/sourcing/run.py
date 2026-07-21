@@ -101,16 +101,13 @@ def _extract_host(url: str) -> str:
         return ""
 
 
-# Per-mode filetype qualifiers appended to site-dork shots so we collect
-# structured data files (datasets mode) and PDF documents (both modes).
-_DORK_FILETYPES: dict[str, tuple[str, ...]] = {
-    "datasets": ("filetype:pdf", "filetype:csv", "filetype:xlsx", "filetype:json"),
-    "text":     ("filetype:pdf",),
-    "both":     ("filetype:pdf", "filetype:csv", "filetype:xlsx", "filetype:json"),
+_DORK_FILETYPES: dict[bool, tuple[str, ...]] = {
+    False: ("filetype:pdf", "filetype:csv", "filetype:xlsx", "filetype:json"),
+    True:  ("filetype:pdf", "filetype:txt", "filetype:md", "filetype:doc", "filetype:docx"),
 }
 
 
-def _domain_shots(selected: list[str], cat: dict, mode: str,
+def _domain_shots(selected: list[str], cat: dict, text_only: bool,
                   countries: list[str] | None = None,
                   fields: list[str] | None = None
                   ) -> dict[str, list[tuple[str, str, bool]]]:
@@ -137,8 +134,8 @@ def _domain_shots(selected: list[str], cat: dict, mode: str,
 
         direct links  >  site-dork shots  >  generic keyword searches
     """
-    kw_sets = catalog.keyword_sets(mode, cat)   # list; safe to iterate twice
-    filetypes = _DORK_FILETYPES.get(mode, ("filetype:pdf",))
+    kw_sets = catalog.keyword_sets(cat)   # list; safe to iterate twice
+    filetypes = _DORK_FILETYPES.get(text_only, ("filetype:pdf",))
 
     per_domain: dict[str, list[tuple[str, str, bool]]] = {d: [] for d in selected}
 
@@ -154,20 +151,6 @@ def _domain_shots(selected: list[str], cat: dict, mode: str,
                 seen_hosts[h] = None
         hostnames = list(seen_hosts)
 
-        site_shots: list[tuple[str, str, bool]] = []
-        if hostnames:
-            for kwdict, qualifier in kw_sets:
-                is_ds = qualifier == kw.QUERY_QUALIFIER
-                for keyword in kwdict.get(domain, []):
-                    for host in hostnames:
-                        # broad site-scoped query
-                        site_shots.append((f"site:{host} {keyword}", qualifier, is_ds))
-                        # filetype-specific queries (pdf, csv, …)
-                        for ft in filetypes:
-                            site_shots.append(
-                                (f"site:{host} {keyword} {ft}", qualifier, is_ds))
-
-        # ---- tier 2: plain keyword searches -----------------------------------
         # Build the suffix to inject for geographical/field targeting
         suffix_parts = []
         if countries and "Global" not in countries:
@@ -176,6 +159,21 @@ def _domain_shots(selected: list[str], cat: dict, mode: str,
             suffix_parts.extend(fields)
         suffix = " " + " ".join(suffix_parts) if suffix_parts else ""
 
+        site_shots: list[tuple[str, str, bool]] = []
+        if hostnames:
+            for kwdict, qualifier in kw_sets:
+                is_ds = qualifier == kw.QUERY_QUALIFIER
+                for keyword in kwdict.get(domain, []):
+                    injected_keyword = f"{keyword}{suffix}"
+                    for host in hostnames:
+                        # broad site-scoped query
+                        site_shots.append((f"site:{host} {injected_keyword}", qualifier, is_ds))
+                        # filetype-specific queries (pdf, csv, …)
+                        for ft in filetypes:
+                            site_shots.append(
+                                (f"site:{host} {injected_keyword} {ft}", qualifier, is_ds))
+
+        # ---- tier 2: plain keyword searches -----------------------------------
         generic_shots: list[tuple[str, str, bool]] = []
         for kwdict, qualifier in kw_sets:
             is_ds = qualifier == kw.QUERY_QUALIFIER
@@ -277,7 +275,10 @@ def _fill_loop(selected, target_per_domain, global_cap, max_per_domain, csv_path
             for keyword, row in batch:
                 if need[domain] <= 0 or _capped() or (max_per_domain is not None and per_domain_count[domain] >= max_per_domain):
                     break
-                if valid_only and license_verdict(row.get("License")) != "ok":
+                verdict = license_verdict(row.get("License"))
+                if verdict == "blocked":
+                    continue                        # strictly block proprietary/copyleft
+                if valid_only and verdict != "ok":
                     continue                        # gathered + enriched, but not kept
                 new_rows.append(row)
                 kept.append(row)
@@ -292,7 +293,9 @@ def _fill_loop(selected, target_per_domain, global_cap, max_per_domain, csv_path
                             f"{row['Dataset Link']}")
             if kept and not dry_run:
                 appended += append_rows(csv_path, kept)
-            if need[domain] <= 0 or cursor[domain]["exhausted"]:
+            def _domain_full_local() -> bool:
+                return max_per_domain is not None and per_domain_count[domain] >= max_per_domain
+            if need[domain] <= 0 or cursor[domain]["exhausted"] or _domain_full_local():
                 if domain in active:
                     active.remove(domain)
 
@@ -303,20 +306,19 @@ def _fill_loop(selected, target_per_domain, global_cap, max_per_domain, csv_path
 def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
              per_keyword: int = 5, max_per_domain: int | None = None,
              max_total: int | None = None, max_minutes: float | None = None,
-             mode: str = "datasets", dry_run: bool = False,
+             text_only: bool = False, dry_run: bool = False,
              out_csv: str | None = None, base_url: str | None = None,
              language: str = "en", time_range: str | None = "year",
              site_scope: bool = True, quality_filter: bool = True,
              workers: int = 12, client=None, enrich: bool = True,
              engines: str | None = None, target_per_domain: int | None = None,
-             valid_only: bool = True,
+             valid_only: bool = True, no_strict_license: bool = False,
              countries: list[str] | None = None, fields: list[str] | None = None,
              clock: Callable[[], float] = time.monotonic) -> dict:
     """Run sourcing and return a summary dict.
 
-    ``mode`` selects the keyword catalog: ``datasets`` (corpora/repos), ``text``
-    (articles/docs/writeups), or ``both``. Results are gathered round-robin across
-    the selected domains, so coverage stays even.
+    ``text_only`` filters the appended filetypes in site_shots to only text documents.
+    Results are gathered round-robin across the selected domains, so coverage stays even.
 
     Queries are routed to reliable SearXNG engines (``engines``; arg > env
     ``$SEARXNG_ENGINES`` > a GitHub-first default per mode) instead of the
@@ -358,6 +360,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     csv_path = csv_path or default_catalog()
     started = clock()
 
+    if no_strict_license:
+        valid_only = False
     if not enrich:
         valid_only = False
 
@@ -389,7 +393,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     per_domain_count: dict[str, int] = {d: 0 for d in selected}
     by_keyword_agg: dict[tuple[str, str], dict] = {}
 
-    per_domain_shots = _domain_shots(selected, cat, mode, countries, fields)
+    per_domain_shots = _domain_shots(selected, cat, text_only, countries, fields)
     target = max_total
     deadline = started + max_minutes * 60 if max_minutes else None
     # Route queries to reliable engines (arg > $SEARXNG_ENGINES > a per-mode
@@ -405,7 +409,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     engines_override = engines or os.environ.get("SEARXNG_ENGINES") or None
 
     def _engines_for(is_ds: bool, keyword: str = "") -> str:
-        return engines_override or kw.engines_for_keyword(keyword, is_ds)
+        return engines_override or kw.engines_for_keyword(keyword)
 
     # Valid-gated search floors the per-query slice so a single GitHub page (up to ~30) is
     # captured rather than truncated to the historic default of 5.
@@ -422,7 +426,7 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
 
     # With a budget (or a fill target) set, page deeper until it is met or the
     # search space is exhausted; without one, a single page-1 pass is the historic run.
-    last_page = (_MAX_SWEEP_PAGES
+    last_page = (float('inf')
                  if (target is not None or deadline is not None or target_per_domain is not None) else 1)
 
     # Per-domain search cursor + a small buffer of pending results, so the driver
@@ -481,6 +485,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
             if c["page"] > last_page:
                 c["exhausted"] = True
                 break
+            if _expired() or _reached() or _domain_full(domain):
+                break
             keyword, qualifier, is_ds = shots[c["si"]]
             # The targeted API engines ignore the dataset/text qualifier and score
             # a bare keyword best, so the qualifier is not appended to the query.
@@ -515,13 +521,11 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
             c["page_hits"] += len(results)
             c["si"] += 1
             if c["si"] >= len(shots):              # finished a full page of keywords
-                if c["page_hits"] == 0:            # a whole page found nothing -> done
-                    c["exhausted"] = True
                 c["si"] = 0
                 c["page"] += 1
-                c["page_hits"] = 0
-                if c["page"] > last_page:
+                if c["page_hits"] == 0 or c["page"] > last_page:
                     c["exhausted"] = True
+                c["page_hits"] = 0
 
     appended_in_fill = 0
     fill_target_reached: bool | None = None
@@ -562,9 +566,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     funnel.appended = appended
     summary = {"found": funnel.found, "new": len(new_rows), "appended": appended,
                "funnel": funnel.as_dict(),
-               "csv": review_csv, "mode": mode, "domains": selected,
+               "csv": review_csv, "text_only": text_only, "domains": selected,
                "target": target, "target_per_domain": target_per_domain,
-               "engines": engines_override or default_engines(True),
+               "engines": engines_override or default_engines(),
                "target_reached": fill_target_reached or _reached() or (target is None and target_per_domain is None),
                "by_domain": by_domain, "by_keyword": by_keyword,
                "elapsed_s": elapsed_s, "max_minutes": max_minutes,

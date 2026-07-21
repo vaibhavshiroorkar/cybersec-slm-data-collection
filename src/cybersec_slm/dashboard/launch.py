@@ -38,7 +38,8 @@ def launch(port: int = 8501, headless: bool = False) -> int:
         return 0
     _skip_first_run_prompt()
     app = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
-    cmd = [sys.executable, "-m", "streamlit", "run", app, "--server.port", str(port)]
+    cmd = [sys.executable, "-m", "streamlit", "run", app, "--server.port", str(port),
+           "--server.fileWatcherType", "none"]
     if headless:
         cmd += ["--server.headless", "true"]
     env = {**os.environ, "STREAMLIT_BROWSER_GATHER_USAGE_STATS": "false"}

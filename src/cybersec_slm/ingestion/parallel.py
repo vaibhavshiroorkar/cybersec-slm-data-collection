@@ -57,6 +57,12 @@ DEFAULT_SOURCE_TIMEOUT_S = 1800.0  # per-source wall-clock budget (30 min)
 MAX_POOL_REBUILDS = 5              # allow several pool restarts on timeout / broken pool
 MAX_SOURCE_RETRIES = 2             # resubmit transiently-failing sources twice
 RETRY_DELAY_S = 5.0                # wait 5 seconds before resubmitting to pool
+# Error signatures that are deterministic, not transient: retrying just wastes
+# time (and, for pyo3 panics, re-crashes workers). Fail them on the first attempt.
+_NON_RETRYABLE_MARKERS = (
+    "401 Unauthorized", "403 Forbidden", "Unauthorized",
+    "PanicException", "pyo3_runtime", "PicklingError",
+)
 
 
 def _default_workers() -> int:
@@ -210,8 +216,15 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
             except StopIteration:
                 break
 
-        def _fail_or_retry(d):
+        def _fail_or_retry(d, error_text: str = ""):
             k = descriptor_key(d)
+            # Deterministic failures (auth, Rust panics, pickling) don't recover
+            # on retry — skip the retry queue and record them as failed now.
+            if error_text and any(m in error_text for m in _NON_RETRYABLE_MARKERS):
+                logger.warning(f"  not retrying {_label(d)}: non-transient failure")
+                summary["failed"] += 1
+                summary.setdefault("failed_keys", []).append(k)
+                return
             if retries.get(k, 0) < MAX_SOURCE_RETRIES:
                 retries[k] = retries.get(k, 0) + 1
                 # Delay the retry to avoid instantly slamming a rate-limited server
@@ -243,18 +256,27 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                     d = fut_desc[fut]
                     try:
                         meta = fut.result()
-                    except BrokenProcessPool:
-                        pending_descriptors.append(d)
+                    except BrokenProcessPool as ex:
+                        # A worker hard-crashed (e.g. a Rust/pyo3 panic in polars).
+                        # That source is a deterministic failure — don't requeue
+                        # it (it will just crash the rebuilt pool again). The
+                        # other in-flight futures are salvaged by the except
+                        # block below.
+                        logger.error(f"  pool broke on {_label(d)}: "
+                                     f"{type(ex).__name__}: {ex}")
+                        summary["failed"] += 1
+                        summary.setdefault("failed_keys", []).append(
+                            descriptor_key(d))
                         raise
                     except Exception as ex:
                         logger.error(f"  worker crashed for {_label(d)}: "
                                      f"{type(ex).__name__}: {ex}")
-                        _fail_or_retry(d)
+                        _fail_or_retry(d, error_text=f"{type(ex).__name__}: {ex}")
                         continue
                     if not on_result(d, meta):
                         logger.warning(f"  FAILED {_label(d)}: "
                                        f"{meta.get('error')}")
-                        _fail_or_retry(d)
+                        _fail_or_retry(d, error_text=str(meta.get("error") or ""))
                         continue
                     try:
                         _submit(next(pending_iter))
@@ -270,8 +292,14 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
                                      f"{source_timeout:.0f}s; abandoning")
                         summary["timed_out"] += 1
                         summary["failed"] += 1
+                        summary.setdefault("failed_keys", []).append(
+                            descriptor_key(fut_desc[f]))
                         remaining.discard(f)
-                    pending_descriptors.extend(fut_desc[f] for f in remaining)
+                    # Requeue only the still-running (non-overdue) futures so
+                    # their work is not lost when we rebuild the pool below.
+                    # Timed-out ones are NOT requeued: they just counted as failed.
+                    pending_descriptors.extend(fut_desc[f] for f in list(remaining))
+                    remaining.clear()
                     timed_out = True
                     break
         except BrokenProcessPool as ex:
@@ -299,7 +327,7 @@ def _run_pool(descriptors, *, submit, on_result, workers: int,
 # ── Stage 2: Ingest (fetch-only) ──────────────────────────────────────────────
 
 def run_ingest(spec: str | None = None, *, workers: int | None = None,
-               resume: bool = False, limit: int | None = None,
+               resume: bool = False, retry_failed: bool = False, limit: int | None = None,
                source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
                max_source_gb: float | None = None, crawl: bool = True,
                domains: list[str] | None = None,
@@ -338,6 +366,31 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
 
     if resume:
         done_keys = _load_completed(COMPLETED_LEDGER)
+        
+        if retry_failed:
+            import sqlite3
+            db_path = os.path.join(core.LOGS, "ingest_log.sqlite")
+            true_completed = set()
+            if os.path.exists(db_path):
+                try:
+                    with sqlite3.connect(db_path) as con:
+                        cur = con.cursor()
+                        cur.execute("SELECT domain, name FROM ingest WHERE status IN ('ok', 'skipped', 'rejected')")
+                        true_completed = {f"{row[0]}/{row[1]}" for row in cur.fetchall()}
+                except Exception as ex:
+                    logger.warning(f"ingest: failed to read ingest_log.sqlite for --retry-failed: {ex}")
+            
+            retrying_keys = done_keys - true_completed
+            if retrying_keys:
+                done_keys = done_keys - retrying_keys
+                try:
+                    with open(COMPLETED_LEDGER, "w", encoding="utf-8") as f:
+                        for k in sorted(done_keys):
+                            f.write(k + "\n")
+                    logger.info(f"ingest: --retry-failed removed {len(retrying_keys)} failed sources from ledger")
+                except OSError as ex:
+                    logger.warning(f"ingest: failed to update ledger for --retry-failed: {ex}")
+
         n_before = len(descriptors)
         descriptors = [d for d in descriptors if descriptor_key(d) not in done_keys]
         n_skip = n_before - len(descriptors)
@@ -600,6 +653,7 @@ def run_normalize(*, resume: bool = True) -> dict:
 def run_v2_pipeline(spec: str | None = None, *,
                     workers: int | None = None,
                     resume: bool = False,
+                    retry_failed: bool = False,
                     keep_raw: bool = True,
                     limit: int | None = None,
                     source_timeout: float = DEFAULT_SOURCE_TIMEOUT_S,
@@ -613,7 +667,7 @@ def run_v2_pipeline(spec: str | None = None, *,
     
     from ..eda import SufficiencyError
 
-    ingest_result = run_ingest(spec, workers=workers, resume=resume, limit=limit,
+    ingest_result = run_ingest(spec, workers=workers, resume=resume, retry_failed=retry_failed, limit=limit,
                                source_timeout=source_timeout,
                                max_source_gb=max_source_gb, crawl=crawl,
                                scan_hazards=scan_hazards)

@@ -27,15 +27,10 @@ subdomains:
       - benami transaction dataset India
     links:
       - https://www.unionbankofindia.bank.in
-      - https://rbi.org.in
-      - https://www.sebi.gov.in
-      - https://www.mca.gov.in
-      - https://dbie.rbi.org.in
+      - https://www.rbi.org.in/Scripts/bs_rss.aspx
       - https://data.rbi.org.in
       - https://www.iba.org.in
       - https://iibf.org.in
-      - https://fiuindia.gov.in
-      - https://enforcementdirectorate.gov.in
       - https://www.fatf-gafi.org
     text:
       - customer due diligence explained
@@ -89,10 +84,7 @@ subdomains:
       - RBI annual report statistical tables
     links:
       - https://www.unionbankofindia.bank.in/en/home
-      - https://rbi.org.in
-      - https://www.sebi.gov.in
-      - https://www.mca.gov.in
-      - https://dbie.rbi.org.in
+      - https://www.rbi.org.in/Scripts/bs_rss.aspx
       - https://data.rbi.org.in
       - https://www.iba.org.in
       - https://iibf.org.in
@@ -146,16 +138,10 @@ subdomains:
       - India board diversity dataset
     links:
       - https://www.unionbankofindia.bank.in
-      - https://rbi.org.in
-      - https://www.sebi.gov.in
-      - https://www.mca.gov.in
-      - https://dbie.rbi.org.in
+      - https://www.rbi.org.in/Scripts/bs_rss.aspx
       - https://data.rbi.org.in
       - https://www.iba.org.in
       - https://iibf.org.in
-      - https://www.bseindia.com
-      - https://www.nseindia.com
-      - https://www.mca.gov.in/content/mca/global/en/acts-rules/ebooks/acts.html
       - https://indiacorplaw.in
     text:
       - corporate governance principles explained
@@ -201,16 +187,12 @@ subdomains:
       - IIA standard internal audit India
     links:
       - https://www.unionbankofindia.bank.in
-      - https://rbi.org.in
-      - https://www.sebi.gov.in
-      - https://www.mca.gov.in
-      - https://dbie.rbi.org.in
+      - https://www.rbi.org.in/Scripts/bs_rss.aspx
       - https://data.rbi.org.in
       - https://www.iba.org.in
       - https://iibf.org.in
       - https://www.iiai.org.in
       - https://www.icai.org/post/standards-on-auditing
-      - https://www.cag.gov.in
     text:
       - risk based internal audit explained
       - internal audit framework explained

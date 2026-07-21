@@ -198,6 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
     ig.add_argument("--resume", action="store_true",
                     help="skip sources already fetched in a prior run "
                          "(logs/completed_sources.txt)")
+    ig.add_argument("--retry-failed", action="store_true",
+                    help="with --resume, also re-attempt sources that failed or timed out in a previous run")
     ig.add_argument("--max-source-gb", type=float, default=None,
                     help="skip sources larger than this many GB (catalog size)")
     ig.add_argument("--source-timeout", type=float, default=1800.0,
@@ -233,9 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="catalog CSV to append to (default: the active profile's Sources.csv)")
     d.add_argument("--domains", nargs="*", default=None,
                    help="limit to these Sub-Domains (default: all)")
-    d.add_argument("--mode", choices=["datasets", "text", "both"], default="datasets",
-                   help="keyword catalog: datasets (corpora/repos), text "
-                        "(articles/docs), or both (default: datasets)")
+    d.add_argument("--text-only", action="store_true",
+                   help="filter sourcing results to text documents only (e.g. pdf, docx, txt)")
     d.add_argument("--per-keyword", type=int, default=5,
                    help="results to request per keyword (default 5)")
     d.add_argument("--max-per-domain", type=int, default=None,
@@ -271,6 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "instead of dropping them before enrichment")
     d.add_argument("--dry-run", action="store_true",
                    help="discover + write CSV but do not append to Sources.csv")
+    d.add_argument("--no-strict-license", action="store_true",
+                   help="keep 'unknown' licenses during discovery instead of "
+                        "requiring explicitly valid open-source licenses")
     d.add_argument("--out", default=None,
                    help="path for the candidate CSV (default: logs/discovered/)")
     d.add_argument("--searxng-url", default=None,
@@ -297,6 +301,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "confirmed-red sources to the blacklist")
     d.add_argument("--limit", type=int, default=None,
                    help="with --backfill, detect at most this many rows (a sample)")
+    d.add_argument("--harvest", action="store_true",
+                   help="instead of SearXNG discovery, bulk-harvest from the "
+                        "profile's harvest.yaml backends (e.g. data.gov.in CKAN) "
+                        "and append the survivors to Sources.csv. The fastest way "
+                        "to top up a license-clean corpus; needs no SearXNG. "
+                        "Backends and queries are editable per profile")
+    d.add_argument("--target", type=int, default=None,
+                   help="with --harvest, override the spec's target_total (the "
+                        "catalog row-count goal)")
 
     # ── synthetic-scan (curation aid) ─────────────────────────────────────────
     ss = sub.add_parser("synthetic-scan",
@@ -371,6 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--resume", action="store_true",
                    help="skip sources already fetched in a prior run "
                         "(logs/completed_sources.txt)")
+    a.add_argument("--retry-failed", action="store_true",
+                   help="with --resume, also re-attempt sources that failed or timed out in a previous run")
     a.add_argument("--purge-raw", action="store_true",
                    help="delete data/raw/ after cleaning (default: keep it)")
     a.add_argument("--limit", type=int, default=None,
@@ -536,6 +551,7 @@ def main(argv: list[str] | None = None) -> None:
         parallel.run_ingest(args.sources,
                             workers=args.workers,
                             resume=args.resume,
+                            retry_failed=getattr(args, "retry_failed", False),
                             limit=args.limit,
                             source_timeout=args.source_timeout,
                             max_source_gb=args.max_source_gb,
@@ -619,6 +635,18 @@ def main(argv: list[str] | None = None) -> None:
               f"blacklisted {summary['blacklisted']}"
               f"{' (dry-run)' if summary['dry_run'] else ''} -> {summary['summary']}")
 
+    elif args.stage == "source" and getattr(args, "harvest", False):
+        from .sourcing.harvest import run_harvest
+        # Harvest keys on the active profile (it reads the profile's
+        # harvest.yaml and Sources.csv), so --sources (a CSV path) is ignored
+        # here; --target overrides the spec's target_total.
+        summary = run_harvest(dry_run=args.dry_run, target_total=args.target)
+        print(f"source: harvest {summary['found']} rows found, "
+              f"{summary['duplicates']} duplicates, "
+              f"{summary['appended']} appended"
+              f"{' (dry-run)' if summary['dry_run'] else ''} "
+              f"-> {summary['csv']}")
+
     elif args.stage == "source":
         from .sourcing import run as sourcing
         from .sourcing.search import SearchError
@@ -627,7 +655,7 @@ def main(argv: list[str] | None = None) -> None:
                 args.sources, domains=args.domains,
                 per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
                 max_total=args.max_total, max_minutes=args.max_minutes,
-                mode=args.mode, dry_run=args.dry_run,
+                text_only=args.text_only, dry_run=args.dry_run,
                 out_csv=args.out, base_url=args.searxng_url, language=args.language,
                 time_range=(None if args.time_range == "any" else args.time_range),
                 site_scope=not args.no_site_scope,
@@ -654,6 +682,7 @@ def main(argv: list[str] | None = None) -> None:
             args.sources,
             workers=args.workers,
             resume=args.resume,
+            retry_failed=getattr(args, "retry_failed", False),
             keep_raw=not args.purge_raw,
             limit=getattr(args, "limit", None),
             source_timeout=args.source_timeout,

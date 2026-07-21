@@ -176,7 +176,7 @@ def test_create_refuses_to_overwrite():
 def test_a_custom_profile_can_be_activated_and_used():
     profiles.create("medtech", domain_name="MEDTECH", use_it=True)
     assert profiles.active() == "medtech"
-    catalog.add_subdomain("Radiology", datasets=["chest x-ray dataset"])
+    catalog.add_subdomain("Radiology", keywords=["chest x-ray dataset"])
     assert catalog.subdomains() == ["Radiology"]
 
 

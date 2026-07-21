@@ -47,7 +47,7 @@ uv run cybersec-slm normalize           # canonical 22-field dataset            
 | `clean [sanitize\|dedup\|pii\|lang\|report\|balance]` | Cleaning diagnostics/ops: inspect one transform → `data/_stages/`, `report`, or `balance` |
 | `eda [--no-enforce] [--profile]` | Validate the corpus and apply the sufficiency gate → `logs/eda/` |
 | `normalize [--fresh]` | Schema-normalize into `data/final/dataset.jsonl` + manifest |
-| `source [--dry-run]` | Discover sources via search engines → `sources/Sources.csv` |
+| `source [--dry-run] [--harvest [--target N]]` | Discover sources via search engines → `sources/Sources.csv`; `--harvest` bulk-pulls from the profile's `harvest.yaml` backends instead |
 | `validate` | Check `data/clean/` records against the schema |
 | `dashboard [--port N]` | Read-only Streamlit monitor + dataset explorer (needs `--extra dashboard`) |
 | `all [--resume]` | Run the full pipeline, end to end |
@@ -122,6 +122,16 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
   Enrichment is best-effort (a failed lookup leaves the field blank, never aborts
   the run) and adds one network call per source; set `GITHUB_TOKEN` to raise
   GitHub's 60/hour unauthenticated rate limit.
+- `--harvest`: instead of SearXNG keyword discovery, bulk-harvest from the active
+  profile's `harvest.yaml` backends and append the survivors to `Sources.csv`.
+  This is the fast volume engine: it pages a portal's catalog API (e.g. data.gov.in
+  CKAN) and stamps each row's license from the catalog response, so no per-source
+  fetch is paid. The UBI profile is wired for data.gov.in (GODL-India, all rows
+  pass the license gate); `--target N` overrides the spec's `target_total`. A
+  profile with no `harvest.yaml` (e.g. `cybersec`) no-ops. Backends and per-domain
+  queries are editable in `sources/profiles/<name>/harvest.yaml`. Needs
+  `DATAGOVINDIA_API_KEY` for data.gov.in.
+- `--target N`: with `--harvest`, stop once the catalog reaches `N` total new rows.
 
 Sub-domains and their keywords are read from `sources/keywords.yaml` (editable;
 falls back to the built-in lists when absent), shared with the dashboard.
@@ -192,6 +202,7 @@ environment variables take precedence. None are required for a basic local run.
 | `NVIDIA_API_KEY` | dashboard Agent page | only for the Agent page |
 | `CYBERSEC_SLM_NIM_MODEL` | dashboard Agent page (model override) | optional |
 | `CYBERSEC_SLM_NIM_BASE_URL` | dashboard Agent page (NIM endpoint override) | optional |
+| `DATAGOVINDIA_API_KEY` | `source --harvest` (data.gov.in CKAN bulk harvest) | required for the UBI harvest |
 
 EDA gate thresholds are environment-overridable too; see `src/cybersec_slm/eda/config.py`.
 

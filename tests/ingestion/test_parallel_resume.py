@@ -200,8 +200,10 @@ def test_timeout_break_preserves_unsubmitted_descriptors(tmp_path, monkeypatch):
     assert summary["ok"] == 2
     assert summary["failed"] == 1
     assert summary["timed_out"] == 1
+    # The timed-out source is recorded in the completed ledger (via failed_keys)
+    # so a subsequent `--resume` skips it instead of re-trying the hang forever.
     assert parallel._load_completed(str(ledger)) == {
-        "http://example.com/a", "http://example.com/b"}
+        "http://example.com/a", "http://example.com/b", "http://example.com/hang"}
 
 
 def test_resume_all_complete_short_circuits(tmp_path, monkeypatch):
