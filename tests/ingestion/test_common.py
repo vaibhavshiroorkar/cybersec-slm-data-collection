@@ -46,3 +46,31 @@ def test_ingest_log_record_many(tmp_path):
     # ts is preserved when supplied and auto-filled when omitted.
     assert (df.loc[df["name"] == "b", "ts"] == "2020-01-01 00:00:00").all()
     assert (df.loc[df["name"] == "a", "ts"].str.len() > 0).all()
+
+
+def test_enrich_df_does_not_promote_a_payload_column_to_text():
+    """`payload` is excluded from text derivation on purpose.
+
+    cleaning/textmap.py deliberately omits `payload` so pure feature tables fall
+    through to exclusion. Since textmap returns an existing `text` field unchanged,
+    deriving text=payload at ingestion pre-empted that and let packet/malware blobs
+    into the corpus as prose.
+    """
+    import pandas as pd
+
+    from cybersec_slm.ingestion.common import enrich_df
+
+    df = pd.DataFrame([{"payload": "QUJDREVG" * 20, "label": 1}])
+    out = enrich_df(df, source="s", url="u", lic="MIT")
+    assert "text" not in out.columns          # feature table stays text-less
+    assert out.iloc[0]["source"] == "s"       # provenance is still stamped
+
+
+def test_enrich_df_still_derives_text_from_a_real_prose_column():
+    import pandas as pd
+
+    from cybersec_slm.ingestion.common import enrich_df
+
+    df = pd.DataFrame([{"body": "A readable paragraph of prose.", "label": 1}])
+    out = enrich_df(df, source="s", url="u", lic="MIT")
+    assert out.iloc[0]["text"] == "A readable paragraph of prose."

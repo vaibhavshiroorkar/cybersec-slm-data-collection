@@ -180,9 +180,19 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
         if drop is not None:
             funnel.drop(sd, drop.stage, drop.host)
             return None
-        if gates.off_topic(f"{res.title} {res.snippet}", cfg):
+        text = f"{res.title} {res.snippet}"
+        if gates.off_topic(text, cfg):
             funnel.drop(sd, gates.OFF_TOPIC, "")
             return None
+        # The topicality floor is scoped to the broad backends (see
+        # QualitySettings.relevance_backends): the dataset APIs are already bound to
+        # the query and their titles are too terse to clear a vocab floor.
+        scope = cfg.quality.relevance_backends
+        if not scope or cand.backend in scope:
+            on_topic, _hits = gates.keyword_relevance(text, vocab.get(sd, ()), cfg)
+            if not on_topic:
+                funnel.drop(sd, gates.LOW_RELEVANCE, "")
+                return None
         if not dedup.take(res.link):
             funnel.duplicate(sd)
             return None

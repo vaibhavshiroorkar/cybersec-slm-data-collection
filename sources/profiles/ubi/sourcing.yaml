@@ -62,5 +62,33 @@ backends:
     last_resort: true
 
 quality:
-  min_keyword_hits: 0      # API results are already keyword-scoped; leave lenient
-  off_topic_signals: []    # e.g. [covid, drone, medical imaging] to drop obvious noise
+  # A candidate must carry at least this many of its sub-domain's vocab terms
+  # (aml, kyc, money laundering, basel, npa, ...) in its title/description.
+  # Raise to 2 if noise persists; 0 disables the check.
+  min_keyword_hits: 1
+  # ...but only for these backends. The dataset APIs (kaggle/huggingface/github)
+  # are already bound to the query and have terse titles: measured on real output,
+  # applying the floor to them dropped 5 of 12 genuinely on-topic rows, including
+  # the Elliptic set. The broad scientific/web backends are where the off-subject
+  # results actually come from. Set to [] to apply the floor everywhere.
+  relevance_backends: [zenodo, arxiv, searxng]
+  # Dropped outright when the word appears in the title/description. These are the
+  # off-subject clusters this corpus actually attracts from the science/data hosts.
+  off_topic_signals:
+    - covid
+    - sars-cov
+    - genome
+    - genomic
+    - protein
+    - molecular
+    - taxonomy of
+    - sp. nov
+    - astronomy
+    - astrophysic
+    - earthquake
+    - seismic
+    - soil
+    - crop yield
+    - medical imaging
+    - mri
+    - drone

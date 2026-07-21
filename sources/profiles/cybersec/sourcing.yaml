@@ -47,5 +47,24 @@ backends:
     last_resort: true
 
 quality:
-  min_keyword_hits: 0
-  off_topic_signals: []
+  # At least this many of the sub-domain's vocab terms must appear in the
+  # candidate's title/description, for the broad backends only (see the ubi
+  # profile for the measured rationale).
+  min_keyword_hits: 1
+  relevance_backends: [zenodo, arxiv, searxng]
+  off_topic_signals:
+    - covid
+    - sars-cov
+    - genome
+    - genomic
+    - protein
+    - molecular
+    - taxonomy of
+    - sp. nov
+    - astronomy
+    - astrophysic
+    - earthquake
+    - seismic
+    - crop yield
+    - medical imaging
+    - mri

@@ -8,17 +8,29 @@ unusually prone to it because the sensitive tokens don't look like the
 general-purpose PII Presidio was tuned for (threat model Stage 2: "PII Filter
 Blind Spots").
 
-## What the automated pass does NOT reliably catch
+## Now covered (added to the regex pass)
 
-| Category | Example | Why Presidio misses it |
+Each of these is high-signal by construction — a fixed vendor prefix, a checksum,
+or a required context cue — so it redacts without eating ordinary corpus text:
+
+| Category | Example | How it is asserted |
 |---|---|---|
-| Internal hostnames | `dc01.corp.internal`, `jumpbox-prod` | not an email/URL/person; no recognizer |
-| Private IPs in logs | `10.4.12.9`, `192.168.1.50` | IP recognizer often off or low-confidence in log noise |
-| Test/service usernames | `svc_backup`, `admin@lab` | not a PERSON entity; looks like a token |
-| API keys / tokens in samples | `AKIA...`, bearer strings | only specific patterns are covered |
-| MAC addresses / device ids | `00:1A:2B:3C:4D:5E` | no default recognizer |
-| File paths with usernames | `C:\Users\jsmith\...`, `/home/jsmith/` | path, not a PII entity |
-| Ticket / case identifiers | `INC0042317` | domain-specific, unknown to Presidio |
+| API keys / tokens | `AKIA…`, `ghp_…`, `xox…`, `AIza…`, `sk_live_…`, JWTs | issuer-specific prefix |
+| Private keys | `-----BEGIN RSA PRIVATE KEY-----…` | whole PEM block removed |
+| MAC addresses | `00:1A:2B:3C:4D:5E` | six hex pairs, anchored so a sha256 cannot match |
+| Usernames in paths | `C:\Users\jsmith\…`, `/home/jsmith/` | only the name component is replaced |
+| India PAN | `ABCDE1234F` | 5 letters + 4 digits + 1 letter |
+| India Aadhaar | `2341 2345 6783` | Verhoeff checksum **and** a nearby `aadhaar`/`uidai` cue |
+
+## Still NOT caught — and why
+
+| Category | Example | Why it is left alone |
+|---|---|---|
+| Private IPs in logs | `10.4.12.9`, `192.168.1.50` | **Deliberate.** RFC1918/loopback/TEST-NET are not PII and carry real teaching value in security text (see `pii.py::_ip_ok`). |
+| Public author names | NIST/RFC bylines | **Deliberate.** Overwhelmingly citation, not PII — so PERSON redaction is opt-in (`--pii-engine presidio`). |
+| Internal hostnames | `dc01.corp.internal`, `jumpbox-prod` | No assertable shape; a pattern loose enough to catch it also eats ordinary dotted identifiers and version strings. |
+| Test/service usernames | `svc_backup`, `admin@lab` | Not a PERSON entity; indistinguishable from an ordinary token. |
+| Ticket / case identifiers | `INC0042317` | Site-specific, and shaped like the many other alphanumeric ids a security corpus is full of. |
 
 ## Controls
 

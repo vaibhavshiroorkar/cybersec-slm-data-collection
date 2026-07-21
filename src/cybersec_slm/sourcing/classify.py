@@ -53,7 +53,11 @@ def build_domain_vocab(cat: dict | None = None) -> dict[str, set[str]]:
     """
     from . import catalog as _catalog
     cat = cat if cat is not None else _catalog.load()
-    return {name: set(spec.get("vocab") or _catalog.keywords_for(name, "both", cat))
+    # keywords_for(name, cat) — the old call passed a third "both" mode argument
+    # that the function has not taken since the datasets/text split was merged, so
+    # any sub-domain WITHOUT an explicit vocab (e.g. one added from the dashboard)
+    # raised TypeError instead of falling back to its keywords.
+    return {name: set(spec.get("vocab") or _catalog.keywords_for(name, cat))
             for name, spec in cat.items()}
 
 

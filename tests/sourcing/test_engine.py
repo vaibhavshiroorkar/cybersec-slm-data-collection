@@ -206,6 +206,63 @@ def test_orchestrator_never_fabricates_a_license(tmp_path, monkeypatch, _iso_log
     assert summ["funnel"]["license"]["unknown"] == 1
 
 
+def test_keyword_relevance_floor_drops_off_topic_but_keeps_on_topic():
+    """The topicality floor must keep a real AML dataset and drop the beetle."""
+    cfg = _cfg()
+    cfg.quality.min_keyword_hits = 1
+    terms = ("aml", "kyc", "money laundering", "financial crime")
+
+    ok, hits = gates.keyword_relevance(
+        "IBM AMLSim Example Dataset — synthetic money laundering transactions",
+        terms, cfg)
+    assert ok and hits >= 1
+
+    ok, hits = gates.keyword_relevance(
+        "Elaeonoma ultima Tomura, Yagi & Hirowatari, 2026, sp. nov.", terms, cfg)
+    assert not ok and hits == 0
+
+
+def test_keyword_relevance_is_off_by_default():
+    cfg = _cfg()                       # min_keyword_hits defaults to 0
+    ok, _ = gates.keyword_relevance("totally unrelated text", ("aml",), cfg)
+    assert ok
+
+
+def test_orchestrator_drops_low_relevance_candidates(tmp_path, monkeypatch, _iso_logs):
+    fake = _FakeBackend({
+        "aml": [_cand("https://huggingface.co/datasets/x/beetle", "AML-KYC"),
+                _cand("https://huggingface.co/datasets/x/aml", "AML-KYC")],
+        "audit": [],
+    })
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: fake)
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"))
+    cfg.quality.min_keyword_hits = 1
+    # The fake registers as "huggingface"; scope the floor to it for this test.
+    cfg.quality.relevance_backends = ["huggingface"]
+    # _cand builds Result(title="t", snippet="s"); give the second one real topic words.
+    fake._by["aml"][1].result = _res("https://huggingface.co/datasets/x/aml",
+                                     title="AML transaction monitoring",
+                                     snippet="money laundering detection dataset")
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+    assert summ["new"] == 1                       # only the on-topic one survived
+    assert summ["funnel"]["dropped_total"] >= 1
+
+
+def test_relevance_floor_is_scoped_to_the_broad_backends(tmp_path, monkeypatch,
+                                                         _iso_logs):
+    """A terse-but-on-topic dataset-API row must NOT be dropped by the floor: the
+    dataset APIs are already query-bound, and applying the floor to them threw away
+    5 of 12 real Kaggle rows (the Elliptic AML set among them)."""
+    fake = _FakeBackend({"aml": [_cand("https://huggingface.co/datasets/x/elliptic",
+                                       "AML-KYC")], "audit": []})
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: fake)
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"))
+    cfg.quality.min_keyword_hits = 1
+    cfg.quality.relevance_backends = ["zenodo", "arxiv", "searxng"]  # not huggingface
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+    assert summ["new"] == 1                       # kept despite zero vocab hits
+
+
 def test_shots_interleave_backends_instead_of_draining_one(tmp_path):
     """Every backend must get a turn on keyword 1 before any sees keyword 2.
 

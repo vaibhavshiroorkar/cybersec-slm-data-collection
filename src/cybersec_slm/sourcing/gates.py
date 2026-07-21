@@ -48,6 +48,7 @@ JUNK = "junk host"
 RESTRICTED = RESTRICTED_HOST
 LISTING = "listing page"
 OFF_TOPIC = "off-topic signal"
+LOW_RELEVANCE = "low relevance"
 LICENSE_BLOCKED = "license blocked"
 DEAD = "dead link"
 KEPT = "kept"
@@ -99,6 +100,28 @@ def off_topic(text: str, cfg) -> bool:
         return False
     low = (text or "").lower()
     return any(s in low for s in signals)
+
+
+def keyword_relevance(text: str, terms, cfg) -> tuple[bool, int]:
+    """``(passes, hits)`` — how many of the sub-domain's vocab terms ``text`` carries.
+
+    The backends are keyword-scoped but not keyword-*bound*: Zenodo and GitHub
+    happily answer a "money laundering" query with a beetle taxonomy record or an
+    unrelated repo. Requiring at least ``quality.min_keyword_hits`` of the
+    sub-domain's distinctive vocab terms (``aml``, ``kyc``, ``money laundering``,
+    ...) in the title/description is a cheap topicality floor.
+
+    Substring matching, matching :func:`cybersec_slm.sourcing.classify._score` — the
+    vocab terms are already short and distinctive, and word-boundary matching would
+    miss legitimate compounds ("anti-money-laundering"). ``min_keyword_hits <= 0``
+    disables the check entirely (the default), so it is opt-in per profile.
+    """
+    need = cfg.quality.min_keyword_hits if (cfg and cfg.quality) else 0
+    if need <= 0:
+        return True, 0
+    low = (text or "").lower()
+    hits = sum(1 for t in terms if t and str(t).lower() in low)
+    return hits >= need, hits
 
 
 def resolve_license(row: dict, cfg, enricher) -> str:

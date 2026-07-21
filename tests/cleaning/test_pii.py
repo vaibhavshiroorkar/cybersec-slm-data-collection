@@ -321,3 +321,72 @@ def test_zip_plus_four_is_not_an_ssn():
     out, n = r.redact(text)
     assert out == text
     assert n == 0
+
+
+# ── credential / device / national-ID recognizers ────────────────────────────
+# Each case is (text, must_be_redacted). The negative cases are the shapes this
+# corpus actually contains and must survive: hashes, version strings, offsets.
+
+import pytest
+
+from cybersec_slm.cleaning.pii import Redactor as _R
+
+
+def _redact(text):
+    return _R(engine="regex").redact(text)
+
+
+@pytest.mark.parametrize("text,label", [
+    ("key AKIAIOSFODNN7EXAMPLE here", "API_KEY"),
+    ("token ghp_" + "a" * 36 + " end", "API_KEY"),
+    ("slack xoxb-1234567890-abcdefghij done", "API_KEY"),
+    ("google AIza" + "B" * 35 + " done", "API_KEY"),
+    ("stripe sk_live_abcdefghij1234 done", "API_KEY"),
+    ("mac 00:1A:2B:3C:4D:5E here", "MAC_ADDRESS"),
+    (r"path C:\Users\jsmith\Desktop", "USERNAME"),
+    ("path /home/jsmith/logs", "USERNAME"),
+    ("pan ABCDE1234F issued", "IN_PAN"),
+])
+def test_new_recognizers_redact(text, label):
+    out, n = _redact(text)
+    assert n >= 1 and f"<{label}>" in out
+
+
+@pytest.mark.parametrize("text", [
+    # A sha256 must not be mistaken for a MAC or a secret.
+    "hash e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    # Version strings / section numbers stay intact.
+    "upgrade from 1.2.3.4 to 18.0.0.194 per section 3.4.3.1",
+    # A bare 12-digit id with no Aadhaar cue must survive.
+    "transaction id 234567890123 posted",
+    # Ordinary prose must be untouched.
+    "The analyst reviewed the quarterly compliance report.",
+])
+def test_new_recognizers_do_not_fire_on_corpus_lookalikes(text):
+    out, n = _redact(text)
+    assert out == text and n == 0
+
+
+def test_aadhaar_needs_checksum_and_cue():
+    # 2341 2345 6783 is Verhoeff-valid; ...6784 is a deliberate near-miss.
+    out, n = _redact("Aadhaar number 2341 2345 6783 on file")
+    assert "<AADHAAR>" in out and n >= 1
+    # Same number with NO cue -> kept (a bare 12-digit run is too common here).
+    out2, _ = _redact("reference 2341 2345 6783 on file")
+    assert "<AADHAAR>" not in out2
+    # Cue present but checksum invalid -> kept.
+    out3, _ = _redact("Aadhaar number 2341 2345 6784 on file")
+    assert "<AADHAAR>" not in out3
+
+
+def test_private_key_block_is_removed_whole():
+    text = ("before\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\nabc\n"
+            "-----END RSA PRIVATE KEY-----\nafter")
+    out, n = _redact(text)
+    assert "<PRIVATE_KEY>" in out and "MIIEow" not in out and n >= 1
+    assert out.startswith("before") and out.endswith("after")
+
+
+def test_user_path_keeps_the_path_structure():
+    out, _ = _redact(r"C:\Users\jsmith\Desktop\report.pdf")
+    assert out == r"C:\Users\<USERNAME>\Desktop\report.pdf"

@@ -68,12 +68,18 @@ def validate_subdomain_name(name: str) -> str:
     return name
 
 
-def catalog_path(path: str | None = None) -> str:
-    """Resolve the taxonomy file path (arg > the active profile's keywords.yaml)."""
+def catalog_path(path: str | None = None, profile: str | None = None) -> str:
+    """Resolve the taxonomy file path (arg > ``profile``'s > the active profile's).
+
+    ``profile`` matters: reading a *different* profile's taxonomy used to silently
+    return the ACTIVE profile's ``keywords.yaml``, so e.g.
+    ``catalog.load(profile="cybersec")`` handed back the banking sub-domains while
+    ``ubi`` was active — the caller got a taxonomy for the wrong corpus.
+    """
     if path:
         return path
     from . import profiles
-    return profiles.keywords_path()
+    return profiles.keywords_path(profile)
 
 
 def _taxonomy(profile: str | None = None):
@@ -142,7 +148,7 @@ def load(path: str | None = None, *, profile: str | None = None) -> dict:
     to the active profile. Pass it explicitly when reading a *different* profile's
     file, so its sub-domains do not inherit the active profile's enum codes.
     """
-    p = catalog_path(path)
+    p = catalog_path(path, profile)
     if not os.path.exists(p):
         return _defaults(profile)
     import yaml
@@ -155,7 +161,7 @@ def load(path: str | None = None, *, profile: str | None = None) -> dict:
 def _read_domain_name(path: str | None, profile: str | None = None) -> str:
     """The file's ``domain_name``, else the profile's built-in label."""
     fallback = _taxonomy(profile).domain_name
-    p = catalog_path(path)
+    p = catalog_path(path, profile)
     if not os.path.exists(p):
         return fallback
     import yaml
@@ -174,7 +180,7 @@ def save(cat: dict, path: str | None = None, *, domain_name: str | None = None,
     call that only touches ``subdomains`` (e.g. :func:`add_subdomain`) never resets
     it. ``profile`` names whose built-ins fill any gaps — see :func:`load`.
     """
-    p = catalog_path(path)
+    p = catalog_path(path, profile)
     os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
     label = (domain_name if domain_name is not None
              else _read_domain_name(path, profile))

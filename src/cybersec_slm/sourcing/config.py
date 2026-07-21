@@ -66,8 +66,18 @@ class QualitySettings:
     # Words whose presence in a candidate's title/description drops it as off-topic.
     off_topic_signals: list[str] = field(default_factory=list)
     # Minimum count of the sub-domain's vocab terms that must appear in the text
-    # (0 = off; API results are already keyword-scoped, so default is lenient).
+    # (0 = off).
     min_keyword_hits: int = 0
+    # Which backends the min_keyword_hits floor applies to. It is deliberately NOT
+    # applied to the dataset APIs: their results are already bound to the query, and
+    # their titles/subtitles are terse — measured on real output, a floor of 1 threw
+    # away 5 of 12 genuinely on-topic Kaggle rows (including the Elliptic set, *the*
+    # canonical bitcoin AML dataset). The broad scientific/web backends are where
+    # off-subject results actually come from (Zenodo answered a "money laundering"
+    # query with a beetle-taxonomy record), so the floor is scoped to them.
+    # An empty list applies the floor to every backend.
+    relevance_backends: list[str] = field(
+        default_factory=lambda: ["zenodo", "arxiv", "searxng"])
 
 
 @dataclass
@@ -232,8 +242,11 @@ def load(profile: str | None = None) -> SourcingConfig:
             cfg.backends[bname] = _parse_backend(bd or {})
 
     q = raw.get("quality", {}) or {}
+    default_q = QualitySettings()
     cfg.quality = QualitySettings(
         off_topic_signals=[s.lower() for s in q.get("off_topic_signals", [])],
         min_keyword_hits=int(q.get("min_keyword_hits", 0)),
+        relevance_backends=[str(b).lower() for b in
+                            q.get("relevance_backends", default_q.relevance_backends)],
     )
     return cfg

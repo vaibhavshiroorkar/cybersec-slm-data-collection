@@ -325,9 +325,16 @@ def write_jsonl(df: pd.DataFrame, path: str) -> int:
 BIG_FILE_BYTES = 200 * 1024 * 1024
 
 # Field names tried in order when a dataset record lacks a `text` column.
+#
+# Keep this a subset of cleaning/textmap.py's `_SINGLE` prose columns. `payload`
+# used to be here and is deliberately NOT: textmap excludes it (with title/name/
+# label/hash) precisely so pure feature tables fall through to exclusion instead
+# of contributing junk text. Because `textmap.to_text` returns an existing `text`
+# field unchanged, setting text=payload HERE pre-empted that exclusion — a packet
+# or malware `payload` column became corpus prose that cleaning then trusted.
 _TEXT_CANDIDATES = (
     "text", "content", "body", "description", "email_text", "source_text",
-    "message", "comment", "payload", "abstract",
+    "message", "comment", "abstract",
 )
 # Q&A column pairs: combine question + answer into a single text field.
 _QA_PAIRS = (

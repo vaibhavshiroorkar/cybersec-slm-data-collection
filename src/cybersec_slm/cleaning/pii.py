@@ -14,6 +14,17 @@ Scope is narrow on purpose — only identifiers a regex can assert with confiden
                    alone passes ~1 in 10 random digit runs, which is untenable in
                    a corpus of hashes, offsets and identifiers.
   * US_SSN       — structurally valid area/group/serial only.
+  * API_KEY      — vendor-prefixed secrets only (AWS/GitHub/Slack/Google/Stripe
+                   key ids, JWTs). A fixed issuer prefix makes the span a
+                   credential by construction, not by guess.
+  * PRIVATE_KEY  — a whole PEM private-key block.
+  * MAC_ADDRESS  — six hex pairs, anchored so it cannot match inside a hash.
+  * USERNAME     — the name component of a filesystem path (``/home/<x>``,
+                   ``C:\\Users\\<x>``); the path structure is kept.
+  * IN_PAN       — India PAN (5 letters, 4 digits, 1 letter).
+  * AADHAAR      — India Aadhaar: 12 digits, Verhoeff-checksummed AND next to an
+                   Aadhaar/UIDAI cue. A bare 12-digit run is far too common here
+                   (transaction ids, offsets) to redact on shape alone.
 
 Phone numbers are deliberately NOT matched. FineWeb excluded them for their false
 positive rate, and here the pattern was eating timestamps' fractional seconds
@@ -195,6 +206,93 @@ def _ip_redactable(m: re.Match) -> bool:
     return bool(_IP_CUE_BEFORE.search(before))
 
 
+# --- credentials / device / national-ID patterns -----------------------------
+# Everything here is deliberately HIGH-SIGNAL: a fixed vendor prefix, a checksum,
+# or a required context cue. The module's rule is that a redaction must be
+# assertable from the span itself, because a false positive silently destroys
+# corpus text (see the IP/credit-card notes above).
+#
+# Deliberately NOT added, though docs/pii_limitations.md lists them:
+#   * private/RFC1918 IPs — kept on purpose (teaching value; see _ip_ok)
+#   * internal hostnames  — "dc01.corp.internal" has no assertable shape; a
+#     pattern loose enough to catch it eats ordinary dotted identifiers
+#   * ticket ids (INC0042317) — site-specific, and indistinguishable from the
+#     many other alphanumeric identifiers a security corpus is full of
+
+# Vendor-prefixed secrets. Each prefix is issued by exactly one provider, so a
+# match is a credential by construction rather than by guess.
+_SECRET = re.compile(
+    r"\b("
+    r"(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[0-9A-Z]{16}"      # AWS key id
+    r"|gh[pousr]_[A-Za-z0-9]{36,255}"                                # GitHub token
+    r"|github_pat_[A-Za-z0-9_]{22,255}"
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"                                 # Slack
+    r"|AIza[0-9A-Za-z_-]{35}"                                        # Google API key
+    r"|(?:sk|pk)_(?:live|test)_[0-9A-Za-z]{10,}"                     # Stripe
+    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"   # JWT
+    r")\b")
+
+# A PEM private-key block header — the body is redacted with it.
+_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"
+    r".*?-----END (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----",
+    re.DOTALL)
+
+# MAC address: six hex pairs, colon- or hyphen-separated. Anchored so it cannot
+# match inside a longer hex run (a hash, a byte dump).
+_MAC = re.compile(r"(?<![0-9A-Fa-f:-])(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
+                  r"(?![0-9A-Fa-f:-])")
+
+# A username sitting in a filesystem path. Only the name component is replaced,
+# so the path structure (which is what makes the text useful) survives.
+_USER_PATH = re.compile(
+    r"(?i)([A-Z]:\\Users\\|/home/|/Users/)([^\\/:*?\"<>|\r\n\s]{1,64})")
+
+# India PAN: 5 letters, 4 digits, 1 letter. Distinctive enough to stand alone.
+_PAN = re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b")
+
+# India Aadhaar: 12 digits (never starting 0/1), optionally space/hyphen grouped.
+# A bare 12-digit run is far too common in this corpus (transaction ids, offsets),
+# so a match must ALSO pass the Verhoeff checksum AND sit near an Aadhaar cue —
+# the same "looks like it is being used as one" discipline as _ip_redactable.
+_AADHAAR = re.compile(r"(?<!\d)[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}(?!\d)")
+_AADHAAR_CUE = re.compile(r"(?i)\b(?:aadhaar|aadhar|uidai|uid)\b")
+_AADHAAR_LOOKBACK = 60
+
+_VERHOEFF_D = (
+    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9), (1, 2, 3, 4, 0, 6, 7, 8, 9, 5),
+    (2, 3, 4, 0, 1, 7, 8, 9, 5, 6), (3, 4, 0, 1, 2, 8, 9, 5, 6, 7),
+    (4, 0, 1, 2, 3, 9, 5, 6, 7, 8), (5, 9, 8, 7, 6, 0, 4, 3, 2, 1),
+    (6, 5, 9, 8, 7, 1, 0, 4, 3, 2), (7, 6, 5, 9, 8, 2, 1, 0, 4, 3),
+    (8, 7, 6, 5, 9, 3, 2, 1, 0, 4), (9, 8, 7, 6, 5, 4, 3, 2, 1, 0))
+_VERHOEFF_P = (
+    (0, 1, 2, 3, 4, 5, 6, 7, 8, 9), (1, 5, 7, 6, 2, 8, 3, 0, 9, 4),
+    (5, 8, 0, 3, 7, 9, 6, 1, 4, 2), (8, 9, 1, 6, 0, 4, 3, 5, 2, 7),
+    (9, 4, 5, 3, 1, 2, 6, 8, 7, 0), (4, 2, 8, 6, 5, 7, 3, 9, 0, 1),
+    (2, 7, 9, 3, 8, 0, 6, 4, 1, 5), (7, 0, 4, 6, 9, 1, 3, 2, 5, 8))
+
+
+def _verhoeff_ok(digits: str) -> bool:
+    """True when ``digits`` passes the Verhoeff checksum Aadhaar numbers carry."""
+    c = 0
+    for i, ch in enumerate(reversed(digits)):
+        c = _VERHOEFF_D[c][_VERHOEFF_P[i % 8][int(ch)]]
+    return c == 0
+
+
+def _aadhaar_redactable(m: re.Match) -> bool:
+    digits = "".join(ch for ch in m.group(0) if ch.isdigit())
+    if len(digits) != 12 or not _verhoeff_ok(digits):
+        return False
+    before = m.string[max(0, m.start() - _AADHAAR_LOOKBACK):m.start()]
+    return bool(_AADHAAR_CUE.search(before))
+
+
+def _user_path_sub(m: re.Match) -> str:
+    """Keep the path prefix, replace only the username component."""
+    return f"{m.group(1)}<USERNAME>"
+
+
 def _regex_redact(text: str) -> tuple[str, int]:
     count = 0
 
@@ -213,10 +311,22 @@ def _regex_redact(text: str) -> tuple[str, int]:
 
         return pattern.sub(repl, s)
 
+    # Credentials first: a PEM block or a vendor-prefixed token can contain
+    # substrings the later, looser patterns would otherwise nibble at.
+    text = sub(_PRIVATE_KEY, "PRIVATE_KEY", text)
+    text = sub(_SECRET, "API_KEY", text)
     text = sub(_EMAIL, "EMAIL_ADDRESS", text)
     text = sub(_SSN, "US_SSN", text, validator=lambda m: _ssn_ok(m.group(0)))
+    text = sub(_AADHAAR, "AADHAAR", text, validator=_aadhaar_redactable)
     text = sub(_CC, "CREDIT_CARD", text, validator=lambda m: _cc_ok(m.group(0)))
+    text = sub(_PAN, "IN_PAN", text)
+    text = sub(_MAC, "MAC_ADDRESS", text)
     text = sub(_IPV4, "IP_ADDRESS", text, validator=_ip_redactable)
+
+    # Username-in-path keeps its prefix, so it needs its own substitution rather
+    # than the whole-span replacement `sub` does.
+    text, n_paths = _USER_PATH.subn(_user_path_sub, text)
+    count += n_paths
     return text, count
 
 
