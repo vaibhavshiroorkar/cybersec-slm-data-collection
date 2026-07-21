@@ -310,3 +310,131 @@ def test_config_load_falls_back_to_taxonomy(tmp_path, monkeypatch):
     assert cfg.enabled_backends()[0] != "searxng"   # searxng is last-resort
     assert cfg.enabled_backends()[-1] == "searxng"
     assert "rbi.org.in" in cfg.restricted_hosts
+
+
+# ------------------------------------------------- country targeting + filter ---
+
+def test_country_slots_apportions_by_bias_and_is_deterministic():
+    slots = orchestrator._country_slots(20, {"India": 0.65, "Global": 0.35})
+    assert len(slots) == 20
+    assert slots.count("India") == 13 and slots.count("Global") == 7
+    # Deterministic, and interleaved rather than blocked, so a run cut short by its
+    # cap has still asked both kinds of query.
+    assert slots == orchestrator._country_slots(20, {"India": 0.65, "Global": 0.35})
+    assert set(slots[:6]) == {"India", "Global"}
+
+
+def test_country_slots_degrades_to_global_without_bias():
+    assert orchestrator._country_slots(3, {}) == ["Global"] * 3
+    assert orchestrator._country_slots(0, {"India": 1.0}) == []
+
+
+def test_targeting_bias_filter_overrides_bias():
+    # Aiming a third of the shots at "Global" while hard-filtering for India would
+    # spend them fetching rows the filter then discards.
+    cfg = _cfg(country_bias={"India": 0.65, "Global": 0.35}, country_filter="India")
+    assert cfg.targeting_bias() == {"India": 1.0}
+    cfg2 = _cfg(country_bias={"India": 0.65, "Global": 0.35})
+    assert cfg2.targeting_bias() == {"India": 0.65, "Global": 0.35}
+
+
+def test_aim_appends_qualifier_but_not_to_already_local_keywords():
+    cfg = _cfg(country_hints={"India": ["rbi"]})
+    assert orchestrator._aim("aml dataset", "India", cfg) == "aml dataset India"
+    assert orchestrator._aim("aml dataset", "Global", cfg) == "aml dataset"
+    # Already names the country, or one of its hint terms -> left alone.
+    assert orchestrator._aim("India PMLA corpus", "India", cfg) == "India PMLA corpus"
+    assert orchestrator._aim("rbi master direction", "India", cfg) == "rbi master direction"
+
+
+def test_aim_honours_a_custom_qualifier():
+    cfg = _cfg(country_qualifier={"India": "site:.in"})
+    assert orchestrator._aim("aml dataset", "India", cfg) == "aml dataset site:.in"
+
+
+def test_build_shots_aims_queries_at_the_biased_country():
+    cfg = _cfg(keywords={"AML-KYC": [f"kw{i}" for i in range(10)]},
+               country_bias={"India": 1.0})
+    shots = orchestrator._build_shots(cfg, ["AML-KYC"])
+    queries = {kw for _b, kw in shots["AML-KYC"]}
+    assert queries == {f"kw{i} India" for i in range(10)}
+
+
+def test_country_ok_gate():
+    cfg = _cfg(country_filter="India")
+    assert gates.country_ok({"Country": "India"}, cfg) is True
+    assert gates.country_ok({"Country": "Global"}, cfg) is False
+    # Unclassified is not the same as wrong — a blank is kept.
+    assert gates.country_ok({"Country": ""}, cfg) is True
+    # No filter configured -> everything passes.
+    assert gates.country_ok({"Country": "Global"}, _cfg()) is True
+
+
+def test_country_for_uses_configured_hints():
+    from cybersec_slm.sourcing.row import country_for
+    assert country_for("https://rbi.org.in/x") == "India"          # ccTLD
+    assert country_for("https://example.com/x", "world bank data") == "Global"
+    # A profile hint promotes an otherwise-global-looking host.
+    assert country_for("https://example.com/x", "Reserve Bank circular",
+                       {"India": ["reserve bank"]}) == "India"
+
+
+def test_orchestrator_country_filter_drops_non_indian_rows(tmp_path, monkeypatch,
+                                                           _iso_logs):
+    fake = _FakeBackend({
+        "aml India": [
+            # .in ccTLD -> India, kept.
+            _cand("https://data.gov.in/dataset/aml", "AML-KYC"),
+            # Plainly global -> dropped by the filter.
+            _cand("https://huggingface.co/datasets/x/global-aml", "AML-KYC"),
+        ],
+        "audit India": [],
+    })
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: fake)
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"), country_filter="India")
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+
+    assert summ["new"] == 1
+    assert summ["funnel"]["dropped"]["wrong country"] == 1
+    import pandas as pd
+    df = pd.read_csv(str(tmp_path / "Sources.csv"), dtype=str, keep_default_na=False)
+    assert list(df["Country"]) == ["India"]
+
+
+def test_orchestrator_flags_restricted_hosts_instead_of_dropping(tmp_path, monkeypatch,
+                                                                 _iso_logs):
+    fake = _FakeBackend({"aml": [_cand("https://rbi.org.in/rss.xml", "AML-KYC",
+                                       license="MIT")], "audit": []})
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: fake)
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"), restricted_policy="flag")
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+
+    assert summ["new"] == 1, "flag policy admits the row rather than dropping it"
+    assert summ["funnel"]["dropped"]["restricted host"] == 0
+    assert summ["funnel"]["restricted_flagged_by_host"] == {"rbi.org.in": 1}
+
+    import pandas as pd
+    df = pd.read_csv(str(tmp_path / "Sources.csv"), dtype=str, keep_default_na=False)
+    # The backend's licence is blanked: a restricted host's terms are not settled by
+    # whatever metadata came back, so the row goes to ingestion as Unknown.
+    assert df.loc[0, "License"] == ""
+    assert "RESTRICTED HOST" in df.loc[0, "Note"]
+    assert "all-rights-reserved" in df.loc[0, "Note"] or "commercial reuse" in df.loc[0, "Note"]
+
+
+def test_restricted_drop_is_still_the_default(tmp_path, monkeypatch, _iso_logs):
+    fake = _FakeBackend({"aml": [_cand("https://rbi.org.in/x", "AML-KYC")], "audit": []})
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: fake)
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"))   # restricted_policy: "drop"
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+    assert summ["new"] == 0
+    assert summ["funnel"]["dropped"]["restricted host"] == 1
+
+
+def test_config_rejects_an_unknown_restricted_policy(tmp_path, monkeypatch):
+    from cybersec_slm.sourcing import config as c
+    p = tmp_path / "sourcing.yaml"
+    p.write_text("license:\n  restricted_policy: maybe\n", encoding="utf-8")
+    monkeypatch.setattr(c, "_resolve_paths", lambda prof: ("ubi", str(p)))
+    with pytest.raises(ValueError, match="restricted_policy"):
+        c.load("ubi")

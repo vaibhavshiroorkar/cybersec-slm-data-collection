@@ -33,6 +33,17 @@ import yaml
 # default: keep a real (backend-metadata) license or Unknown, never a fabricated one.
 LICENSE_POLICIES = ("real_or_unknown", "commercial_only")
 
+# What sourcing does with a host on the profile's licensing-restricted list.
+# "drop"  - reject at the host gate (never reaches the catalog).
+# "flag"  - admit with a blank License + the reason in Note, and let the ingestion
+#           license gate's deep per-URL check decide. A restricted *site* is not the
+#           same as a restricted *page*: rbi.org.in is all-rights-reserved prose, but
+#           its RSS feed reduces to a metadata index that the gate already allows.
+RESTRICTED_POLICIES = ("drop", "flag")
+
+# The country name meaning "do not aim this query anywhere" — the plain keyword.
+GLOBAL = "Global"
+
 # Backends that fetch from an authenticated/structured API and return already-live
 # URLs — the engine skips the liveness HTTP check for these (it would only cost
 # latency to re-confirm what the API just listed).
@@ -91,12 +102,29 @@ class SourcingConfig:
 
     target_total: int | None = None               # global cap on rows added (None = uncapped)
     target_per_subdomain: int | None = None        # per-sub-domain valid target
+    # Share of query shots aimed at each country, e.g. {India: 0.65, Global: 0.35}.
+    # "Global" means "ask the plain keyword"; any other name appends that country's
+    # qualifier to the query (see ``country_qualifier``). Purely a *targeting* knob.
     country_bias: dict[str, float] = field(default_factory=dict)
-    country_filter: str | None = None              # keep only this country when set
+    # Hard gate: when set, a row whose classified Country is not this is dropped.
+    country_filter: str | None = None
+    # country -> the term appended to a query to aim it at that country. Defaults to
+    # the country's own name, which is the right term for the search backends.
+    country_qualifier: dict[str, str] = field(default_factory=dict)
+    # country -> substrings that mark a row as belonging to it. Extends (never
+    # replaces) the built-in hints in :mod:`cybersec_slm.sourcing.row`.
+    country_hints: dict[str, list[str]] = field(default_factory=dict)
 
     license_policy: str = "real_or_unknown"
     enrich_unknown: bool = True                    # run enrich.Enricher on Unknown rows
     allow_owned_first_party: bool = False          # allow the profile's owned-host stamp
+    # What to do with a licensing-restricted host: "drop" it at the gate (the
+    # conservative default), or "flag" it — admit the row with a blank License and
+    # the restriction reason in its Note, so the *ingestion* license gate does the
+    # deep per-URL check and decides. Flagging never asserts a license and never
+    # counts toward the commercial-valid target; it only stops sourcing from hiding
+    # a host whose individual pages (an RSS feed, a GODL dataset) may well be usable.
+    restricted_policy: str = "drop"
 
     verify_liveness: bool = True                   # HTTP-check non-API URLs before keeping
     workers: int = 12                              # enrichment/verify thread pool size
@@ -111,6 +139,31 @@ class SourcingConfig:
     @property
     def primary_country(self) -> str:
         return max(self.country_bias, key=self.country_bias.get) if self.country_bias else ""
+
+    def qualifier_for(self, country: str) -> str:
+        """The search term that aims a query at ``country`` (``""`` for Global).
+
+        Defaults to the country's own name: for every backend here that is the term
+        that actually shifts results ("anti money laundering dataset India"), and it
+        means a profile gets working geo targeting from ``bias`` alone, with
+        ``country.qualifier`` reserved for the cases where a better term exists.
+        """
+        if not country or country == GLOBAL:
+            return ""
+        return self.country_qualifier.get(country, country)
+
+    def targeting_bias(self) -> dict[str, float]:
+        """The bias query targeting actually uses.
+
+        A hard ``country_filter`` overrides ``bias`` entirely: every shot aimed
+        somewhere else produces rows the filter then drops, so honouring a 0.35
+        "Global" share alongside ``filter: India`` would spend a third of the run
+        fetching results guaranteed to be discarded. With a filter set, everything
+        is aimed at the filtered country.
+        """
+        if self.country_filter:
+            return {self.country_filter: 1.0}
+        return {c: w for c, w in (self.country_bias or {}).items() if w > 0}
 
     def enabled_backends(self) -> list[str]:
         """Backend names to run, priority order, last-resort ones last."""
@@ -212,12 +265,22 @@ def load(profile: str | None = None) -> SourcingConfig:
     country = raw.get("country", {}) or {}
     cfg.country_bias = country.get("bias", cfg.country_bias)
     cfg.country_filter = country.get("filter", cfg.country_filter)
+    cfg.country_qualifier = {str(k): str(v) for k, v in
+                             (country.get("qualifier") or {}).items()}
+    cfg.country_hints = {str(k): [str(h).lower() for h in (v or [])]
+                         for k, v in (country.get("hints") or {}).items()}
 
     lic = raw.get("license", {}) or {}
     cfg.license_policy = lic.get("policy", cfg.license_policy)
     cfg.enrich_unknown = lic.get("enrich_unknown", cfg.enrich_unknown)
     cfg.allow_owned_first_party = lic.get("allow_owned_first_party",
                                           cfg.allow_owned_first_party)
+    policy = str(lic.get("restricted_policy", cfg.restricted_policy)).strip().lower()
+    if policy not in RESTRICTED_POLICIES:
+        raise ValueError(
+            f"license.restricted_policy must be one of {list(RESTRICTED_POLICIES)}, "
+            f"got {policy!r} in {path}")
+    cfg.restricted_policy = policy
 
     if "restricted_hosts" in raw and raw["restricted_hosts"] is not None:
         rh = raw["restricted_hosts"]

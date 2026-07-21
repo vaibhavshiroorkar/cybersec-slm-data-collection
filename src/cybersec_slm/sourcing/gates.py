@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from ..ingestion.license_gate import license_verdict
 from . import quality
 from .quality import KEEP, RESTRICTED_HOST
+from .quality import WRONG_COUNTRY as _WRONG_COUNTRY
 
 # Markers of a first-party / owner-authorized license stamp (see
 # ingestion.license_gate's allow set and sourcing.taxonomies.OWNED_LICENSE). Kept in
@@ -46,12 +47,17 @@ _FIRST_PARTY = re.compile(r"first[- ]party|owner[- ]authori[sz]ed", re.IGNORECAS
 BAD = "bad link"
 JUNK = "junk host"
 RESTRICTED = RESTRICTED_HOST
+WRONG_COUNTRY = _WRONG_COUNTRY
 LISTING = "listing page"
 OFF_TOPIC = "off-topic signal"
 LOW_RELEVANCE = "low relevance"
 LICENSE_BLOCKED = "license blocked"
 DEAD = "dead link"
 KEPT = "kept"
+
+# Note text stamped on a row admitted from a licensing-restricted host under the
+# "flag" policy, so the reason travels with the row into the catalog.
+RESTRICTED_NOTE = "RESTRICTED HOST — license unconfirmed, ingestion must verify"
 
 
 def is_first_party(license_str: str | None) -> bool:
@@ -81,16 +87,44 @@ def _extra_restricted(host: str, cfg) -> str:
 
 
 def classify_host(result, cfg) -> GateResult | None:
-    """Host/shape drop (checks 1). Returns a drop :class:`GateResult`, or ``None``."""
+    """Host/shape check (check 1).
+
+    Returns ``None`` for an ordinary keep, a ``kept=False`` :class:`GateResult` for
+    a drop, or — for a licensing-restricted host under ``restricted_policy: "flag"``
+    — a ``kept=True`` result carrying the restriction reason. Flagging is *not* an
+    assertion that the content is usable: the caller blanks the row's License and
+    records the reason, leaving the verdict to ingestion's deep per-URL check.
+    A restricted *site* is not a restricted *page* — rbi.org.in's prose is
+    all-rights-reserved while its RSS feed reduces to an allowable metadata index,
+    and dropping the host at sourcing time made that distinction unreachable.
+    """
     category, detail = quality.classify(result)
     host = quality.reject_host(result)
-    if category != KEEP:
-        return GateResult(False, category, detail, host=host)
-    # sourcing.yaml may restrict hosts the taxonomy does not.
-    reason = _extra_restricted(host, cfg)
-    if reason:
-        return GateResult(False, RESTRICTED, f"{host}: {reason}", host=host)
-    return None
+    # sourcing.yaml may restrict hosts the taxonomy does not; merge both sources so
+    # the policy applies uniformly to either origin.
+    if category == KEEP:
+        reason = _extra_restricted(host, cfg)
+        if reason:
+            category, detail = RESTRICTED, f"{host}: {reason}"
+    if category == KEEP:
+        return None
+    if category == RESTRICTED and getattr(cfg, "restricted_policy", "drop") == "flag":
+        return GateResult(True, RESTRICTED, detail, host=host)
+    return GateResult(False, category, detail, host=host)
+
+
+def country_ok(row: dict, cfg) -> bool:
+    """Whether ``row``'s classified Country satisfies ``cfg.country_filter``.
+
+    No filter configured means every country passes. A row with no Country value at
+    all is *kept*: a blank is "unclassified", not "wrong", and dropping it would
+    silently discard sources whose geography the classifier simply could not read.
+    """
+    want = (getattr(cfg, "country_filter", None) or "").strip()
+    if not want:
+        return True
+    got = str(row.get("Country") or "").strip()
+    return not got or got.casefold() == want.casefold()
 
 
 def off_topic(text: str, cfg) -> bool:

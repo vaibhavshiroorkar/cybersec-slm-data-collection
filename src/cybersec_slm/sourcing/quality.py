@@ -48,11 +48,15 @@ BAD_LINK = "bad link"
 JUNK_HOST = "junk host"
 RESTRICTED_HOST = "restricted host"
 LISTING_PAGE = "listing page"
+# Not produced by :func:`classify` (which sees only the link): the orchestrator
+# raises it once a row exists and carries a classified Country. Listed here so the
+# funnel and the dashboard's drop table have a stable bucket for it.
+WRONG_COUNTRY = "wrong country"
 
-# Every category a result can be dropped for, in the order :func:`classify` tests
-# them — which is also the order the dashboard lists them.
+# Every category a result can be dropped for, in the order they are tested —
+# which is also the order the dashboard lists them.
 DROP_CATEGORIES: tuple[str, ...] = (BAD_LINK, JUNK_HOST, RESTRICTED_HOST,
-                                    LISTING_PAGE)
+                                    LISTING_PAGE, WRONG_COUNTRY)
 
 
 def _host(netloc: str) -> str:

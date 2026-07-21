@@ -20,10 +20,19 @@ substring) is correctly blocked.
 Enforcement is on by default; ``CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0`` disables it
 for local dev/testing.
 
+A blank or unrecognized catalog license is not the end of the question: sourcing
+admits license-unsure sources on purpose, and this gate resolves them by fetching
+the source and reading its stated terms (:func:`deep_license`, backed by
+:mod:`cybersec_slm.sourcing.license_detect`). That is what lets a restricted *site*
+still contribute its usable *pages* — an all-rights-reserved portal whose RSS feed
+reduces to a metadata index — instead of being written off host-wide at sourcing
+time. A source whose terms remain unreadable stays denied.
+
 Public API:
     classify_license(raw)   -> (commercial_ok, reason)   # pure classifier
     license_verdict(raw)    -> "ok" | "blocked" | "unknown"  # 3-state
-    is_license_ok(descriptor) -> (allowed, reason)       # + env kill switch
+    deep_license(url)       -> canonical license string  # fetches the source
+    is_license_ok(descriptor) -> (allowed, reason)       # + deep check + kill switch
 """
 
 from __future__ import annotations
@@ -160,74 +169,86 @@ def _enforced() -> bool:
     return True
 
 
-def _fetch_hf_license(ref: str) -> str | None:
+def _descriptor_url(descriptor: dict) -> str:
+    """The best URL to resolve a descriptor's license from (``""`` when it has none)."""
+    for key in ("url", "start_url", "link", "dataset_link"):
+        val = str(descriptor.get(key) or "").strip()
+        if val:
+            return val
+    ref = str(descriptor.get("ref") or "").strip()
+    if ref and descriptor.get("kind") == "hf":
+        return f"https://huggingface.co/datasets/{ref}"
+    return ""
+
+
+# Deep detection is a network round-trip per source, and ingestion asks about the
+# same URL more than once (the gate, then a retry, then a resumed run). Memoized
+# per process: the license on a page does not change within a run, and the cache
+# is what keeps the gate cheap enough to apply to every unknown row rather than
+# just the two kinds it used to cover.
+_DEEP_CACHE: dict[str, str] = {}
+
+
+def deep_license(url: str) -> str:
+    """Resolve ``url``'s license by fetching the source, or ``""`` if undeterminable.
+
+    Delegates to :func:`cybersec_slm.sourcing.license_detect.detect_license`, which
+    dispatches by host (HuggingFace card, GitHub API, Kaggle, arXiv, then generic
+    ``<link rel=license>`` / JSON-LD / Creative-Commons / terms-of-use prose). Never
+    raises: an unreachable or unreadable source yields ``""``, which leaves the
+    caller's default-deny in place.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url in _DEEP_CACHE:
+        return _DEEP_CACHE[url]
     try:
-        from huggingface_hub import dataset_info
-        info = dataset_info(ref, token=os.environ.get("HF_TOKEN"))
-        if info and getattr(info, "cardData", None):
-            lic = info.cardData.get("license", None)
-            if isinstance(lic, list):
-                return " ".join(str(l) for l in lic)
-            elif lic:
-                return str(lic)
-    except Exception as e:
-        logger.debug(f"Failed to fetch HF license for {ref}: {e}")
-    return None
-
-
-def _fetch_github_license(url: str) -> str | None:
-    if not url: return None
-    import requests
-    m = re.search(r"github\.com/([^/]+)/([^/]+)", url)
-    if m:
-        owner, repo = m.groups()
-        repo = repo.replace(".git", "")
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/license"
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        token = os.environ.get("GITHUB_TOKEN")
-        if token:
-            headers["Authorization"] = f"token {token}"
-        try:
-            r = requests.get(api_url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                lic = data.get("license", {})
-                return lic.get("spdx_id") or lic.get("name")
-        except Exception as e:
-            logger.debug(f"Failed to fetch GitHub license for {url}: {e}")
-    return None
+        from ..sourcing.license_detect import detect_license
+        found = detect_license(url, github_token=os.environ.get("GITHUB_TOKEN")) or ""
+    except Exception as e:                      # noqa: BLE001 - best-effort by contract
+        logger.debug(f"deep_license: {url}: {type(e).__name__}: {e}")
+        found = ""
+    _DEEP_CACHE[url] = found
+    return found
 
 
 def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     """Return ``(allowed, reason)`` for a source descriptor's license.
 
-    Reads ``descriptor["license"]`` (the value ingestion actually fetches with,
-    from the ``Sources.csv`` License column). Returns ``(True,
-    "license-gate-disabled")`` when the kill switch is set.
+    Reads ``descriptor["license"]`` (the value ingestion actually fetches with, from
+    the ``Sources.csv`` License column). Returns ``(True, "license-gate-disabled")``
+    when the kill switch is set.
+
+    When the catalog's license is blank or unrecognized, this is where the **deep
+    check** happens: the source itself is fetched and its stated terms classified
+    (:func:`deep_license`). Sourcing deliberately admits license-unsure rows —
+    including ones from hosts on a profile's restricted list — so that this gate,
+    which can see the actual page, is the thing that decides. A source whose terms
+    still cannot be read stays denied: unknown is never treated as permission.
     """
     if not _enforced():
         return True, "license-gate-disabled"
-        
+
     lic_str = descriptor.get("license")
-    
-    # 1. Classify the existing string first
+
+    # 1. The catalog's own string, when it is already conclusive either way.
     verdict = license_verdict(lic_str)
     if verdict == "ok":
         return True, classify_license(lic_str)[1]
-    elif verdict == "blocked":
+    if verdict == "blocked":
         return False, classify_license(lic_str)[1]
-        
-    # 2. It's unknown/missing. Fetch it if possible!
-    kind = descriptor.get("kind")
-    fetched = None
-    if kind == "hf":
-        fetched = _fetch_hf_license(descriptor.get("ref"))
-    elif kind == "github":
-        fetched = _fetch_github_license(descriptor.get("url") or descriptor.get("start_url"))
-        
+
+    # 2. Unknown or missing -> go and read the source's actual terms.
+    url = _descriptor_url(descriptor)
+    fetched = deep_license(url)
     if fetched:
-        logger.info(f"Dynamically fetched missing license: {fetched!r}")
-        return classify_license(fetched)
-        
-    # Fallback to the original classification which will return False for unknown
-    return classify_license(lic_str)
+        allowed, reason = classify_license(fetched)
+        logger.info(f"license deep-check {url}: {fetched!r} -> "
+                    f"{'allowed' if allowed else 'denied'} ({reason})")
+        return allowed, f"deep-check: {reason}"
+
+    # 3. Still unresolved: default-deny, and say that the deep check was tried so
+    # the reason distinguishes "we looked and found nothing" from "we never looked".
+    return False, (f"unresolved license after deep check: {url}" if url
+                   else classify_license(lic_str)[1])

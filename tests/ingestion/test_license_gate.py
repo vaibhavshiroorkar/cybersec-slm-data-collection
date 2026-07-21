@@ -202,3 +202,94 @@ def test_verdict_blank_or_unrecognized_is_unknown(raw):
     # Crucially, a blank/unknown license is NOT "blocked" - it is never
     # blacklisted on mere absence, only on a positively-recognised red license.
     assert license_gate.license_verdict(raw) == "unknown"
+
+
+# ------------------------------------------------------------- deep re-check ---
+
+def _clear_deep_cache():
+    from cybersec_slm.ingestion import license_gate
+    license_gate._DEEP_CACHE.clear()
+
+
+def test_deep_check_resolves_an_unknown_license(monkeypatch):
+    """A blank catalog License is not a verdict — the gate fetches the source."""
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+    seen = {}
+
+    def _fake_detect(url, **kw):
+        seen["url"] = url
+        return "MIT"
+
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license",
+                        _fake_detect)
+    ok, reason = license_gate.is_license_ok(
+        {"license": "", "kind": "website", "start_url": "https://example.in/data"})
+    assert ok is True
+    assert "deep-check" in reason
+    assert seen["url"] == "https://example.in/data"
+
+
+def test_deep_check_denies_when_the_source_says_all_rights_reserved(monkeypatch):
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license",
+                        lambda url, **kw: "All Rights Reserved")
+    ok, reason = license_gate.is_license_ok(
+        {"license": "", "kind": "website", "url": "https://rbi.org.in/notification"})
+    assert ok is False
+    assert "deep-check" in reason
+
+
+def test_deep_check_unresolved_stays_denied(monkeypatch):
+    """Unknown is never permission: a source we cannot read is still blocked."""
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license",
+                        lambda url, **kw: "")
+    ok, reason = license_gate.is_license_ok(
+        {"license": "", "kind": "website", "url": "https://rbi.org.in/x"})
+    assert ok is False
+    assert "unresolved license after deep check" in reason
+
+
+def test_deep_check_is_skipped_when_the_catalog_is_already_conclusive(monkeypatch):
+    """No network round-trip when the catalog string already settles it."""
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+
+    def _boom(url, **kw):
+        raise AssertionError("deep check must not run for a conclusive license")
+
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license", _boom)
+    assert license_gate.is_license_ok({"license": "MIT", "url": "https://x/y"})[0] is True
+    assert license_gate.is_license_ok({"license": "GPL-3.0", "url": "https://x/y"})[0] is False
+
+
+def test_deep_check_is_cached_per_url(monkeypatch):
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+    calls = {"n": 0}
+
+    def _count(url, **kw):
+        calls["n"] += 1
+        return "Apache-2.0"
+
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license", _count)
+    d = {"license": "", "kind": "website", "url": "https://example.in/same"}
+    assert license_gate.is_license_ok(d)[0] is True
+    assert license_gate.is_license_ok(d)[0] is True
+    assert calls["n"] == 1, "the same URL must not be re-fetched within a run"
+
+
+def test_deep_check_never_raises_on_a_broken_detector(monkeypatch):
+    from cybersec_slm.ingestion import license_gate
+    _clear_deep_cache()
+
+    def _explode(url, **kw):
+        raise RuntimeError("network on fire")
+
+    monkeypatch.setattr("cybersec_slm.sourcing.license_detect.detect_license", _explode)
+    ok, _reason = license_gate.is_license_ok(
+        {"license": "", "kind": "website", "url": "https://example.in/x"})
+    assert ok is False          # degrades to default-deny, does not crash ingestion

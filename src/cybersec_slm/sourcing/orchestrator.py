@@ -65,6 +65,54 @@ def _write_summary(summary: dict, path: str) -> None:
         json.dump(summary, f, indent=2)
 
 
+def _country_slots(n: int, bias: dict[str, float]) -> list[str]:
+    """Assign ``n`` query slots to countries in proportion to ``bias``.
+
+    Sainte-Laguë sequential allocation: each slot goes to whichever country has the
+    highest ``weight / (2 * already_allocated + 1)``, ties broken by name. That
+    yields both the right totals (``{India: 0.65, Global: 0.35}`` over 20 keywords
+    gives 13 India-aimed and 7 plain) *and* an evenly spread order.
+
+    Spreading is the point, not a nicety. A run routinely stops early on its row cap
+    or time budget, so an apportionment that emitted all the India queries first —
+    or last — would mean an interrupted run had asked only one kind. Deterministic
+    (no RNG), so the same config always produces the same query plan.
+    """
+    if n <= 0:
+        return []
+    live = {c: float(w) for c, w in (bias or {}).items() if float(w) > 0}
+    if not live:
+        return [config.GLOBAL] * n
+
+    allocated = dict.fromkeys(live, 0)
+    slots: list[str] = []
+    for _ in range(n):
+        c = max(sorted(live), key=lambda c: live[c] / (2 * allocated[c] + 1))
+        allocated[c] += 1
+        slots.append(c)
+    return slots
+
+
+def _aim(keyword: str, country: str, cfg: SourcingConfig) -> str:
+    """``keyword`` aimed at ``country`` — the qualifier appended, or left alone.
+
+    A keyword that already names the country ("RBI master direction KYC 2016",
+    "India PMLA case corpus") is returned unchanged: re-qualifying it to
+    "... India India" only makes the query worse.
+    """
+    qualifier = cfg.qualifier_for(country)
+    if not qualifier:
+        return keyword
+    low = keyword.lower()
+    if qualifier.lower() in low:
+        return keyword
+    # Already-local keywords carry the country's own hint terms (rbi, sebi, npci...).
+    from .row import country_for
+    if country_for("", keyword, cfg.country_hints) == country:
+        return keyword
+    return f"{keyword} {qualifier}"
+
+
 def _build_shots(cfg: SourcingConfig, selected: list[str]) -> dict[str, deque]:
     """Per-sub-domain queue of ``(backend_name, keyword)`` shots, interleaved.
 
@@ -78,14 +126,24 @@ def _build_shots(cfg: SourcingConfig, selected: list[str]) -> dict[str, deque]:
     each — before any other backend ran at all, which is indistinguishable from a
     hung run. Interleaving caps that cost at one shot per rotation, and the
     circuit breaker in :func:`source` then drops the backend entirely.
+
+    Each keyword is also **aimed at a country** per :func:`_country_slots`, so the
+    profile's ``country.bias`` (or a hard ``country.filter``) shapes the queries
+    themselves. This is the half that actually produces regional data: a filter
+    alone only discards what the backends already returned, and if every query is
+    global then filtering for India just yields an empty run.
     """
     order = cfg.enabled_backends()
+    bias = cfg.targeting_bias()
     shots: dict[str, deque] = {}
     for sd in selected:
+        kws = list(cfg.keywords.get(sd, []))
+        slots = _country_slots(len(kws), bias)
         q: deque = deque()
-        for kw in cfg.keywords.get(sd, []):
+        for kw, country in zip(kws, slots, strict=True):
+            query = _aim(kw, country, cfg)
             for bname in order:
-                q.append((bname, kw))
+                q.append((bname, query))
         shots[sd] = q
     return shots
 
@@ -176,10 +234,13 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
         funnel.hit(sd)
         _agg(sd, kw)["hits"] += 1
 
-        drop = gates.classify_host(res, cfg)
-        if drop is not None:
-            funnel.drop(sd, drop.stage, drop.host)
+        host_res = gates.classify_host(res, cfg)
+        if host_res is not None and not host_res.kept:
+            funnel.drop(sd, host_res.stage, host_res.host)
             return None
+        # Kept-but-restricted (restricted_policy: "flag"): admitted for ingestion to
+        # adjudicate per-URL, never as an assertion that it is licensed.
+        flagged = host_res if host_res is not None else None
         text = f"{res.title} {res.snippet}"
         if gates.off_topic(text, cfg):
             funnel.drop(sd, gates.OFF_TOPIC, "")
@@ -201,11 +262,30 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
             funnel.drop(sd, gates.DEAD, "")
             return None
 
-        funnel.candidate(sd)
-        row = build_row(res, sd, today=today, domain_vocab=vocab)
+        row = build_row(res, sd, today=today, domain_vocab=vocab,
+                        country_hints=cfg.country_hints)
         for col, val in cand.metadata_row().items():
             if val and not row.get(col):
                 row[col] = val
+
+        # Country gate. Applied here, after build_row, because Country is derived
+        # from the link + text and a backend may override it with real metadata
+        # (ckan's `country: India`), so this is the first point it is knowable.
+        if not gates.country_ok(row, cfg):
+            funnel.drop(sd, gates.WRONG_COUNTRY, "")
+            return None
+
+        if flagged is not None:
+            # Never let a backend's metadata licence stand in for a restricted
+            # host's terms: blank it so the row is Unknown and ingestion's deep
+            # check is the thing that decides. Counted only now, once the row has
+            # survived every other gate, so the tally reflects rows actually kept.
+            row["License"] = ""
+            note = row.get("Note") or ""
+            row["Note"] = (f"{gates.RESTRICTED_NOTE} ({flagged.detail}). {note}").strip()
+            funnel.restricted_flagged(flagged.host)
+
+        funnel.candidate(sd)
         return row
 
     def _enrich_one(row: dict) -> None:

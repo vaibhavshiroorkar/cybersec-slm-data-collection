@@ -53,14 +53,36 @@ def field_label() -> str:
     return _FIELD_BY_DOMAIN.get(dn, dn.replace("_", " ").title())
 
 
-def country_for(link: str, text: str = "") -> str:
-    """Classify a source as ``India`` or ``Global`` from its host and row text."""
+# country -> (ccTLD suffixes, text/host hints). India is built in because the
+# shipped ``ubi`` profile is Indian; a profile adds its own via
+# ``sourcing.yaml``'s ``country.hints``, which extend rather than replace these.
+_COUNTRY_HINTS: dict[str, tuple[str, ...]] = {"India": _INDIA_HINTS}
+_COUNTRY_TLDS: dict[str, tuple[str, ...]] = {"India": (".in",)}
+
+
+def country_for(link: str, text: str = "",
+                hints: dict[str, list[str]] | None = None) -> str:
+    """Classify a source's country from its host and row text, else ``Global``.
+
+    ``hints`` (from ``sourcing.yaml``'s ``country.hints``) adds substrings for a
+    country, on top of the built-ins. A ccTLD match is the strong signal and is
+    tested first; countries are then tested in a stable sorted order so the answer
+    never depends on dict ordering.
+    """
     host = urlparse(link or "").netloc.lower().removeprefix("www.")
-    if host.endswith(".in"):
-        return "India"
     blob = f"{host} {text}".lower()
-    if any(hint in blob for hint in _INDIA_HINTS):
-        return "India"
+
+    merged: dict[str, list[str]] = {c: list(h) for c, h in _COUNTRY_HINTS.items()}
+    for country, extra in (hints or {}).items():
+        merged.setdefault(country, [])
+        merged[country].extend(str(e).lower() for e in extra)
+
+    for country in sorted(merged):
+        if any(host.endswith(tld) for tld in _COUNTRY_TLDS.get(country, ())):
+            return country
+    for country in sorted(merged):
+        if any(hint and hint in blob for hint in merged[country]):
+            return country
     return "Global"
 
 
@@ -82,12 +104,14 @@ def _derive_name(result: Result) -> str:
 
 def build_row(result: Result, default_domain: str, *,
               today: str | None = None,
-              domain_vocab: dict[str, set[str]] | None = None) -> dict[str, str]:
+              domain_vocab: dict[str, set[str]] | None = None,
+              country_hints: dict[str, list[str]] | None = None) -> dict[str, str]:
     """Build one sheet row (a column->value dict) from a search result.
 
     ``domain_vocab`` is the tie-break vocabulary for :func:`refine_domain`
     (from :func:`~.classify.build_domain_vocab`); pass it in once per discovery
-    run rather than per row/result.
+    run rather than per row/result. ``country_hints`` comes from the profile's
+    ``sourcing.yaml`` and extends the built-in country signals.
     """
     domain = refine_domain(default_domain, result.title, result.snippet, domain_vocab)
     category, fmt = infer_category_and_format(result.link)
@@ -97,7 +121,8 @@ def build_row(result: Result, default_domain: str, *,
     row["Name"] = _derive_name(result)
     row["Sub-Domain"] = domain
     row["Field"] = field_label()
-    row["Country"] = country_for(result.link, f"{result.title} {result.snippet}")
+    row["Country"] = country_for(result.link, f"{result.title} {result.snippet}",
+                                 country_hints)
     row["Description"] = result.snippet[:300]
     row["Dataset Link"] = result.link
     row["Category"] = category

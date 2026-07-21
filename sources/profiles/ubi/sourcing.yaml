@@ -10,13 +10,47 @@ target:
   per_subdomain: 2000    # top each sub-domain up to this many commercial-valid rows
 
 country:
+  # `bias` aims the *queries*: 65% of each sub-domain's keywords get "India"
+  # appended before they are sent to the backends. This is the half that actually
+  # produces Indian sources — a filter alone only discards what came back.
   bias: {India: 0.65, Global: 0.35}
-  filter: null           # keep all countries (set to "India" to keep only India)
+  # `filter` is the hard gate: a row whose classified Country is not India is
+  # dropped (counted in the funnel's "wrong country" bucket). Setting it also
+  # overrides `bias` for targeting — every query is aimed at India, because a shot
+  # aimed elsewhere would only produce rows this filter then throws away.
+  # Set to null to keep all countries.
+  filter: India
+  # Extra substrings that mark a row as belonging to a country, on top of the
+  # built-ins (.in ccTLD, rbi, sebi, npci, gst, ...). Add the institutions this
+  # corpus cares about so they are recognised on .org/.com hosts too.
+  hints:
+    India:
+      - reserve bank
+      - union bank of india
+      - nabard
+      - sidbi
+      - indian banks association
+      - securities and exchange board of india
+      - insolvency and bankruptcy board
+      - national payments corporation
+      - pmla
+      - fema
+      - basel iii india
+      - indiacode
+      - nic.in
 
 license:
   policy: real_or_unknown          # keep a real (metadata) license or Unknown; never fabricate
   enrich_unknown: true             # fetch a real license for Unknown rows before keeping
   allow_owned_first_party: false   # do NOT admit self-asserted first-party/owner stamps
+  # "flag", not "drop": a restricted host is admitted with a BLANK License and the
+  # restriction reason in its Note, and the ingestion license gate then fetches the
+  # actual URL and decides. rbi.org.in is the motivating case — the site's prose is
+  # all-rights-reserved, but its RSS feed reduces to a metadata index the gate
+  # already allows, and dropping the whole host at sourcing time made that
+  # distinction unreachable. Nothing is fetched or trained on until ingestion
+  # clears it; this only stops the catalog from hiding the source.
+  restricted_policy: flag
 
 # restricted_hosts is inherited from keywords.yaml (rbi.org.in, sebi.gov.in, ...).
 # Uncomment to add profile-specific bars on top of the taxonomy's:

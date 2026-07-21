@@ -417,10 +417,23 @@ with csv_tab:
 
                 rbh = fn.get("restricted_by_host") or {}
                 if rbh:
-                    st.markdown("**Restricted hosts hit** (on-topic, but their terms "
-                                "bar commercial reuse)")
+                    st.markdown("**Restricted hosts dropped** (on-topic, but their "
+                                "terms bar commercial reuse)")
                     ui.table([{"host": h, "hits": n} for h, n in rbh.items()],
                              height=200)
+
+                rfh = fn.get("restricted_flagged_by_host") or {}
+                if rfh:
+                    st.markdown("**Restricted hosts flagged for review** "
+                                "(admitted with a blank license)")
+                    ui.table([{"host": h, "rows": n} for h, n in rfh.items()],
+                             height=200)
+                    st.caption("This profile sets `license.restricted_policy: flag`, "
+                               "so these rows enter the catalog unlicensed instead of "
+                               "being dropped host-wide. Nothing is fetched until "
+                               "ingestion's deep check reads the actual URL's terms — "
+                               "a site can be all-rights-reserved while a feed on it "
+                               "reduces to an allowable metadata index.")
 
             bk = summ.get("by_keyword") or []
             if bk:

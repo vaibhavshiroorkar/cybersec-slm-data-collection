@@ -59,6 +59,11 @@ class Funnel:
     dropped: dict[str, int] = field(default_factory=dict)
     # host -> count, for the restricted-host bucket only (the legal-scope view)
     restricted_by_host: dict[str, int] = field(default_factory=dict)
+    # host -> count of rows *admitted* from a restricted host under the "flag"
+    # policy. Tracked apart from restricted_by_host (which counts drops) so the
+    # legal-scope view still answers "what did the bar cost us" truthfully when the
+    # profile has chosen to defer that bar to ingestion.
+    restricted_flagged_by_host: dict[str, int] = field(default_factory=dict)
     # verdict -> count, over LICENSE_VERDICTS, for candidates that reached the gate
     license: dict[str, int] = field(default_factory=dict)
     # sub-domain -> {"found", "dropped", "candidates"} — per-domain aim
@@ -79,6 +84,12 @@ class Funnel:
         self._domain(domain)["dropped"] += 1
         if category == "restricted host" and host:
             self.restricted_by_host[host] = self.restricted_by_host.get(host, 0) + 1
+
+    def restricted_flagged(self, host: str) -> None:
+        """A restricted host was admitted (flag policy) rather than dropped."""
+        if host:
+            self.restricted_flagged_by_host[host] = (
+                self.restricted_flagged_by_host.get(host, 0) + 1)
 
     def duplicate(self, domain: str) -> None:
         """A result was already in the catalog, or already seen this run."""
@@ -124,6 +135,9 @@ class Funnel:
             "appended": self.appended,
             "restricted_by_host": dict(
                 sorted(self.restricted_by_host.items(),
+                       key=lambda kv: (-kv[1], kv[0]))),
+            "restricted_flagged_by_host": dict(
+                sorted(self.restricted_flagged_by_host.items(),
                        key=lambda kv: (-kv[1], kv[0]))),
             "by_domain": self.by_domain,
         }
