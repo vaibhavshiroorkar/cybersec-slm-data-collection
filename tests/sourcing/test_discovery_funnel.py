@@ -1,46 +1,76 @@
-"""The funnel a real ``discover()`` run reports.
+"""The funnel a real engine run reports, on the live code path.
 
-test_stats.py pins the tally in isolation; this pins that the discovery loop
-actually *calls* it, on the real code path, with a mixed bag of results. The two
-matter separately: a correct counter nobody increments still reports all zeros.
+test_stats.py pins the tally in isolation; this pins that the orchestrator actually
+*calls* it, with a mixed bag of candidates, so every hit lands in exactly one
+bucket. A correct counter nobody increments still reports all zeros.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from cybersec_slm.sourcing import run
+from cybersec_slm.sourcing import orchestrator
+from cybersec_slm.sourcing.backends.base import Candidate
+from cybersec_slm.sourcing.config import BackendSettings, SourcingConfig
 from cybersec_slm.sourcing.search import Result
 
 
 @pytest.fixture(autouse=True)
 def _ubi(tmp_path, monkeypatch):
-    """Pin the ubi profile — it is the one with restricted hosts to count.
-
-    (conftest.py redirects run.LOGS for every test in this package, so discover()
-    writes its review CSV + summary under tmp_path rather than the real repo.)
-    """
     monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "ubi")
     yield
 
 
-class _NoEnrich:
-    def __init__(self, **kw):
-        pass
+class _Enrich:
+    """Stands in for a real metadata read; fills each row's license from a map."""
+
+    def __init__(self, by_tail=None):
+        self._by = by_tail or {}
 
     def enrich(self, row):
-        row["License"] = "MIT"
+        tail = row["Dataset Link"].rsplit("/", 1)[-1]
+        row["License"] = self._by.get(tail, "MIT")
         return row
 
 
-def _hits(*links) -> list[Result]:
-    return [Result(title=f"T{i}", link=link, snippet="s")
-            for i, link in enumerate(links)]
+class _FakeBackend:
+    name = "huggingface"          # API backend -> liveness skipped, in enabled order
+
+    def __init__(self, cands):
+        self._cands = cands
+
+    def available(self, cfg):
+        return True
+
+    def search(self, subdomain, keyword, limit, cfg):
+        return list(self._cands)[:limit]
+
+
+def _cfg(tmp_path, profile="ubi"):
+    return SourcingConfig(
+        profile=profile, keywords={"AML-KYC": ["aml"]},
+        output_csv=str(tmp_path / "Sources.csv"),
+        restricted_hosts={"rbi.org.in": "regulator terms", "sebi.gov.in": "regulator terms"},
+        backends={"huggingface": BackendSettings(enabled=True, per_keyword_limit=50)},
+    )
+
+
+def _cands(*links):
+    return [Candidate(subdomain="AML-KYC", result=Result(title=f"T{i}", link=lk, snippet="s"),
+                      backend="huggingface", license="")
+            for i, lk in enumerate(links)]
+
+
+def _run(tmp_path, monkeypatch, cands, enrich_map=None):
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: _FakeBackend(cands))
+    monkeypatch.setattr(orchestrator, "Enricher", lambda *a, **k: _Enrich(enrich_map))
+    return orchestrator.source(cfg=_cfg(tmp_path), subdomains=["AML-KYC"],
+                               max_total=5, enrich=True)
 
 
 def test_funnel_counts_every_hit_into_exactly_one_bucket(tmp_path, monkeypatch):
-    served = _hits(
+    cands = _cands(
         "https://huggingface.co/datasets/a/aml",     # keep -> candidate
         "https://rbi.org.in/master-direction.pdf",   # restricted host
         "https://www.rbi.org.in/circular.pdf",       # restricted host (www)
@@ -49,19 +79,7 @@ def test_funnel_counts_every_hit_into_exactly_one_bucket(tmp_path, monkeypatch):
         "https://github.com/topics/aml",             # listing page
         "https://huggingface.co/datasets/a/aml",     # duplicate of #1
     )
-    # Serve the batch once, then nothing (so the run terminates).
-    calls = {"n": 0}
-
-    def fake_search(*a, **k):
-        calls["n"] += 1
-        return served if calls["n"] == 1 else []
-
-    monkeypatch.setattr(run, "searxng_search", fake_search)
-    monkeypatch.setattr(run, "Enricher", _NoEnrich)
-
-    summ = run.discover(str(tmp_path / "Sources.csv"), domains=["AML-KYC"],
-                        per_keyword=10, max_total=5, enrich=True)
-
+    summ = _run(tmp_path, monkeypatch, cands)
     f = summ["funnel"]
     assert f["found"] == 7
     assert f["dropped"]["restricted host"] == 3
@@ -69,83 +87,48 @@ def test_funnel_counts_every_hit_into_exactly_one_bucket(tmp_path, monkeypatch):
     assert f["dropped"]["listing page"] == 1
     assert f["duplicates"] == 1
     assert f["candidates"] == 1
-    # The whole point: nothing is lost between the buckets.
-    assert f["unprocessed"] == 0     # this run drained its buffer
+    assert f["unprocessed"] == 0
     assert f["found"] == (f["dropped_total"] + f["duplicates"]
                           + f["candidates"] + f["unprocessed"])
 
 
 def test_funnel_names_the_restricted_hosts_that_cost_the_most(tmp_path, monkeypatch):
-    served = _hits(
+    cands = _cands(
         "https://rbi.org.in/a.pdf", "https://rbi.org.in/b.pdf",
         "https://rbi.org.in/c.pdf", "https://sebi.gov.in/d.html",
         "https://huggingface.co/datasets/a/aml",
     )
-    calls = {"n": 0}
-
-    def fake_search(*a, **k):
-        calls["n"] += 1
-        return served if calls["n"] == 1 else []
-
-    monkeypatch.setattr(run, "searxng_search", fake_search)
-    monkeypatch.setattr(run, "Enricher", _NoEnrich)
-
-    summ = run.discover(str(tmp_path / "Sources.csv"), domains=["AML-KYC"],
-                        per_keyword=10, max_total=5, enrich=True)
-
+    summ = _run(tmp_path, monkeypatch, cands)
     hosts = summ["funnel"]["restricted_by_host"]
     assert list(hosts.items()) == [("rbi.org.in", 3), ("sebi.gov.in", 1)]
 
 
 def test_funnel_records_license_verdicts_of_candidates(tmp_path, monkeypatch):
-    served = _hits("https://huggingface.co/datasets/a/one",
+    cands = _cands("https://huggingface.co/datasets/a/one",
                    "https://huggingface.co/datasets/a/two",
                    "https://huggingface.co/datasets/a/three")
-    calls = {"n": 0}
-
-    def fake_search(*a, **k):
-        calls["n"] += 1
-        return served if calls["n"] == 1 else []
-
-    licenses = {"one": "MIT", "two": "CC BY-NC 4.0", "three": ""}
-
-    class _Enricher:
-        def __init__(self, **kw):
-            pass
-
-        def enrich(self, row):
-            key = row["Dataset Link"].rsplit("/", 1)[-1]
-            row["License"] = licenses[key]
-            return row
-
-    monkeypatch.setattr(run, "searxng_search", fake_search)
-    monkeypatch.setattr(run, "Enricher", _Enricher)
-
-    summ = run.discover(str(tmp_path / "Sources.csv"), domains=["AML-KYC"],
-                        per_keyword=10, max_total=5, enrich=True)
-
+    summ = _run(tmp_path, monkeypatch, cands,
+                enrich_map={"one": "MIT", "two": "CC BY-NC 4.0", "three": ""})
     lic = summ["funnel"]["license"]
     assert lic == {"ok": 1, "unknown": 1, "blocked": 1}
     assert sum(lic.values()) == summ["funnel"]["candidates"]
 
 
-def test_cybersec_profile_bars_nothing_so_the_bucket_stays_empty(tmp_path,
-                                                                 monkeypatch):
-    """The restricted-host bucket is ubi-specific; under cybersec the same hit is
-    a normal candidate, not a drop."""
+def test_cybersec_profile_bars_nothing_so_the_bucket_stays_empty(tmp_path, monkeypatch):
+    """The restricted-host bucket is ubi-specific; under the cybersec profile (which
+    declares no restricted hosts) the same hit is a normal candidate, not a drop."""
+    from cybersec_slm.sourcing import catalog
     monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
-    calls = {"n": 0}
-
-    def fake_search(*a, **k):
-        calls["n"] += 1
-        return _hits("https://rbi.org.in/a.pdf") if calls["n"] == 1 else []
-
-    monkeypatch.setattr(run, "searxng_search", fake_search)
-    monkeypatch.setattr(run, "Enricher", _NoEnrich)
-
-    dom = run.catalog.subdomains(run.catalog.load())[0]
-    summ = run.discover(str(tmp_path / "Sources.csv"), domains=[dom],
-                        per_keyword=10, max_total=5, enrich=True)
-
+    sd = catalog.subdomains(catalog.load(profile="cybersec"))[0]
+    cand = [Candidate(subdomain=sd, result=Result(title="T", link="https://rbi.org.in/a.pdf",
+                                                  snippet="s"), backend="huggingface", license="")]
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: _FakeBackend(cand))
+    monkeypatch.setattr(orchestrator, "Enricher", lambda *a, **k: _Enrich())
+    cfg = SourcingConfig(
+        profile="cybersec", keywords={sd: ["aml"]},
+        output_csv=str(tmp_path / "Sources.csv"),
+        restricted_hosts={},          # cybersec bars nothing
+        backends={"huggingface": BackendSettings(enabled=True, per_keyword_limit=50)})
+    summ = orchestrator.source(cfg=cfg, subdomains=[sd], max_total=5, enrich=True)
     assert summ["funnel"]["dropped"]["restricted host"] == 0
     assert summ["funnel"]["candidates"] == 1

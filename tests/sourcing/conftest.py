@@ -20,7 +20,13 @@ from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 
 @pytest.fixture(autouse=True)
 def _isolate_sourcing_logs(tmp_path, monkeypatch):
-    from cybersec_slm.sourcing import run
+    from cybersec_slm.sourcing import orchestrator, run
 
-    monkeypatch.setattr(run, "LOGS", str(tmp_path / "logs" / PROFILE), raising=False)
+    logs = str(tmp_path / "logs" / PROFILE)
+    # The engine writes its review CSV + summary-*.json to ``orchestrator.LOGS`` (a
+    # constant bound from the data root at import); ``run`` re-exports it. Redirect
+    # both so a test run never writes into the real repo's logs (which the dashboard
+    # reads back).
+    monkeypatch.setattr(orchestrator, "LOGS", logs, raising=False)
+    monkeypatch.setattr(run, "LOGS", logs, raising=False)
     yield

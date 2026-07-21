@@ -1,0 +1,51 @@
+# Sourcing settings for the `cybersec` profile (12-domain cybersecurity corpus).
+#
+# The taxonomy (sub-domains/keywords/vocab) lives in `keywords.yaml`. cybersec
+# declares no restricted hosts and relies on the license gate alone. Anything
+# omitted here falls back to taxonomy-derived defaults.
+
+target:
+  total: 4000
+  per_subdomain: 300
+
+country:
+  bias: {Global: 1.0}
+  filter: null
+
+license:
+  policy: real_or_unknown
+  enrich_unknown: true
+  allow_owned_first_party: false
+
+verify_liveness: true
+workers: 12
+
+backends:
+  huggingface:
+    enabled: true
+    per_keyword_limit: 100
+  github:
+    enabled: true
+    per_keyword_limit: 100
+    token_env: GITHUB_TOKEN
+  kaggle:
+    enabled: true
+    per_keyword_limit: 50
+  zenodo:
+    enabled: true
+    per_keyword_limit: 50
+  arxiv:
+    enabled: true
+    per_keyword_limit: 50
+  ckan:
+    enabled: false           # no India open-data portal for the cybersecurity corpus
+  searxng:
+    enabled: true
+    url: http://localhost:8080
+    engines: github,arxiv,openairedatasets,semantic scholar
+    per_keyword_limit: 25
+    last_resort: true
+
+quality:
+  min_keyword_hits: 0
+  off_topic_signals: []

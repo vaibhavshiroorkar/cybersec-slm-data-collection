@@ -152,13 +152,14 @@ def keywords_path(name: str | None = None) -> str:
     return os.path.join(profile_dir(name), "keywords.yaml")
 
 
-def harvest_path(name: str | None = None) -> str:
-    """Path to ``name``'s editable ``harvest.yaml`` bulk-harvest spec.
+def sourcing_config_path(name: str | None = None) -> str:
+    """Path to ``name``'s editable ``sourcing.yaml`` (the sourcing-engine settings).
 
-    Seeded from the taxonomy's ``harvest_spec`` on first ``ensure``; absent (and the
-    harvest driver no-ops) for a profile with no bulk backend wired.
+    Absent by default: the engine falls back to taxonomy-derived defaults
+    (:func:`cybersec_slm.sourcing.config.default_config`), so a profile sources
+    without it and this file is a place to override backends/targets/quality.
     """
-    return os.path.join(profile_dir(name), "harvest.yaml")
+    return os.path.join(profile_dir(name), "sourcing.yaml")
 
 
 def taxonomy(name: str | None = None) -> taxonomies.Taxonomy:
@@ -237,17 +238,6 @@ def ensure(name: str | None = None) -> str:
 
     seed = taxonomies.get(name).seed_rows if name in taxonomies.TAXONOMIES else ()
     _write_seed_csv(catalog_path(name), seed)
-
-    # Seed the bulk-harvest spec (harvest.yaml) from the taxonomy's harvest_spec,
-    # only when absent — a user's edits survive, and a profile with no harvest_spec
-    # (e.g. cybersec, search-discovery-first) simply gets no file and the harvest
-    # driver no-ops. Imported here to avoid a harvest <-> profiles cycle.
-    h_path = harvest_path(name)
-    if not os.path.exists(h_path) and name in taxonomies.TAXONOMIES:
-        hspec = getattr(taxonomies.get(name), "harvest_spec", None)
-        if hspec:
-            from .harvest import spec as _hspec
-            _hspec.save(dict(hspec), name)
     return d
 
 

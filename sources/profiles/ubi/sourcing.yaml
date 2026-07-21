@@ -1,0 +1,66 @@
+# Sourcing settings for the `ubi` profile (Indian banking / regulatory compliance).
+#
+# This is the ONE config the sourcing engine reads. The taxonomy — sub-domains,
+# keywords, enum codes, vocab, and restricted hosts — stays in `keywords.yaml`
+# (every stage reads it). Anything omitted here falls back to taxonomy-derived
+# defaults, so a partial file is valid.
+
+target:
+  total: 8000            # global cap on new rows added per run
+  per_subdomain: 2000    # top each sub-domain up to this many commercial-valid rows
+
+country:
+  bias: {India: 0.65, Global: 0.35}
+  filter: null           # keep all countries (set to "India" to keep only India)
+
+license:
+  policy: real_or_unknown          # keep a real (metadata) license or Unknown; never fabricate
+  enrich_unknown: true             # fetch a real license for Unknown rows before keeping
+  allow_owned_first_party: false   # do NOT admit self-asserted first-party/owner stamps
+
+# restricted_hosts is inherited from keywords.yaml (rbi.org.in, sebi.gov.in, ...).
+# Uncomment to add profile-specific bars on top of the taxonomy's:
+# restricted_hosts:
+#   - some-bank.example.in
+
+verify_liveness: true    # HTTP-check non-API (e.g. SearXNG) URLs before keeping
+workers: 12              # enrichment thread-pool size
+
+backends:
+  # Real-metadata APIs first (license comes straight from the source):
+  ckan:
+    enabled: true
+    per_keyword_limit: 100
+    base_url: https://www.data.gov.in
+    api_key_env: DATAGOVINDIA_API_KEY
+    # data.gov.in is wholly GODL-India (a genuine portal fact) — used only when a
+    # package exposes no license of its own; never as a per-URL guess.
+    license: Government Open Data License - India (GODL)
+    country: India
+  huggingface:
+    enabled: true
+    per_keyword_limit: 100
+  kaggle:
+    enabled: true            # needs KAGGLE_USERNAME + KAGGLE_KEY; degrades to no-op without
+    per_keyword_limit: 50
+  zenodo:
+    enabled: true            # optional ZENODO_TOKEN raises the rate limit
+    per_keyword_limit: 50
+  github:
+    enabled: true            # set GITHUB_TOKEN to raise the rate limit
+    per_keyword_limit: 80
+    token_env: GITHUB_TOKEN
+  arxiv:
+    enabled: true
+    per_keyword_limit: 50
+  # Broad reach, lowest signal, no license metadata — runs only after the others:
+  searxng:
+    enabled: true
+    url: http://localhost:8080
+    engines: github,arxiv,openairedatasets,semantic scholar
+    per_keyword_limit: 25
+    last_resort: true
+
+quality:
+  min_keyword_hits: 0      # API results are already keyword-scoped; leave lenient
+  off_topic_signals: []    # e.g. [covid, drone, medical imaging] to drop obvious noise

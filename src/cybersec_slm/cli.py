@@ -635,39 +635,34 @@ def main(argv: list[str] | None = None) -> None:
               f"blacklisted {summary['blacklisted']}"
               f"{' (dry-run)' if summary['dry_run'] else ''} -> {summary['summary']}")
 
-    elif args.stage == "source" and getattr(args, "harvest", False):
-        from .sourcing.harvest import run_harvest
-        # Harvest keys on the active profile (it reads the profile's
-        # harvest.yaml and Sources.csv), so --sources (a CSV path) is ignored
-        # here; --target overrides the spec's target_total.
-        summary = run_harvest(dry_run=args.dry_run, target_total=args.target)
-        print(f"source: harvest {summary['found']} rows found, "
-              f"{summary['duplicates']} duplicates, "
-              f"{summary['appended']} appended"
-              f"{' (dry-run)' if summary['dry_run'] else ''} "
-              f"-> {summary['csv']}")
-
     elif args.stage == "source":
-        from .sourcing import run as sourcing
+        # One engine, one config per profile. CKAN (the old --harvest path) is now a
+        # first-class backend, so --harvest is redundant and ignored. Obsolete legacy
+        # flags (--per-keyword/--text-only/--time-range/--countries/--fields/...) are
+        # accepted but no longer used; backend/target knobs live in sourcing.yaml.
+        from .sourcing import config as sourcing_config
+        from .sourcing import orchestrator
         from .sourcing.search import SearchError
+        cfg = sourcing_config.load()
+        if args.sources:
+            cfg.output_csv = args.sources
+        sx = cfg.backends.get("searxng")
+        if sx and args.searxng_url:
+            sx.url = args.searxng_url
+        if sx and args.engines:
+            sx.engines = args.engines
         try:
-            summary = sourcing.discover(
-                args.sources, domains=args.domains,
-                per_keyword=args.per_keyword, max_per_domain=args.max_per_domain,
-                max_total=args.max_total, max_minutes=args.max_minutes,
-                text_only=args.text_only, dry_run=args.dry_run,
-                out_csv=args.out, base_url=args.searxng_url, language=args.language,
-                time_range=(None if args.time_range == "any" else args.time_range),
-                site_scope=not args.no_site_scope,
-                quality_filter=not args.no_quality_filter,
-                workers=args.workers or 12, enrich=not args.no_enrich,
-                engines=args.engines, target_per_domain=args.target_per_domain,
-                countries=args.countries, fields=args.fields)
+            summary = orchestrator.source(
+                cfg=cfg, subdomains=args.domains, max_total=args.max_total,
+                target_per_subdomain=args.target_per_domain,
+                max_minutes=args.max_minutes, dry_run=args.dry_run,
+                enrich=not args.no_enrich, out_csv=args.out)
         except SearchError as e:
             raise SystemExit(f"source: discovery could not run: {e}") from None
         print(f"source: {summary['found']} hits, {summary['new']} new, "
               f"{summary['appended']} appended, {summary['license_filled']} licensed "
               f"({summary['license_rate']:.0%}) in {summary['elapsed_s']}s "
+              f"via {', '.join(summary['backends']) or 'no backends'} "
               f"-> {summary['csv']}")
 
     elif args.stage == "all":
