@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..core import logger
 from ..sourcing import catalog as _catalog
 
 # ----------------------------------------------------------- domain allowlist --
@@ -100,10 +101,15 @@ ALLOWED_SUBDOMAINS: frozenset[str] = frozenset(SUBDOMAIN_NAMES)
 # "BANKING_COMPLIANCE".
 DOMAIN_NAMES: frozenset[str] = frozenset({_DOMAIN_NAME})
 
-# Record-type enum (schema examples: cve / article / log). Open-ish but closed to
-# a known set so a mapper bug surfaces as a reject rather than silent drift.
+# Record-type enum (schema examples: cve / article / log). An unknown value is
+# coerced to "other" rather than rejected — a stray record_type must not sink an
+# otherwise-valid record — but the first sighting of each unknown value is logged
+# (see _check_record_type) so the drift is visible instead of silent.
 RECORD_TYPES: frozenset[str] = frozenset(
     {"cve", "article", "log", "advisory", "playbook", "doc", "code", "other"})
+
+# Unknown record_type values already warned about (one line per novel value).
+_UNKNOWN_RECORD_TYPES: set[str] = set()
 
 # Placeholders for downstream-owned fields.
 ABSTAIN = -1
@@ -225,7 +231,13 @@ class CanonicalRecord(BaseModel):
     @classmethod
     def _check_record_type(cls, v: str) -> str:
         v = (v or "other").strip().lower()
-        return v if v in RECORD_TYPES else "other"
+        if v in RECORD_TYPES:
+            return v
+        if v and v not in _UNKNOWN_RECORD_TYPES:
+            _UNKNOWN_RECORD_TYPES.add(v)
+            logger.warning(f"normalize: unknown record_type {v!r} coerced to "
+                           f"'other' (add it to RECORD_TYPES if it is a real type)")
+        return "other"
 
     @field_validator("domain_label", "subdomain_label")
     @classmethod

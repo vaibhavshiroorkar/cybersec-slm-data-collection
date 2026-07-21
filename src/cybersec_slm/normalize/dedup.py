@@ -113,6 +113,16 @@ class NearDuplicateIndex:
         self._last_sig = sig
         return sig
 
+    def fingerprint(self, text: str) -> str:
+        """The normalized exact-dup fingerprint for ``text`` (memoized).
+
+        Lets a caller ask "was this text already committed?" — e.g. the normalizer
+        distinguishing a record already in a resumed ``dataset.jsonl`` from a true
+        in-pass duplicate. Reuses the check-then-commit memo, so a following
+        ``is_duplicate``/``add`` on the same text pays for the signature once.
+        """
+        return self._sig(text).fp
+
     def is_duplicate(self, text: str) -> tuple[bool, str, float]:
         """Return ``(is_dup, reason, score)`` without mutating state.
 

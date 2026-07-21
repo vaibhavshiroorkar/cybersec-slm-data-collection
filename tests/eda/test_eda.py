@@ -217,6 +217,31 @@ def test_apply_source_cap_skips_single_source(tmp_path):
     assert m["subdomains"]["Network Security"] == 500
 
 
+def test_persisted_report_reflects_auto_rebalance(tmp_path, monkeypatch):
+    """When auto-rebalance runs, the persisted run report + latest.json (which the
+    dashboard reads) must reflect the POST-rebalance state, not a stale pre-rebalance
+    one. Regression: _persist used to run before the rebalance block mutated report."""
+    monkeypatch.setattr(pipeline, "EDA_DIR", str(tmp_path / "eda"))
+    monkeypatch.setattr(pipeline.config, "MIN_TOTAL_RECORDS", 1)
+    monkeypatch.setattr(pipeline.config, "MAX_SOURCE_SHARE", 0.99)
+    monkeypatch.setattr(pipeline.config, "AUTO_REBALANCE", True)
+    # Pretend a rebalance happened, without actually downsampling the fixture.
+    monkeypatch.setattr(pipeline, "_auto_rebalance", lambda feedback, input_dir: True)
+    cdata = _corpus(tmp_path, {("Network Security", "a"): 10000,
+                               ("Cloud Security", "b"): 10,
+                               ("Vulnerability Management", "c"): 10,
+                               ("Cryptography", "d"): 10,
+                               ("Data Security and Privacy", "e"): 10})
+    report = run_eda(cdata, enforce=False)
+    assert report.get("rebalanced") is True
+    assert "metrics_after_rebalance" in report
+
+    persisted = json.load(open(tmp_path / "eda" / "latest.json", encoding="utf-8"))
+    assert persisted.get("rebalanced") is True          # not stale
+    assert "metrics_after_rebalance" in persisted
+    assert persisted["violations"] == report["violations"]
+
+
 def test_auto_rebalance_off_by_default(tmp_path, monkeypatch):
     # Default config leaves AUTO_REBALANCE off: an over-represented corpus is
     # reported but NOT trimmed, so no already-cleaned records are deleted at random.

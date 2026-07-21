@@ -103,6 +103,13 @@ class Normalizer:
         self.resume = resume
         if resume:
             self.index.rebuild_from_jsonl(DATASET)
+        # Fingerprints already in dataset.jsonl at startup. On a resumed run the
+        # input (data/clean) is re-scanned in full, so every already-written record
+        # re-appears and would be re-detected as an exact dup — re-appended to the
+        # duplicates/scores sinks and re-counted. That is not a new duplicate event,
+        # just resumed state, so those records are skipped silently (see `process`).
+        # Empty on a fresh run, so this is a no-op there.
+        self._prerun_fps: set[str] = set(self.index.seen)
         self.dataset = _Sink(DATASET, append=resume)
         self.rejected = _Sink(REJECTED, append=resume)
         self.duplicates = _Sink(DUPLICATES, append=resume)
@@ -154,6 +161,12 @@ class Normalizer:
 
         # 3) Near-Duplicate Check (MinHash / LSH) + per-record score audit
         is_dup, dreason, score = self.index.is_duplicate(model.text)
+        # A record already committed in a prior (resumed) pass is not a new dup
+        # event — skip it silently so a resume neither re-counts it nor bloats the
+        # duplicates/scores sinks. (No-op on a fresh run: _prerun_fps is empty.)
+        if is_dup and dreason == "exact" and \
+                self.index.fingerprint(model.text) in self._prerun_fps:
+            return
         self.scores.write({"id": model.id, "source": source,
                            "score": round(score, 4),
                            "reason": dreason or "unique"})

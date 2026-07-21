@@ -29,7 +29,7 @@ def _f(name: str, default: float) -> float:
 
 MIN_TOTAL_RECORDS = _i("EDA_MIN_TOTAL", 50)              # blocker below this
 MIN_RECORDS_PER_SUBDOMAIN = _i("EDA_MIN_PER_SUBDOMAIN", 5)   # warning below this
-MAX_SOURCE_SHARE = _f("EDA_MAX_SOURCE_SHARE", 0.60)     # concentration ceiling (blocker)
+MAX_SOURCE_SHARE = _f("EDA_MAX_SOURCE_SHARE", 0.60)     # concentration ceiling (warning)
 MAX_DRIFT = _f("EDA_MAX_DRIFT", 0.25)                    # max subdomain-share delta vs prev run
 MAX_DUP_RATE = _f("EDA_MAX_DUP_RATE", 0.40)             # warning above this
 MIN_AVG_TOKENS = _f("EDA_MIN_AVG_TOKENS", 5.0)          # warning below this
@@ -40,8 +40,9 @@ OWNER = os.environ.get("EDA_OWNER", "data-collection-team")
 # signals that the corpus is heavily skewed toward a few subdomains (warning).
 MAX_TOPIC_CV = _f("EDA_MAX_TOPIC_CV", 1.5)
 
-# Any subdomain below this share of total records triggers a blocker — below 1%
-# means the subdomain is effectively absent from the training signal.
+# Any subdomain below this share of total records triggers a warning — below 1%
+# means the subdomain is effectively absent from the training signal. (A warning,
+# not a blocker: the only hard blocker is total volume; see evaluate_gate.)
 MIN_SUBDOMAIN_SHARE = _f("EDA_MIN_SUBDOMAIN_SHARE", 0.01)
 
 # When True, the deep EDA pass automatically caps over-represented subdomains

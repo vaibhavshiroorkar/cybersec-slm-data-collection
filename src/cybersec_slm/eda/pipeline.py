@@ -128,7 +128,10 @@ def evaluate_gate(metrics: dict) -> list[dict]:
             f"topic balance CV={topic_cv:.2f} (> {config.MAX_TOPIC_CV:.2f}); "
             f"corpus is heavily skewed across subdomains")
 
-    # Any subdomain below the minimum share is a blocker
+    # A subdomain below the minimum share is a warning (not a blocker): the only
+    # hard blocker is total volume. Under-representation is surfaced and the
+    # feedback section recommends adding sources, but it never halts the run —
+    # blocking on it could deadlock a corpus that genuinely lacks a subdomain.
     total = metrics.get("total", 0)
     if total > 0:
         dist = metrics.get("subdomain_distribution", {})
@@ -226,9 +229,19 @@ def _generate_feedback(metrics: dict) -> dict:
     return feedback
 
 
+_run_seq = 0
+
+
 def _persist(report: dict) -> str:
+    # The run history is append-only, so two runs must never collide on a filename.
+    # The timestamp resolves to the second, so a pid + in-process sequence suffix
+    # keeps concurrent runs (different processes) and same-second runs (same
+    # process, e.g. a test loop) from overwriting each other's history point.
+    global _run_seq
+    _run_seq += 1
     os.makedirs(EDA_DIR, exist_ok=True)
-    path = os.path.join(EDA_DIR, f"run-{report['ts'].replace(':', '').replace('-', '')}.json")
+    stamp = report["ts"].replace(":", "").replace("-", "")
+    path = os.path.join(EDA_DIR, f"run-{stamp}-{os.getpid()}-{_run_seq}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
     with open(os.path.join(EDA_DIR, "latest.json"), "w", encoding="utf-8") as f:
@@ -312,6 +325,27 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
         "violations": violations,
         "feedback": feedback,
     }
+    # v2: auto-rebalance over-represented subdomains (cross-subdomain balance),
+    # BEFORE persisting so the on-disk run report and latest.json (which the
+    # dashboard reads) carry the final, post-rebalance verdict rather than a stale
+    # pre-rebalance one. This caps a subdomain that dwarfs the others down to ~2x
+    # the average — a bounded, sensible trim. Source *concentration within* a
+    # subdomain is left to the opt-in `clean balance --source-share` tool, because
+    # auto-capping to the ceiling destroys data whenever the secondary sources are
+    # small.
+    if config.AUTO_REBALANCE and feedback.get("over_represented"):
+        if _auto_rebalance(feedback, input_dir):
+            logger.info("eda: auto-rebalance applied — re-computing metrics")
+            recomputed = compute_metrics(input_dir)
+            report["metrics_after_rebalance"] = recomputed
+            report["rebalanced"] = True
+
+            # Re-evaluate the gate to see if rebalancing cleared the blockers
+            violations = evaluate_gate(recomputed)
+            blockers = [x for x in violations if x["severity"] == "blocker"]
+            report["violations"] = violations
+            report["passed"] = not blockers
+
     path = _persist(report)
     if profile:
         _profile(input_dir)
@@ -328,24 +362,6 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
     # v2: log feedback recommendations
     for rec in feedback.get("recommendations", []):
         logger.info(f"eda FEEDBACK: {rec}")
-
-    # v2: auto-rebalance over-represented subdomains (cross-subdomain balance).
-    # This caps a subdomain that dwarfs the others down to ~2x the average — a
-    # bounded, sensible trim. Source *concentration within* a subdomain is left
-    # to the opt-in `clean balance --source-share` tool, because auto-capping to
-    # the ceiling destroys data whenever the secondary sources are small.
-    if config.AUTO_REBALANCE and feedback.get("over_represented"):
-        if _auto_rebalance(feedback, input_dir):
-            logger.info("eda: auto-rebalance applied — re-computing metrics")
-            recomputed = compute_metrics(input_dir)
-            report["metrics_after_rebalance"] = recomputed
-            report["rebalanced"] = True
-
-            # Re-evaluate the gate to see if rebalancing cleared the blockers
-            violations = evaluate_gate(recomputed)
-            blockers = [x for x in violations if x["severity"] == "blocker"]
-            report["violations"] = violations
-            report["passed"] = not blockers
 
     if blockers and enforce:
         raise SufficiencyError(
