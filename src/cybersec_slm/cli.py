@@ -651,12 +651,34 @@ def main(argv: list[str] | None = None) -> None:
             sx.url = args.searxng_url
         if sx and args.engines:
             sx.engines = args.engines
+        # Legacy flags the one-engine rewrite no longer uses. Warn rather than
+        # silently ignore: a user passing --countries expecting a filter should be
+        # told it does nothing, not left to wonder why the corpus is unfiltered.
+        _dead_flags = [
+            ("--countries", args.countries), ("--fields", args.fields),
+            ("--text-only", args.text_only),
+            ("--per-keyword", args.per_keyword != 5),
+            ("--max-per-domain", args.max_per_domain is not None),
+            ("--time-range", args.time_range != "year"),
+            ("--no-site-scope", args.no_site_scope),
+            ("--no-quality-filter", args.no_quality_filter),
+            ("--no-strict-license", args.no_strict_license),
+            ("--harvest", getattr(args, "harvest", False)),
+            ("--target", args.target is not None),
+        ]
+        _passed = [name for name, given in _dead_flags if given]
+        if _passed:
+            print(f"source: note - {', '.join(_passed)} no longer apply to the "
+                  f"one-engine sourcing stage and were ignored. Backend limits, "
+                  f"targets, country bias and quality thresholds now live in the "
+                  f"profile's sourcing.yaml.")
         try:
             summary = orchestrator.source(
                 cfg=cfg, subdomains=args.domains, max_total=args.max_total,
                 target_per_subdomain=args.target_per_domain,
                 max_minutes=args.max_minutes, dry_run=args.dry_run,
-                enrich=not args.no_enrich, out_csv=args.out)
+                enrich=not args.no_enrich, out_csv=args.out,
+                workers=args.workers)
         except SearchError as e:
             raise SystemExit(f"source: discovery could not run: {e}") from None
         print(f"source: {summary['found']} hits, {summary['new']} new, "

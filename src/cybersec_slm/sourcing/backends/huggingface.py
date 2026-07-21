@@ -44,7 +44,7 @@ class HuggingFaceBackend(Backend):
         out: list[Candidate] = []
         offset = 0
         try:
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
+            with httpx.Client(timeout=(bc.timeout if bc else 15.0), follow_redirects=True) as client:
                 while len(out) < limit:
                     resp = client.get(HF_API, params={
                         "search": keyword, "limit": 100, "offset": offset,

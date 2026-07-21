@@ -29,6 +29,7 @@ import os
 import time
 from collections import deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from ..core import LOGS, logger
@@ -65,17 +66,25 @@ def _write_summary(summary: dict, path: str) -> None:
 
 
 def _build_shots(cfg: SourcingConfig, selected: list[str]) -> dict[str, deque]:
-    """Per-sub-domain queue of ``(backend_name, keyword)`` shots, backend-priority order.
+    """Per-sub-domain queue of ``(backend_name, keyword)`` shots, interleaved.
 
-    Backends are ordered so real-metadata APIs fire before the low-signal SearXNG
-    last-resort; within a backend the sub-domain's keywords are walked in order.
+    Shots are **keyword-major**: every enabled backend gets a turn on the first
+    keyword before any backend sees the second. Backend priority still decides the
+    order *within* a keyword, so the real-metadata APIs are asked before the
+    low-signal SearXNG last-resort.
+
+    Draining one backend's entire keyword list first (the original order) meant a
+    slow or unreachable backend burned one timeout per keyword — 119 of them, ~30s
+    each — before any other backend ran at all, which is indistinguishable from a
+    hung run. Interleaving caps that cost at one shot per rotation, and the
+    circuit breaker in :func:`source` then drops the backend entirely.
     """
     order = cfg.enabled_backends()
     shots: dict[str, deque] = {}
     for sd in selected:
         q: deque = deque()
-        for bname in order:
-            for kw in cfg.keywords.get(sd, []):
+        for kw in cfg.keywords.get(sd, []):
+            for bname in order:
                 q.append((bname, kw))
         shots[sd] = q
     return shots
@@ -86,6 +95,7 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
            target_per_subdomain: int | None = None, dry_run: bool = False,
            enrich: bool = True, backends: list[str] | None = None,
            verify_liveness: bool | None = None, out_csv: str | None = None,
+           workers: int | None = None,
            clock: Callable[[], float] = time.monotonic,
            max_minutes: float | None = None) -> dict:
     """Run sourcing for a profile and return a summary dict.
@@ -105,6 +115,8 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
         cfg.target_per_subdomain = target_per_subdomain
     if verify_liveness is not None:
         cfg.verify_liveness = verify_liveness
+    if workers is not None:
+        cfg.workers = max(1, workers)
     if backends is not None:
         for name, bc in cfg.backends.items():
             bc.enabled = name in backends
@@ -138,6 +150,10 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
     active = [s for s in selected if shots[s]]
     deadline = started + max_minutes * 60 if max_minutes else None
     used_backends: set[str] = set()
+    # Circuit-breaker state: consecutive empty shots per backend, and the set of
+    # backends retired for the rest of this run.
+    empty_streak: dict[str, int] = {}
+    dead_backends: set[str] = set()
     shots_run = 0
     appended = 0
 
@@ -154,7 +170,8 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
         return by_keyword_agg.setdefault(
             (sd, kw), {"domain": sd, "keyword": kw, "hits": 0, "new": 0})
 
-    def _process(cand, sd: str, kw: str) -> None:
+    def _prepare(cand, sd: str, kw: str):
+        """Gates + dedup + liveness + row build. Returns the row, or None if dropped."""
         res = cand.result
         funnel.hit(sd)
         _agg(sd, kw)["hits"] += 1
@@ -162,25 +179,52 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
         drop = gates.classify_host(res, cfg)
         if drop is not None:
             funnel.drop(sd, drop.stage, drop.host)
-            return
+            return None
         if gates.off_topic(f"{res.title} {res.snippet}", cfg):
             funnel.drop(sd, gates.OFF_TOPIC, "")
-            return
+            return None
         if not dedup.take(res.link):
             funnel.duplicate(sd)
-            return
+            return None
         if (cfg.verify_liveness and cand.backend not in API_BACKENDS
                 and not gates.is_live(res.link)):
             funnel.drop(sd, gates.DEAD, "")
-            return
+            return None
 
         funnel.candidate(sd)
         row = build_row(res, sd, today=today, domain_vocab=vocab)
         for col, val in cand.metadata_row().items():
             if val and not row.get(col):
                 row[col] = val
+        return row
 
-        verdict = gates.resolve_license(row, cfg, enricher)
+    def _enrich_one(row: dict) -> None:
+        try:
+            enricher.enrich(row)
+        except Exception as e:            # noqa: BLE001 - best-effort by contract
+            logger.debug(f"source: enrich failed for {row.get('Dataset Link')}: {e}")
+
+    def _enrich_batch(rows: list[dict]) -> None:
+        """Resolve a real licence for the unknown-licence rows, concurrently.
+
+        Enrichment is a network round-trip per row (the HF/GitHub API, or a HEAD
+        plus licence detection), so doing it inline made every shot cost one
+        round-trip per candidate. The legacy engine ran this on a thread pool and
+        dropping it was a throughput regression — ``cfg.workers`` restores it.
+        ``Enricher`` is safe to share across threads (it guards its GitHub
+        rate-limit flag with a lock).
+        """
+        if enricher is None or not cfg.enrich_unknown or not rows:
+            return
+        todo = [r for r in rows if license_verdict(r.get("License")) == "unknown"]
+        if not todo:
+            return
+        with ThreadPoolExecutor(max_workers=max(1, cfg.workers)) as pool:
+            list(pool.map(_enrich_one, todo))
+
+    def _accept(row: dict, sd: str, kw: str) -> None:
+        """Licence gate + record the row (enrichment already happened in batch)."""
+        verdict = gates.resolve_license(row, cfg, None)
         funnel.verdict(verdict)
         if verdict == "blocked":
             return
@@ -206,23 +250,64 @@ def source(profile: str | None = None, *, cfg: SourcingConfig | None = None,
                     active.remove(sd)
                     continue
                 bname, kw = shots[sd].popleft()
+                if bname in dead_backends:        # circuit-broken earlier this run
+                    continue
                 shots_run += 1
                 backend = get_backend(bname)
                 if backend is None or not backend.available(cfg):
+                    # Missing credentials / no base_url: it can never produce, so
+                    # retire it now instead of re-checking once per keyword.
+                    dead_backends.add(bname)
+                    logger.info(f"source: backend {bname} is unavailable "
+                                f"(disabled, or missing config/credentials) — skipping")
                     continue
                 used_backends.add(bname)
                 bc = cfg.backends.get(bname)
                 limit = bc.per_keyword_limit if bc else 50
+                t0 = clock()
                 try:
                     cands = backend.search(sd, kw, limit, cfg)
                 except Exception as e:                # noqa: BLE001 - one shot never aborts the run
                     logger.warning(f"source: backend {bname} failed for {kw!r}: {e}")
                     cands = []
+                took = clock() - t0
+
+                # Circuit breaker: a backend that keeps coming back empty is either
+                # unreachable (data.gov.in times out on every request from some
+                # networks) or unproductive for this keyword set. Either way, stop
+                # paying its timeout once per keyword for the rest of the run.
+                if cands:
+                    empty_streak[bname] = 0
+                else:
+                    empty_streak[bname] = empty_streak.get(bname, 0) + 1
+                    if empty_streak[bname] >= cfg.max_consecutive_empty:
+                        dead_backends.add(bname)
+                        logger.warning(
+                            f"source: backend {bname} returned nothing "
+                            f"{empty_streak[bname]}x in a row (last shot {took:.1f}s) "
+                            f"— disabling it for the rest of this run")
+
                 before = len(new_rows)
+                pending: list[dict] = []
                 for cand in cands:
                     if _capped() or _expired() or _subdomain_full(sd):
                         break
-                    _process(cand, sd, kw)
+                    row = _prepare(cand, sd, kw)
+                    if row is not None:
+                        pending.append(row)
+                _enrich_batch(pending)            # concurrent licence lookups
+                for row in pending:
+                    if _capped() or _subdomain_full(sd):
+                        break
+                    _accept(row, sd, kw)
+
+                # One line per shot: without it a slow backend makes the run look
+                # frozen (nothing else logs until a row is actually kept).
+                logger.info(f"source: shot {shots_run} [{sd}] {bname} kw={kw!r} "
+                            f"-> {len(cands)} hits, {len(new_rows) - before} kept "
+                            f"in {took:.1f}s "
+                            f"(total {len(new_rows)}/{cfg.target_total or '*'})")
+
                 # Append the rows gathered this shot so a long run keeps its progress
                 # (crash-safe: an interrupted run has already persisted every prior shot).
                 batch = new_rows[before:]

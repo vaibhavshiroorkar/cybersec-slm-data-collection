@@ -52,6 +52,10 @@ class BackendSettings:
     engines: str = ""            # searxng: comma-separated engine list
     url: str = ""                # searxng: instance URL
     last_resort: bool = False    # run this backend only after the others (searxng)
+    # Per-request HTTP timeout. Kept short on purpose: an unreachable host costs
+    # this much per shot, and a long timeout is what makes a dead backend look
+    # like a hung run (data.gov.in times out on every request from some networks).
+    timeout: float = 15.0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -86,6 +90,10 @@ class SourcingConfig:
 
     verify_liveness: bool = True                   # HTTP-check non-API URLs before keeping
     workers: int = 12                              # enrichment/verify thread pool size
+    # Circuit breaker: a backend that returns nothing this many times in a row is
+    # dropped for the rest of the run. Without it an unreachable host (or one
+    # missing its credentials) burns one timeout per keyword for the whole run.
+    max_consecutive_empty: int = 5
 
     backends: dict[str, BackendSettings] = field(default_factory=dict)
     quality: QualitySettings = field(default_factory=QualitySettings)
@@ -112,6 +120,9 @@ def _default_backends() -> dict[str, BackendSettings]:
                                 base_url="https://www.data.gov.in",
                                 api_key_env="DATAGOVINDIA_API_KEY"),
         "huggingface": BackendSettings(enabled=True, per_keyword_limit=100),
+        # token_env is informational for kaggle: the backend authenticates through
+        # the official kaggle SDK, which reads KAGGLE_USERNAME + KAGGLE_KEY (or
+        # ~/.kaggle/kaggle.json) itself rather than via this field.
         "kaggle": BackendSettings(enabled=True, per_keyword_limit=50,
                                   token_env="KAGGLE_KEY"),
         "zenodo": BackendSettings(enabled=True, per_keyword_limit=50),
@@ -125,7 +136,7 @@ def _default_backends() -> dict[str, BackendSettings]:
 
 def _parse_backend(d: dict[str, Any]) -> BackendSettings:
     known = {"enabled", "per_keyword_limit", "token_env", "api_key_env",
-             "base_url", "engines", "url", "last_resort"}
+             "base_url", "engines", "url", "last_resort", "timeout"}
     return BackendSettings(
         enabled=d.get("enabled", True),
         per_keyword_limit=int(d.get("per_keyword_limit", 50)),
@@ -135,6 +146,7 @@ def _parse_backend(d: dict[str, Any]) -> BackendSettings:
         engines=d.get("engines", ""),
         url=d.get("url", ""),
         last_resort=bool(d.get("last_resort", False)),
+        timeout=float(d.get("timeout", 15.0)),
         extra={k: v for k, v in d.items() if k not in known},
     )
 
@@ -212,6 +224,8 @@ def load(profile: str | None = None) -> SourcingConfig:
 
     cfg.verify_liveness = raw.get("verify_liveness", cfg.verify_liveness)
     cfg.workers = int(raw.get("workers", cfg.workers))
+    cfg.max_consecutive_empty = int(raw.get("max_consecutive_empty",
+                                            cfg.max_consecutive_empty))
 
     if "backends" in raw and raw["backends"] is not None:
         for bname, bd in (raw["backends"] or {}).items():

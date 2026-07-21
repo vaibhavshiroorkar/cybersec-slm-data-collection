@@ -53,7 +53,7 @@ class ZenodoBackend(Backend):
             params["access_token"] = token
         out: list[Candidate] = []
         try:
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
+            with httpx.Client(timeout=(bc.timeout if bc else 15.0), follow_redirects=True) as client:
                 while len(out) < limit:
                     resp = client.get(ZENODO_API, params=params)
                     if resp.status_code != 200:

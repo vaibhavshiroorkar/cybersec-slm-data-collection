@@ -206,6 +206,48 @@ def test_orchestrator_never_fabricates_a_license(tmp_path, monkeypatch, _iso_log
     assert summ["funnel"]["license"]["unknown"] == 1
 
 
+def test_shots_interleave_backends_instead_of_draining_one(tmp_path):
+    """Every backend must get a turn on keyword 1 before any sees keyword 2.
+
+    Regression: shots used to be backend-major, so an unreachable backend
+    (data.gov.in times out on every request) burned one timeout per keyword —
+    119 of them — before any other backend ran, which looks like a hung run.
+    """
+    cfg = _cfg(keywords={"AML-KYC": ["a", "b"]},
+               backends={"huggingface": BackendSettings(enabled=True),
+                         "github": BackendSettings(enabled=True)})
+    shots = list(orchestrator._build_shots(cfg, ["AML-KYC"])["AML-KYC"])
+    assert shots == [("huggingface", "a"), ("github", "a"),
+                     ("huggingface", "b"), ("github", "b")]
+
+
+def test_circuit_breaker_retires_a_backend_that_keeps_returning_nothing(
+        tmp_path, monkeypatch, _iso_logs):
+    """A backend that comes back empty N times in a row is dropped for the run,
+    so an unreachable host cannot cost one timeout per keyword forever."""
+    calls = {"n": 0}
+
+    class _DeadBackend:
+        name = "huggingface"
+
+        def available(self, cfg):
+            return True
+
+        def search(self, subdomain, keyword, limit, cfg):
+            calls["n"] += 1
+            return []                      # always empty, like a timing-out host
+
+    monkeypatch.setattr(orchestrator, "get_backend", lambda name: _DeadBackend())
+    cfg = _cfg(output_csv=str(tmp_path / "Sources.csv"),
+               keywords={"AML-KYC": [f"kw{i}" for i in range(20)]})
+    cfg.max_consecutive_empty = 3
+
+    summ = orchestrator.source(cfg=cfg, enrich=False)
+
+    assert calls["n"] == 3, "backend should be retired after 3 empty shots"
+    assert summ["new"] == 0
+
+
 def test_config_load_falls_back_to_taxonomy(tmp_path, monkeypatch):
     cfg = cfgmod.default_config("ubi")
     assert cfg.enabled_backends()[0] != "searxng"   # searxng is last-resort

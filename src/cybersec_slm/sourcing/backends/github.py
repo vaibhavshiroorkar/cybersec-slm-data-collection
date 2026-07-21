@@ -54,7 +54,7 @@ class GitHubBackend(Backend):
         out: list[Candidate] = []
         page, retries = 1, 0
         try:
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
+            with httpx.Client(timeout=(bc.timeout if bc else 15.0), follow_redirects=True) as client:
                 while len(out) < limit and page <= 10:
                     resp = client.get(GH_API, params={
                         "q": keyword, "per_page": 100, "page": page,

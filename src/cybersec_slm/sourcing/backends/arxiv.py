@@ -56,7 +56,7 @@ class ArXivBackend(Backend):
         out: list[Candidate] = []
         start = 0
         try:
-            with httpx.Client(timeout=60, follow_redirects=True) as client:
+            with httpx.Client(timeout=(bc.timeout if bc else 15.0), follow_redirects=True) as client:
                 while len(out) < limit:
                     batch = min(100, limit - start)
                     if batch <= 0:

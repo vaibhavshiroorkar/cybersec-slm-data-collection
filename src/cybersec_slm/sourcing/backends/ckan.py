@@ -40,7 +40,7 @@ class CKANBackend(Backend):
         out: list[Candidate] = []
         start = 0
         try:
-            with httpx.Client(timeout=30, follow_redirects=True) as client:
+            with httpx.Client(timeout=bc.timeout, follow_redirects=True) as client:
                 while len(out) < limit:
                     resp = client.get(f"{base}/api/3/action/package_search",
                                       params={"q": keyword, "rows": 100, "start": start},
