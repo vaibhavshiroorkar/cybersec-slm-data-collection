@@ -59,6 +59,33 @@ def compute_drift(dist: dict, prev: dict | None) -> dict:
             "per_subdomain": {k: round(v, 4) for k, v in deltas.items()}}
 
 
+def compute_vocab_drift(input_dir: str, prev: dict | None) -> dict:
+    """Compute n-gram/vocabulary drift compared to the previous run."""
+    import collections
+    from ..cleaning.common import find_input_files, text_of
+    from ..core import iter_jsonl
+
+    vocab: collections.Counter = collections.Counter()
+    total = 0
+    for ap, sub, source, _rel in find_input_files(input_dir):
+        for rec in iter_jsonl(ap):
+            if rec.get("_parse_error"):
+                continue
+            text = text_of(rec).lower()
+            tokens = [t for t in text.split() if t.isalnum()]
+            vocab.update(tokens)
+            total += len(tokens)
+
+    current_dist = {k: v / total for k, v in vocab.items()} if total else {}
+    if not prev or "vocab_distribution" not in prev.get("metrics", {}):
+        return {"available": False, "max_drift": 0.0, "distribution": current_dist}
+
+    prev_dist = prev["metrics"]["vocab_distribution"]
+    keys = set(current_dist) | set(prev_dist)
+    drift_score = sum(abs(current_dist.get(k, 0.0) - prev_dist.get(k, 0.0)) for k in keys) / 2.0
+    return {"available": True, "max_drift": round(drift_score, 4), "distribution": current_dist}
+
+
 def _per_subdomain_concentration(metrics: dict) -> dict:
     """Worst single-source share per subdomain.
 
@@ -88,23 +115,14 @@ def evaluate_gate(metrics: dict) -> list[dict]:
             add("warning", "subdomain_volume",
                 f"subdomain '{sub}' has {n} records (< {config.MIN_RECORDS_PER_SUBDOMAIN})")
 
-    # Source concentration is a *warning*, never a blocker. Hitting the ceiling
-    # by downsampling would delete large amounts of genuine data whenever the
-    # secondary sources are small (e.g. capping a 31k-record CVE source down to
-    # ~50 to match a 34-record PDF) and a single-source subdomain cannot be
-    # un-concentrated by capping at all — so blocking would either deadlock the
-    # run or force data destruction. The real remedy is adding sources at
-    # ingestion time, which the feedback section calls out. Operators who want to
-    # rebalance can opt in with `cybersec-slm clean balance --source-share`.
+    # Source concentration check: now a BLOCKER to prevent data poisoning via flooding.
     for sub, c in _per_subdomain_concentration(metrics).items():
         if c["worst_share"] <= config.MAX_SOURCE_SHARE:
             continue
-        single = c.get("num_sources", 0) <= 1
-        add("warning", "concentration",
+        add("blocker", "concentration",
             f"source '{c['source']}' is {c['worst_share']:.0%} of subdomain "
             f"'{sub}' (> {config.MAX_SOURCE_SHARE:.0%} ceiling) — "
-            + ("only source for this subdomain; add more sources to diversify"
-               if single else "add more sources or `clean balance --source-share`"))
+            f"suspected flooding vector.")
 
     if metrics["dup_rate"] > config.MAX_DUP_RATE:
         add("warning", "duplicates",
@@ -120,6 +138,12 @@ def evaluate_gate(metrics: dict) -> list[dict]:
         add("warning", "drift",
             f"subdomain '{drift['subdomain']}' share moved {drift['max_delta']:.0%} "
             f"vs the previous run (> {config.MAX_DRIFT:.0%})")
+
+    vocab_drift = metrics.get("vocab_drift", {})
+    if vocab_drift.get("available") and vocab_drift.get("max_drift", 0.0) > config.MAX_DRIFT:
+        add("blocker", "vocab_drift",
+            f"vocabulary shift detected: {vocab_drift['max_drift']:.2f} "
+            f"(> {config.MAX_DRIFT:.2f})")
 
     # ── v2: topic balance checks ─────────────────────────────────────────────
     topic_cv = metrics.get("topic_cv", 0.0)
@@ -298,8 +322,12 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
     input_dir = input_dir or _default_input()
     logger.info(f"eda: scanning {input_dir}")
     metrics = compute_metrics(input_dir)
-    metrics["drift"] = compute_drift(metrics["subdomain_distribution"],
-                                     _previous_report())
+    prev = _previous_report()
+    metrics["drift"] = compute_drift(metrics["subdomain_distribution"], prev)
+    
+    vocab_result = compute_vocab_drift(input_dir, prev)
+    metrics["vocab_drift"] = {"available": vocab_result["available"], "max_drift": vocab_result["max_drift"]}
+    metrics["vocab_distribution"] = vocab_result["distribution"]
     violations = evaluate_gate(metrics)
     feedback = _generate_feedback(metrics)
     blockers = [x for x in violations if x["severity"] == "blocker"]
@@ -348,6 +376,16 @@ def run_eda(input_dir: str | None = None, *, enforce: bool = True,
             report["passed"] = not blockers
 
     if blockers and enforce:
+        # Route outliers to manual review instead of just crashing
+        import shutil
+        from ..core import DATA_ROOT
+        manual_review_dir = os.path.join(DATA_ROOT, "manual_review", f"run-{report['ts'].replace(':', '').replace('-', '')}")
+        os.makedirs(manual_review_dir, exist_ok=True)
+        try:
+            shutil.move(input_dir, manual_review_dir)
+            logger.warning(f"eda: Outliers routed to manual review queue at {manual_review_dir}")
+        except Exception as e:
+            logger.error(f"eda: Failed to route to manual review: {e}")
         raise SufficiencyError(
             f"EDA sufficiency gate FAILED: {len(blockers)} blocker(s); "
             f"owner={config.OWNER}; loop back to ingestion. Report: {path}")

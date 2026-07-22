@@ -1,0 +1,11 @@
+services:
+  clamav:
+    image: clamav/clamav:latest
+    container_name: cybersec-slm-clamav
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD", "clambc", "--version"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 
 from ..core import RAW_DATA, logger
-from . import fetch, fetch_nvd, light_eda, rss, scrape, scrape_html
+from . import fetch, fetch_nvd, light_eda, rss, scrape, scrape_html, av_scan
 from .common import _Collector
 from .license_gate import is_license_ok
 from .sources import descriptor_key, synthetic_identities
@@ -145,6 +145,10 @@ def process_source(
         result["folder"] = folder
         result["ingest_rows"] = collector.rows
 
+        # Malware scan gate: catch infected files before any further parsing
+        if os.path.isdir(folder):
+            av_scan.gate(folder)
+
         # Light EDA gate: fast quality check + flag annotation
         if os.path.isdir(folder):
             syn_ids = _get_synthetic_ids()
@@ -161,6 +165,11 @@ def process_source(
             elif clean:
                 from ..cleaning.pipeline import clean_one_source
                 result["clean_rows"] = clean_one_source(folder, limit=limit)
+    except av_scan.Quarantined as ex:
+        result["status"] = "rejected"
+        result["error"] = f"quarantined: {ex}"
+        result["ingest_rows"] = collector.rows
+        logger.error(f"  FAILED {label}: {result['error']}")
     except Exception as ex:  # isolate: never crash the pool over one source
         result["status"] = "failed"
         result["error"] = f"{type(ex).__name__}: {ex}"

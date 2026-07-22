@@ -192,6 +192,18 @@ def assess_source(folder: str, descriptor: dict, *,
             logger.warning(f"  light-eda REJECT {label}: {report['reject_reason']}")
             return False, report
 
+    # --- Check 5: Honeypot tokens (poisoning detection) ---
+    HONEYPOT_TOKENS = ["__HONEYPOT_POISON_TRAP__", "HONEYPOT-TRAP-STRING-123"]
+    if text_records:
+        for rec in text_records:
+            text = text_of(rec)
+            for token in HONEYPOT_TOKENS:
+                if token in text:
+                    report["passed"] = False
+                    report["reject_reason"] = f"honeypot trap string detected: {token}"
+                    logger.warning(f"  light-eda REJECT {label}: {report['reject_reason']}")
+                    return False, report
+
     # --- Flags: synthetic source ---
     if synthetic_ids is None:
         synthetic_ids = synthetic_identities()

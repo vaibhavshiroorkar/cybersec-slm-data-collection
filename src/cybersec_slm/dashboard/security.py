@@ -195,6 +195,30 @@ def _probe_canaries(dataset: str, sidecar: str) -> Probe:
                  f"all {result['planted']} planted canaries present in the release")
 
 
+def _probe_honeypot_filter() -> Probe:
+    """Verify that a known honeypot trap string causes a source to be rejected."""
+    from ..ingestion.light_eda import assess_source
+    import tempfile
+    import json
+    import shutil
+
+    tmp = tempfile.mkdtemp(prefix="secprobe-")
+    try:
+        folder = os.path.join(tmp, "sub", "src")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "data.jsonl"), "w", encoding="utf-8") as f:
+            json.dump({"text": "some normal text and then __HONEYPOT_POISON_TRAP__ hidden"}, f)
+        
+        passed, report = assess_source(folder, {"kind": "test", "slug": "test_src", "domain": "test_dom"})
+        if passed:
+            return Probe("Honeypot filter", False, "trap string was ALLOWED")
+        return Probe("Honeypot filter", True, "trap string correctly triggered rejection")
+    except Exception as e:
+        return Probe("Honeypot filter", False, f"probe failed: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_probes(dataset: str | None = None, sidecar: str | None = None) -> list[Probe]:
     """Exercise every control. Never raises: a probe that breaks is a red row."""
     from . import data
@@ -205,7 +229,7 @@ def run_probes(dataset: str | None = None, sidecar: str | None = None) -> list[P
     checks = [
         _probe_url_screen, _probe_scheme_screen, _probe_zip_bomb,
         _probe_download_cap, _probe_license_gate, _probe_binary_scan,
-        _probe_hazard_scan, _probe_pii,
+        _probe_hazard_scan, _probe_pii, _probe_honeypot_filter,
     ]
     out: list[Probe] = []
     for fn in checks:

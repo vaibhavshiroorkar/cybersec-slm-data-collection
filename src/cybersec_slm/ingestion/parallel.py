@@ -393,9 +393,11 @@ def run_ingest(spec: str | None = None, *, workers: int | None = None,
                            limit=limit, clean=False, crawl=crawl,
                            scan_hazards=scan_hazards)
 
+    from . import av_scan
     try:
-        _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
-                  source_timeout=source_timeout, summary=summary, ctx=ctx)
+        with av_scan.ephemeral_clamav():
+            _run_pool(descriptors, submit=_submit, on_result=_record, workers=workers,
+                      source_timeout=source_timeout, summary=summary, ctx=ctx)
         for k in summary.get("failed_keys", []):
             ledger.write(k + "\n")
         ledger.flush()
