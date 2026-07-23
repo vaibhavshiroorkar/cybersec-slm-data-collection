@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Unified dataset fetcher -> data/raw/<domain>/<owner>/ (original + jsonl).
 
 One handler per source kind (hf, kaggle, github, url), all sharing common.py.
@@ -10,6 +10,7 @@ import os
 import shutil
 from urllib.parse import urlparse
 
+from . import archive, binscan
 from .common import (
     EXT_PRIORITY,
     ONE_MB,
@@ -93,7 +94,11 @@ def _convert_and_log(original, jsonl, log, *, kind, name, domain, desc, url, lic
     orig_mb = os.path.getsize(original) / ONE_MB
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
                 description=desc, source_url=url, origin_format=fmt, license=lic)
-    record_meta = {"source": desc, "url": url, "license": lic}
+    # source is an identity, so it is the source's name. It used to be `desc`,
+    # which wrote a sentence of prose into every record and made each source look
+    # like a different one downstream. The description is prose about the source
+    # and rides on the ingest-log row (meta) instead.
+    record_meta = {"source": name, "url": url, "license": lic}
     size = to_jsonl(original, jsonl, meta=record_meta)
     rows = count_lines(jsonl)
     logger.info(f"  {os.path.basename(jsonl)}: {rows:,} rows, {size/ONE_MB:.1f} MB")
@@ -108,7 +113,7 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
     as many small files (e.g. iann0036/iam-dataset) collapses into one output
     instead of one-jsonl-per-file. The source is recorded once.
     """
-    record_meta = {"source": desc, "url": url, "license": lic}
+    record_meta = {"source": name, "url": url, "license": lic}   # name, not desc
     meta = dict(kind=kind, name=name, category=category_of(kind), domain=domain,
                 description=desc, source_url=url, origin_format=origin_fmt, license=lic)
     open(jsonl, "wb").close()
@@ -128,7 +133,10 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
             continue
         finally:
             if os.path.exists(tmp):
-                os.remove(tmp)
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
     size = os.path.getsize(jsonl)
     rows = count_lines(jsonl)
     logger.info(f"  {os.path.basename(jsonl)}: {rows:,} rows, {size/ONE_MB:.1f} MB "
@@ -140,7 +148,7 @@ def _combine_to_jsonl(paths, jsonl, log, *, kind, name, domain, desc, url, lic, 
 
 # ------------------------------------------------------------ handlers -------
 def fetch_hf(ref, domain, desc, lic, folder, log):
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi, get_token
     info = HfApi().dataset_info(ref, files_metadata=True)
     sib = {s.rfilename: (s.size or 0) for s in info.siblings}
     cand = [f for f in sib if f.lower().endswith(EXT_PRIORITY)
@@ -170,7 +178,11 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
             url = f"https://huggingface.co/datasets/{ref}/resolve/main/{rel}"
             orig = os.path.join(folder, (key if len(members) == 1 else f"{key}.part{i}")
                                 + (".original.jsonl" if fext == ".jsonl" else fext))
-            download(url, orig)
+            headers = {}
+            token = get_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            download(url, orig, headers=headers)
             tmp = jsonl + ".part"
             try:
                 to_jsonl(orig, tmp, meta=shard_meta)
@@ -185,7 +197,10 @@ def fetch_hf(ref, domain, desc, lic, folder, log):
                 continue
             finally:
                 if os.path.exists(tmp):
-                    os.remove(tmp)
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
             total = os.path.getsize(jsonl)
         rows = count_lines(jsonl)
         logger.info(f"  {key}.jsonl: {rows:,} rows, {total/ONE_MB:.1f} MB"
@@ -215,9 +230,7 @@ def fetch_kaggle(ref, domain, desc, lic, folder, log):
         api.dataset_download_file(ref, rel, path=tmp, quiet=True)
         got = os.path.join(tmp, os.path.basename(rel))
         if not os.path.exists(got) and os.path.exists(got + ".zip"):
-            import zipfile
-            with zipfile.ZipFile(got + ".zip") as z:
-                z.extractall(tmp)
+            archive.safe_extract(got + ".zip", tmp)
         if not os.path.exists(got):
             logger.error(f"  download missing: {rel}"); continue
         orig = os.path.join(folder, os.path.basename(rel))
@@ -237,11 +250,16 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
     orig = os.path.join(folder, name)
     download(url, orig)
     if orig.lower().endswith(".zip") or _is_zipfile(orig):
-        import zipfile
         zdir = os.path.join(folder, "_z"); os.makedirs(zdir, exist_ok=True)
-        with zipfile.ZipFile(orig) as z:
-            z.extractall(zdir)
+        # Guarded: a downloaded archive is attacker-supplied input, and the sizes
+        # it declares are a claim. safe_extract checks them before writing a byte.
+        archive.safe_extract(orig, zdir)
         os.remove(orig)
+        # Report the executables before the filter below drops them and the
+        # rmtree deletes the evidence. Nothing here runs them; the point is that a
+        # corpus built from a repo carrying malware used to look identical, in
+        # every artifact, to one built from a clean repo.
+        binscan.report(zdir, source=stem, url=url, domain=domain)
         data = [os.path.join(r, f) for r, _d, fs in os.walk(zdir) for f in fs
                 if f.lower().endswith(EXT_PRIORITY)
                 and not any(s in f.lower() for s in SKIP_SUBSTRINGS)]
@@ -263,3 +281,4 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         return
     _convert_and_log(orig, os.path.join(folder, stem + ".jsonl"), log,
                      kind=kind, name=stem, domain=domain, desc=desc, url=url, lic=lic)
+

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Provenance manifest — a "datasheet for datasets" for every release.
 
 Each ``dataset.jsonl`` is shipped with ``data/final/manifest.json`` so the
@@ -18,7 +18,7 @@ import subprocess
 import time
 from collections import Counter
 
-from ..core import DATA_ROOT, iter_jsonl, logger, sha256_file
+from ..core import LOGS, iter_jsonl, logger, sha256_file
 from .enrich import pipeline_version
 from .pipeline import DATASET, FINAL
 
@@ -36,7 +36,9 @@ def _git_commit() -> str | None:
 
 
 def _eda_snapshot() -> dict | None:
-    path = os.path.join(DATA_ROOT, "logs", "eda", "latest.json")
+    # LOGS, not <root>/logs: logs are per-profile now, and joining the root by hand
+    # would read whichever profile happened to be built first.
+    path = os.path.join(LOGS, "eda", "latest.json")
     if not os.path.exists(path):
         return None
     try:
@@ -114,3 +116,4 @@ def write_manifest(dataset_path: str | None = None, out: str | None = None) -> s
                 f"({manifest['record_count']} records, "
                 f"{len(manifest['licenses'])} licenses)")
     return out
+

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Cleaning-stage config and helpers.
 
 Shared concerns (logger, try_import, JSONL I/O, data paths) come from
@@ -52,14 +52,26 @@ DATE_FIELDS = ("date", "collection_date", "last_updated", "published",
 
 
 # -------------------------------------------------------------- input walk ---
+# Fetch scratch directories, never part of the corpus. ``fetch.fetch_url`` unzips
+# an archive into ``<source>/_z``, combines the payload into a single top-level
+# ``<source>.jsonl``, then removes it — a removal that fails silently on Windows
+# (read-only entries / long paths) and has stranded millions of files. Anything
+# left inside is a pre-combine intermediate whose records are already in the
+# combined .jsonl, so descending in would both duplicate data and cost minutes.
+SCRATCH_DIRS = frozenset({"_z"})
+
+
 def find_input_files(input_dir: str = RAW_DATA):
     """Yield (abs_path, sub_domain, source, rel_path) for every input .jsonl.
 
     Layout (ingestion output): data/raw/<Sub-Domain>/<source>/<file>.jsonl
+    Fetch scratch (:data:`SCRATCH_DIRS`) is pruned, not descended into.
     """
     if not os.path.isdir(input_dir):
         return
-    for root, _dirs, files in os.walk(input_dir):
+    for root, dirs, files in os.walk(input_dir):
+        # In-place prune: os.walk reads `dirs` back, so this skips the subtree.
+        dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
         for fn in files:
             if not fn.lower().endswith(".jsonl"):
                 continue
@@ -81,3 +93,4 @@ def text_of(rec: dict) -> str:
     # Fallback: join all non-empty string values
     parts = [str(v) for v in rec.values() if v and isinstance(v, str)]
     return " ".join(parts)
+

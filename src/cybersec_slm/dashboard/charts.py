@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Formatting + trend-series helpers for the dashboard pages.
 
 Pure functions (no Streamlit), so they are unit-testable and reusable across
@@ -94,6 +94,67 @@ def fmt_hms(seconds) -> str:
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
+# The stage-activity timeline's two states, as one hue at two steps rather than
+# two hues: the y axis already names each stage, so colour re-encoding identity
+# would be a redundant rainbow. Its one job here is state. Steps come from the
+# blue ramp and are validated as an ordinal ramp against the dashboard's dark
+# surface (#1a1a19) - the dashboard pins base="dark", so it commits to one look.
+TIMELINE_DONE_COLOR = "#184f95"       # ramp step 600 - recessive, still 2.15:1
+TIMELINE_RUNNING_COLOR = "#3987e5"    # ramp step 400 - the live stage, prominent
+TIMELINE_STATES = ("done", "running")
+
+
+def stage_timeline_rows(timeline: list[dict]) -> list[dict]:
+    """Shape :func:`data.stage_timeline` rows for the activity chart.
+
+    Pure and headless so the chart's data is testable without Streamlit or a
+    render. Adds the fields the marks and tooltip read: minutes for the x axis
+    (seconds would print six digits on a multi-hour run), the state the colour
+    encodes, and a preformatted duration so the tooltip never shows raw floats.
+    """
+    rows: list[dict] = []
+    for r in timeline:
+        rows.append({
+            "stage": r["label"],
+            "start_min": r["start_s"] / 60.0,
+            "end_min": r["end_s"] / 60.0,
+            "state": "running" if r.get("running") else "done",
+            "duration": fmt_duration(r["duration_s"]),
+        })
+    return rows
+
+
+# The live-rate line. One series, so no legend (the title names it) and no
+# categorical slot is spent: this is the same blue the timeline's running state
+# uses, because it is the same thing - the stage that is live right now.
+LIVE_RATE_COLOR = TIMELINE_RUNNING_COLOR
+
+
+def live_rate_rows(samples: list[dict]) -> list[dict]:
+    """Turn cumulative ``{"t", "value"}`` samples into per-second rate rows.
+
+    The sampler records a running total (bytes on disk, sources done); what the
+    chart shows is how fast that total is moving, so each row is the delta
+    between neighbouring samples over their real elapsed time - not over the
+    nominal tick, which a slow rerun or a paused tab would make a lie.
+
+    Negative deltas are clamped to 0: a stage's total can dip when a pass rewrites
+    a file in place (final_global_dedup does exactly this), and a negative
+    throughput is meaningless.
+    """
+    rows: list[dict] = []
+    for prev, cur in zip(samples, samples[1:], strict=False):
+        dt = cur["t"] - prev["t"]
+        if dt <= 0:
+            continue
+        rows.append({
+            "t": cur["t"],
+            "elapsed_s": cur["t"] - samples[0]["t"],
+            "rate": max(cur["value"] - prev["value"], 0.0) / dt,
+        })
+    return rows
+
+
 def eda_trend_rows(history: list[dict]) -> list[dict]:
     """Flatten EDA run history into tidy rows for the trend line charts.
 
@@ -114,3 +175,4 @@ def eda_trend_rows(history: list[dict]) -> list[dict]:
             "num_subdomains": int(m.get("num_subdomains") or 0),
         })
     return rows
+

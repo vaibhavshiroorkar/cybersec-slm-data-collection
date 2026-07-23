@@ -1,4 +1,4 @@
-"""Persistent per-stage advanced settings store."""
+﻿"""Persistent per-stage advanced settings store."""
 
 from cybersec_slm.dashboard import settings_store
 
@@ -16,8 +16,8 @@ def test_missing_file_reads_empty(tmp_path, monkeypatch):
 
 def test_save_and_get_stage_round_trip(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
-    settings_store.save_stage("ingest", {"workers": 8, "no_crawler": True})
-    assert settings_store.get_stage("ingest") == {"workers": 8, "no_crawler": True}
+    settings_store.save_stage("ingest", {"workers": 8, "no_hazard_scan": True})
+    assert settings_store.get_stage("ingest") == {"workers": 8, "no_hazard_scan": True}
     # persisted to the data root, outside data/ and logs/ (survives a Reset)
     assert (tmp_path / settings_store.FILE_NAME).exists()
 
@@ -39,3 +39,39 @@ def test_merged_all_combines_stages_with_all_winning(tmp_path, monkeypatch):
     assert merged["workers"] == 4                        # all overrides ingest
     assert merged["source_timeout"] == 600               # from ingest
     assert merged["purge_raw"] is True                   # from clean
+
+
+# ------------------------------------------------------------ retired keys -----
+def test_retired_keys_are_stripped_on_read(tmp_path):
+    """A value saved before its toggle was retired must not keep steering runs.
+
+    pipeline_settings.json really did carry `all.no_crawler: true`, which silently
+    skipped every website source of every full run, from a file nobody opens. The
+    toggles are gone from the UI, so the saved values have to go too.
+    """
+    p = str(tmp_path / "s.json")
+    settings_store.save_stage("all", {"workers": 10, "no_crawler": True,
+                                      "resume": True, "no_enrich": True}, p)
+
+    out = settings_store.get_stage("all", p)
+
+    assert out == {"workers": 10}
+
+
+def test_retired_keys_do_not_disturb_the_settings_that_remain(tmp_path):
+    p = str(tmp_path / "s.json")
+    settings_store.save_stage("clean", {"resume": True, "workers": 4,
+                                        "drop_non_english": True}, p)
+
+    out = settings_store.get_stage("clean", p)
+
+    assert out == {"workers": 4, "drop_non_english": True}
+
+
+def test_a_stage_with_no_retired_keys_is_untouched(tmp_path):
+    p = str(tmp_path / "s.json")
+    saved = {"workers": 8, "mode": "datasets", "per_keyword": 10}
+    settings_store.save_stage("source", saved, p)
+
+    assert settings_store.get_stage("source", p) == saved
+

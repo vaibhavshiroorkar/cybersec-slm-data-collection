@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Ingestion-stage helpers — HTTP, robust readers, and the ingest log.
 
 Shared concerns (logger, try_import, sha256, count_lines, paths) live in
@@ -16,6 +16,7 @@ import time
 import pandas as pd
 
 from ..core import LOGS, RAW_DATA, count_lines, logger, sha256_file, try_import  # noqa: F401
+from . import urlscreen
 
 # ---------------------------------------------------------------- config -----
 ONE_MB = 1024 * 1024
@@ -49,30 +50,119 @@ from tenacity import (  # noqa: E402
 
 _RETRY = dict(stop=stop_after_attempt(4),
               wait=wait_exponential(multiplier=1, min=2, max=30),
-              retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException)),
+              retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException, httpx.StreamError)),
               reraise=True)
+
+
+# How many hops a fetch will follow before giving up. httpx's own default is 20;
+# a corpus source that needs more than a handful is broken, not shy.
+MAX_REDIRECTS = 10
+
+
+def _screened_hops(url: str, timeout: int, opener):
+    """Walk the redirect chain, screening every hop, and return the final response.
+
+    ``follow_redirects=True`` is the natural way to write this and it is exactly
+    what makes the screen useless: httpx would follow a 302 from a public URL to
+    169.254.169.254 without the screen ever seeing the second URL. So redirects
+    are followed by hand and :func:`urlscreen.check` runs on each hop.
+
+    ``opener`` returns a response for one hop, so the streaming and non-streaming
+    callers share this logic without one of them buffering the whole body.
+    """
+    seen: list[str] = []
+    current = url
+    for _ in range(MAX_REDIRECTS + 1):
+        urlscreen.check(current)
+        resp = opener(current, timeout)
+        location = resp.headers.get("location") if resp.headers else None
+        if not (getattr(resp, "is_redirect", False) and location):
+            return resp
+        seen.append(current)
+        # A Location may be relative; resolve against the hop it came from, or the
+        # screen would run on a fragment and pass it for the wrong reason.
+        current = str(httpx.URL(current).join(location))
+        if hasattr(resp, "close"):
+            resp.close()
+    raise httpx.HTTPError(
+        f"too many redirects (> {MAX_REDIRECTS}) starting at {url!r}: {seen}")
 
 
 @retry(**_RETRY)
 def http_get(url: str, timeout: int = 180) -> httpx.Response:
-    r = httpx.get(url, headers=HEADERS, follow_redirects=True, timeout=timeout)
-    r.raise_for_status()
-    return r
+    """GET a screened URL, following (and re-screening) redirects by hand."""
+    with httpx.Client(http2=True, headers=HEADERS, timeout=timeout) as client:
+        def _open(u, t):
+            return client.get(u, follow_redirects=False, timeout=t)
+
+        r = _screened_hops(url, timeout, _open)
+        r.raise_for_status()
+        r.read()  # Load into memory before client exits context
+        return r
+
+
+class DownloadTooLarge(RuntimeError):
+    """Raised when a stream exceeds the byte cap; the partial file is removed."""
+
+
+# The most a single source may stream to disk. --max-source-gb filters on the
+# catalog's *declared* size, which a hostile or wrong row simply lies about; this
+# counts the bytes actually arriving, which is the only number that can fill a
+# volume. Generous by default: the largest genuine sources here are a few GB.
+DEFAULT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024 * 1024      # 25 GB
+
+
+def _max_download_bytes() -> int:
+    try:
+        return int(os.environ["CYBERSEC_SLM_MAX_DOWNLOAD_BYTES"])
+    except (KeyError, TypeError, ValueError):
+        return DEFAULT_MAX_DOWNLOAD_BYTES
 
 
 @retry(**_RETRY)
-def download(url: str, dest: str) -> tuple[int, str]:
-    """Stream a URL to disk; return (bytes, sha256)."""
+def download(url: str, dest: str, headers: dict | None = None) -> tuple[int, str]:
+    """Stream a screened URL to disk; return (bytes, sha256).
+
+    Aborts past the byte cap and deletes the partial file, so a source that
+    streams forever costs the run one failure rather than the whole volume.
+    Uses an isolated httpx.Client to prevent socket corruption across workers.
+    """
     import hashlib
     h = hashlib.sha256()
     size = 0
+    cap = _max_download_bytes()
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-    with httpx.stream("GET", url, headers=HEADERS, follow_redirects=True, timeout=180) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_bytes(1 << 16):
-                size += len(chunk)
-                f.write(chunk); h.update(chunk)
+    
+    req_headers = dict(HEADERS)
+    if headers:
+        req_headers.update(headers)
+
+    with httpx.Client(http2=True, headers=req_headers) as client:
+        def _open(u, t):
+            req = client.build_request("GET", u, timeout=t)
+            return client.send(req, stream=True, follow_redirects=False)
+
+        r = _screened_hops(url, 180, _open)
+        try:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in r.iter_bytes(1 << 16):
+                    size += len(chunk)
+                    if size > cap:
+                        raise DownloadTooLarge(
+                            f"{url!r} exceeded the {cap / 1048576:,.0f} MB download "
+                            f"cap; aborting")
+                    f.write(chunk); h.update(chunk)
+        except DownloadTooLarge:
+            # Leaving a truncated file behind would be read as a real, valid source.
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+            raise
+        finally:
+            if hasattr(r, "close"):
+                r.close()
     return size, h.hexdigest()
 
 
@@ -391,7 +481,7 @@ class IngestLog:
     def export_ledger(self, path: str | None = None) -> str:
         """Write the provenance ledger (one row per produced/skipped file) to CSV.
 
-        Version-controlled / DVC-tracked, this is the trace that lets a toxic or
+        Version-controlled, this is the trace that lets a toxic or
         mis-licensed source be scoped and surgically removed later rather than
         forcing the whole corpus to be discarded (threat model: Licensing and
         Provenance as a Security Control).

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Shared presentation helpers for the dashboard pages.
 
 Keeps every page visually identical and short, and centralizes the layout choices
@@ -75,6 +75,21 @@ def inject_css() -> None:
             letter-spacing: 0.05em; font-size: 0.72rem; opacity: 0.72; }
 
           div[data-testid="stCode"] { max-height: 100%; }
+
+          /* Drag a table taller from its bottom edge. Streamlit fixes a
+             dataframe's height, so a 300px table of 400 rows can only be
+             scrolled, however much screen is going spare. The browser's own
+             resize handle costs no JS and no rerun: `resize` needs a non-visible
+             overflow to take effect, and min-height keeps a drag from collapsing
+             the table to nothing. Vertical only, because the width is the
+             column's job (drag its edge) and a table wider than its card would
+             sit outside the layout. */
+          div[data-testid="stDataFrame"] {
+            resize: vertical; overflow: auto; min-height: 6rem; }
+          /* The handle itself: Streamlit's frame paints over the corner, so give
+             it a visible grip rather than an invisible hot zone nobody finds. */
+          div[data-testid="stDataFrame"]::-webkit-resizer {
+            background: rgba(128,128,128,0.35); border-radius: 0.15rem; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -183,16 +198,58 @@ def profile_switcher() -> str:
             key="profile_pick", disabled=running,
             label_visibility="collapsed",
             help="Which corpus every stage works on. Switching re-points the "
-                 "taxonomy, the source catalog, and the saved settings.")
+                 "taxonomy, the source catalog, the saved settings, and this "
+                 "profile's own data/ and logs/.")
         if running:
             st.caption("Locked while a run is in flight.")
         elif picked != active:
             profiles.use(picked)
+            # Drop every cached scan. They are keyed on data.scope(), which
+            # includes the profile, so the old values could not be *served* after
+            # a switch, but they would sit in memory holding the other corpus's
+            # tables until their TTL expired. Clearing makes the switch honest and
+            # immediate rather than eventually correct.
+            from . import cached
+            cached.clear_stats()
             st.rerun()
 
         info = profiles.info(active)
         st.caption(f"{info['domain_name']} · {len(info['subdomains'])} sub-domains "
                    f"· {info['catalog_rows']} sources")
+
+        # Creating a profile was CLI-only (`cybersec-slm profile create`), which
+        # made the switcher a list of things someone else had made. A new profile
+        # starts empty: its taxonomy is added on the Sourcing page, and it gets its
+        # own data/ and logs/ the first time it runs.
+        with st.expander("New profile"):
+            new = st.text_input(
+                "Name", key="profile_new_name", placeholder="my-corpus",
+                help="Letters, digits, '.', '_' and '-'. Becomes a directory "
+                     "under sources/profiles/ and under data/ and logs/.")
+            dom = st.text_input(
+                "Domain label", key="profile_new_domain", placeholder="MY_CORPUS",
+                help="The schema's top-level domain_name for this corpus. "
+                     "Optional; defaults to the profile name upper-cased.")
+            switch = st.checkbox("Switch to it", value=True, key="profile_new_use",
+                                 disabled=running)
+            if st.button("Create", key="profile_new_go", disabled=not new.strip()):
+                try:
+                    profiles.create(new.strip(),
+                                    domain_name=dom.strip() or new.strip().upper(),
+                                    use_it=bool(switch) and not running)
+                    st.success(f"Created {new.strip()!r}. Add its sub-domains on "
+                               f"the Sourcing page.")
+                    # Drop the selectbox's remembered value. It still holds the
+                    # profile that was active a moment ago, and the switch handler
+                    # above compares it against the active one: left in place, the
+                    # rerun would read it as "the user picked the old profile" and
+                    # switch straight back out of the one just created.
+                    st.session_state.pop("profile_pick", None)
+                    from . import cached
+                    cached.clear_stats()
+                    st.rerun()
+                except (ValueError, FileExistsError) as e:
+                    st.error(str(e))
     return active
 
 
@@ -357,34 +414,55 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 help=help_txt)
             if picked_domains:
                 s["domains"] = picked_domains
-        if "mode" in allowed:
-            from ..sourcing import catalog
-            _cur_mode = str(base.get("mode", catalog.MODES[0]))
-            _mode_idx = (catalog.MODES.index(_cur_mode)
-                         if _cur_mode in catalog.MODES else 0)
-            s["mode"] = st.selectbox(
-                "mode", catalog.MODES, index=_mode_idx, key=f"{stage}_mode",
-                help="datasets: corpora/repos · text: articles/docs · both")
-        if "target_per_domain" in allowed:
-            tpd = int(st.number_input(
-                "fill each sub-domain up to N valid rows (0 = off)", 0, 1_000_000,
-                value=_clamp(int(base.get("target_per_domain") or 0), 0, 1_000_000),
-                key=f"{stage}_targetdom",
-                help="Fill mode: top each Sub-Domain up to this many "
-                     "commercial-valid rows, filling only the deficit."))
-            if tpd:
-                s["target_per_domain"] = tpd
+
+        if stage == "source":
+            _COUNTRIES = [
+                "Global",
+                "India", "United States", "United Kingdom", "China", "Germany",
+                "France", "Japan", "Australia", "Canada", "Brazil", "Singapore",
+                "South Korea", "Netherlands", "Switzerland", "Sweden", "Israel",
+                "UAE", "Saudi Arabia", "Russia", "South Africa", "Nigeria",
+                "Kenya", "Indonesia", "Malaysia", "Thailand", "Pakistan",
+                "Bangladesh", "Sri Lanka", "Philippines", "Vietnam",
+            ]
+            _FIELDS = [
+                "Finance", "Banking", "Insurance", "Healthcare", "Legal",
+                "Government", "Education", "Cybersecurity", "Defence",
+                "Telecom", "Energy", "Retail", "Manufacturing", "Real Estate",
+                "Agriculture", "Transport", "Media", "Technology",
+            ]
+            _saved_countries = base.get("countries", [])
+            _saved_fields = base.get("fields", [])
+            cf1, cf2 = st.columns(2)
+            sel_countries = cf1.multiselect(
+                "countries (empty = any)",
+                options=_COUNTRIES,
+                default=[c for c in _saved_countries if c in _COUNTRIES],
+                key=f"{stage}_countries",
+                help="'Global' targets internationally-scoped sources. "
+                     "Leave empty to search all geographies.")
+            sel_fields = cf2.multiselect(
+                "fields (empty = any)",
+                options=_FIELDS,
+                default=[f for f in _saved_fields if f in _FIELDS],
+                key=f"{stage}_fields",
+                help="Restrict discovery to these industry verticals. "
+                     "Leave empty to search all fields.")
+            if sel_countries:
+                s["countries"] = sel_countries
+            if sel_fields:
+                s["fields"] = sel_fields
         # Row-level run: pick specific sources within (or across) the sub-domains.
         if "sources_only" in allowed and stage in ("ingest", "clean"):
             _row_selection(stage, base, picked_domains, s)
         if "workers" in allowed:
             _wdef = 12 if stage == "source" else 4
             worker_help = (
-                "enrichment thread pool (license/metadata fetch)"
+                "Logical network threads, NOT CPU cores. Sourcing is I/O-bound, so you can safely set this higher than your core count."
                 if stage == "source"
-                else "number of parallel worker processes (CPU cores) used to clean sources"
+                else "Physical CPU cores. Cleaning is heavily CPU-bound, so physical cores are used to avoid hyperthreading contention."
                 if stage == "clean"
-                else "process pool size (default: min(cpu, 8))")
+                else "Logical CPU cores (hyperthreads) used for parallel processing (default: min(logical cpu, 8)).")
             worker_label = (
                 "clean workers" if stage == "clean"
                 else "workers")
@@ -393,24 +471,16 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                 value=_clamp(int(base.get("workers", _wdef)), 1, 32),
                 key=f"{stage}_workers",
                 help=worker_help))
-        if "resume" in allowed:
-            s["resume"] = st.checkbox(
-                "resume from checkpoint",
-                value=bool(base.get("resume", False)),
-                key=f"{stage}_resume",
-                help="Skip already-finished sources and continue the previous run.")
+        # No "resume from checkpoint" checkbox. Resuming is a property of a launch,
+        # not of a stage's saved configuration: the Overview's Start and Resume both
+        # already pass it. Saving it here meant a stale `resume: true` silently won
+        # over the button the user actually pressed (see control.build_command),
+        # which is a foot-gun with no upside.
         if "source_timeout" in allowed:
             s["source_timeout"] = int(st.number_input(
                 "source timeout (s)", 30, 7200,
                 value=_clamp(int(base.get("source_timeout", 1800)), 30, 7200),
                 key=f"{stage}_timeout"))
-        if "limit" in allowed:
-            lim = int(st.number_input(
-                "per-file record limit (0 = no cap)", 0, 10_000_000,
-                value=_clamp(int(base.get("limit", 0)), 0, 10_000_000),
-                key=f"{stage}_limit"))
-            if lim:
-                s["limit"] = lim
         if "max_source_gb" in allowed:
             gb = float(st.number_input(
                 "max source size in GB (0 = no cap)", 0.0, 1000.0,
@@ -424,18 +494,6 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                                 key=f"{stage}_sources")
             if src.strip():
                 s["sources"] = src.strip()
-        if "per_keyword" in allowed:
-            s["per_keyword"] = int(st.number_input(
-                "results per keyword", 1, 50,
-                value=_clamp(int(base.get("per_keyword", 5)), 1, 50),
-                key=f"{stage}_perkw"))
-        if "max_per_domain" in allowed:
-            m = int(st.number_input(
-                "max new sources per sub-domain (0 = no cap)", 0, 100_000,
-                value=_clamp(int(base.get("max_per_domain", 0)), 0, 100_000),
-                key=f"{stage}_maxdom"))
-            if m:
-                s["max_per_domain"] = m
         if "max_total" in allowed:
             t = int(st.number_input(
                 "gather until N new sources total (0 = single pass)", 0, 1_000_000,
@@ -452,30 +510,7 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                      "(whichever is hit first)."))
             if mm > 0:
                 s["max_minutes"] = mm
-        if "time_range" in allowed:
-            _tr = ["any", "day", "week", "month", "year"]
-            _cur = str(base.get("time_range", "year") or "year")
-            tr = st.selectbox(
-                "freshness (prefer results within)", _tr,
-                index=_tr.index(_cur) if _cur in _tr else _tr.index("year"),
-                key=f"{stage}_timerange",
-                help="Falls back to unfiltered when a query would return nothing.")
-            if tr != "year":
-                s["time_range"] = tr
-        if "no_site_scope" in allowed:
-            scope_on = st.checkbox(
-                "scope datasets queries to licensable hosts",
-                value=not bool(base.get("no_site_scope", False)),
-                key=f"{stage}_sitescope",
-                help="HuggingFace, GitHub, Kaggle, Zenodo, arXiv, data.gov, UCI. "
-                     "Falls back to an unscoped query when a scoped one finds nothing.")
-            s["no_site_scope"] = not scope_on
-        if "no_quality_filter" in allowed:
-            qf_on = st.checkbox(
-                "drop low-quality results (social/listing/search pages)",
-                value=not bool(base.get("no_quality_filter", False)),
-                key=f"{stage}_qualfilter")
-            s["no_quality_filter"] = not qf_on
+
         if "searxng_url" in allowed:
             url = st.text_input(
                 "SearXNG URL (blank = env SEARXNG_URL / localhost:8080)",
@@ -487,24 +522,19 @@ def _stage_widgets(stage: str, base: dict) -> dict:
                                  key=f"{stage}_lang")
             if lang.strip() and lang.strip() != "en":
                 s["language"] = lang.strip()
-        if "no_enrich" in allowed:
-            enrich_on = st.checkbox(
-                "enrich discovered sources with metadata "
-                "(size, license, last updated, author, popularity, tags)",
-                value=not bool(base.get("no_enrich", False)), key=f"{stage}_enrich",
-                help="Fetches per-source metadata from the host (HuggingFace, "
-                     "GitHub, or an HTTP HEAD). Adds a network call per source; "
-                     "set $GITHUB_TOKEN to raise GitHub's rate limit.")
-            s["no_enrich"] = not enrich_on
+        # No enrichment toggle. Enrichment fills License, Author, size and Last
+        # Updated, and License is what the ingestion gate reads: a row discovered
+        # without it is unusable until a backfill resolves it. It is on by default
+        # and there is no sensible reason to discover sources without it.
         if "dry_run" in allowed:
             s["dry_run"] = st.checkbox(
                 "dry run (write candidate CSV, do not append to the catalog)",
                 value=bool(base.get("dry_run", False)), key=f"{stage}_dry")
-        if "no_crawler" in allowed:
-            enable = st.checkbox("crawl website sources this run",
-                                 value=not bool(base.get("no_crawler", False)),
-                                 key=f"{stage}_crawler")
-            s["no_crawler"] = not enable
+        # No "crawl website sources this run" toggle. Crawling is how a website-kind
+        # row is fetched at all, so turning it off does not change how the run works,
+        # it silently skips those sources: the same thing as not cataloguing them,
+        # but discovered only later when their raw folders are missing. The stage
+        # already has the extractor choice for the part that is a real decision.
         if "no_hazard_scan" in allowed:
             enable = st.checkbox(
                 "scan for security hazards (script/iframe injection, base64 "
@@ -630,6 +660,67 @@ def _stage_widgets(stage: str, base: dict) -> dict:
     return s
 
 
+def _render_llm_filter() -> None:
+    import streamlit as st
+    from cybersec_slm import llm
+    from cybersec_slm.dashboard import charts, data
+    from cybersec_slm.sourcing import review
+
+    st.caption(
+        "State a condition in plain English and a model judges every row against it. "
+        "Nothing moves until you apply the result."
+    )
+    _cond = st.text_input(
+        "Condition", key="rev_condition",
+        placeholder="the data must concern India",
+        help="Judged per row on metadata."
+    )
+
+    _c = st.columns([1, 1, 2])
+    _go = _c[0].button("Judge the catalog", key="rev_scan", disabled=not _cond.strip())
+    if not llm.is_available():
+        st.warning("No model configured: set $NVIDIA_API_KEY.")
+
+    if _go:
+        cat_summary = data.catalog_summary()
+        with st.spinner(f"Judging {cat_summary['total']} source(s)..."):
+            try:
+                st.session_state["_rev"] = review.run_scan(_cond.strip())
+            except Exception as _e:
+                st.session_state["_rev"] = None
+                st.error(f"Review failed: {_e}")
+
+    _rev = st.session_state.get("_rev")
+    if _rev:
+        _counts = _rev["counts"]
+        from cybersec_slm.dashboard.ui import stat_grid, table
+        stat_grid([
+            ("Approved", charts.fmt_int(_counts.get(review.APPROVE))),
+            ("Declined", charts.fmt_int(_counts.get(review.DECLINE))),
+            ("Needs a human", charts.fmt_int(_counts.get(review.REVIEW))),
+            ("Judged", charts.fmt_int(sum(_counts.values()))),
+        ], cols=4)
+        st.caption(f"Report: `{_rev['report']}`.")
+        table([{"verdict": r["verdict"], "confidence": r["confidence"],
+                   "source": r["name"], "sub-domain": r["sub_domain"],
+                   "why": r["reason"]}
+                  for r in sorted(_rev["results"],
+                                  key=lambda r: (r["verdict"] != review.DECLINE,
+                                                 r["name"]))],
+                 height=340)
+
+        _n = _counts.get(review.DECLINE, 0)
+        st.warning(f"Applying moves {_n} declined source(s) to Excluded.csv.")
+        if st.button(f"Apply: move {_n} declined source(s)", key="rev_apply", disabled=not _n):
+            try:
+                _res = review.apply_report(_rev["report"], condition=_rev["results"][0]["condition"])
+                st.success(f"Moved {_res['moved']} source(s) to Excluded.csv.")
+                st.session_state["_rev"] = None
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Apply failed: {_e}")
+
+
 def stage_config_dialog(stage: str) -> None:
     """Open a modal that configures every setting for one pipeline ``stage``.
 
@@ -693,3 +784,4 @@ def save_settings_button(stage: str, settings: dict, *, key: str,
                                 "own runs and for the full pipeline run."):
         settings_store.save_stage(stage, settings)
         st.toast(f"Saved {stage} settings")
+

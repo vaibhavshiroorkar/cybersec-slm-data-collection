@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Dashboard read layer - the ONLY code that touches the pipeline's artifacts.
 
 Pure functions that read what the pipeline writes under the data root and return
@@ -23,6 +23,7 @@ import sqlite3
 import time
 
 from .. import core, stages
+from . import final_stats
 
 # A per-PID pipeline log touched within this window means a run is in progress.
 # Heuristic (a long download can be quiet): the UI labels it "recent activity".
@@ -42,20 +43,38 @@ FILTER_FIELDS = {
 
 
 # --------------------------------------------------------------- path helpers --
+# Every path below resolves the active profile on each call, and none of them reads
+# core's DATA_DIR/LOGS constants. That is the whole point: those freeze at import,
+# and the dashboard is one long-lived process that has to notice a profile switch.
+# Reading them made switching to ubi keep showing cybersec's corpus, EDA report and
+# manifest, because the paths had been decided before the switch happened.
 def _root() -> str:
     return core.data_root()
 
 
+def _profile() -> str:
+    return core.active_profile()
+
+
+def _data() -> str:
+    """This profile's ``data/`` (``<root>/data/<profile>``)."""
+    return core.data_dir()
+
+
 def _logs() -> str:
-    return os.path.join(_root(), "logs")
+    return core.logs_dir()
+
+
+def _raw() -> str:
+    return os.path.join(_data(), "raw")
 
 
 def _final() -> str:
-    return os.path.join(_root(), "data", "final")
+    return os.path.join(_data(), "final")
 
 
 def _clean() -> str:
-    return os.path.join(_root(), "data", "clean")
+    return os.path.join(_data(), "clean")
 
 
 def _eda_dir() -> str:
@@ -73,6 +92,22 @@ def data_root() -> str:
     return _root()
 
 
+def active_profile() -> str:
+    """The profile the dashboard is showing (named in the UI)."""
+    return _profile()
+
+
+def scope() -> str:
+    """What the cached scans are keyed on: the data root *and* the profile.
+
+    Both profiles live under one root, so keying a cache on the root alone made
+    the cache itself a second way to show the wrong corpus: switching to ubi
+    re-read nothing and served cybersec's cached record counts, sizes and tables
+    under ubi's name. The value is opaque; only its identity matters.
+    """
+    return f"{_root()}|{_profile()}"
+
+
 # --------------------------------------------------------------- small readers -
 def _read_json(path: str):
     try:
@@ -87,7 +122,12 @@ def _read_csv(path: str) -> list[dict]:
         return []
     try:
         with open(path, encoding="utf-8", newline="") as f:
-            return list(csv.DictReader(f))
+            rows = []
+            for r in csv.DictReader(f):
+                if None in r:
+                    del r[None]
+                rows.append(r)
+            return rows
     except OSError:
         return []
 
@@ -105,7 +145,10 @@ def _pipeline_logs() -> list[str]:
     # "Starting" forever. The pipeline runs as a separate detached process, so its
     # log has a different pid and is never excluded here.
     own = f"pipeline.{os.getpid()}.log"
-    paths = [p for p in glob.glob(os.path.join(_logs(), "pipeline.*.log"))
+    paths = []
+    for pat in ("pipeline.*.log", "archive/pipeline.*.log"):
+        paths.extend(glob.glob(os.path.join(_logs(), pat)))
+    paths = [p for p in paths
              if os.path.basename(p) != own
              and os.path.exists(p) and os.path.getsize(p) > 0]
     return sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
@@ -159,8 +202,11 @@ def run_phase(lookback: int = 500) -> dict:
     "idle".
     """
     total = len(stages.STAGES)
-    logs = _pipeline_logs()
-    newest = logs[-1] if logs else None
+    # The RUN's log, not merely the newest one: during a parallel clean every
+    # worker writes its own pipeline.<pid>.log (and any cybersec_slm process, a
+    # test included, drops a stub in logs/), so newest-by-mtime reads a log with
+    # no stage markers and reports "Starting..." for the whole stage.
+    newest = _current_run_log()
     lines: list[str] = []
     if newest and os.path.exists(newest):
         try:
@@ -390,7 +436,7 @@ def blank_license_links() -> list[str]:
 
 def raw_subdomains() -> list[str]:
     """Sorted Sub-Domains that have fetched data under ``data/raw/`` (for clean)."""
-    raw = os.path.join(_root(), "data", "raw")
+    raw = _raw()
     if not os.path.isdir(raw):
         return []
     try:
@@ -441,7 +487,7 @@ def clean_source_rows() -> list[dict]:
     offers the sources that have data to clean (matching the funnel's raw count) and
     skips folders that were created during ingest but produced no records.
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.isdir(raw_root):
         return []
     rows: list[dict] = []
@@ -514,22 +560,53 @@ def ingest_progress() -> dict:
     correctly: nearly every source was tried; not all yielded a downloadable
     corpus. Falls back to the on-disk folder count when the ledger is absent.
     """
-    with_data = _count_source_dirs(os.path.join(_root(), "data", "raw"),
+    with_data = _count_source_dirs(_raw(),
                                    require_data=True)
     checked = _completed_count() or with_data
     total = _catalog_total() or 0
     return {"checked": checked, "with_data": with_data, "total": total}
 
 
+def _jsonl_stats(path: str) -> tuple[int, int]:
+    """``(.jsonl file count, total bytes)`` under a directory tree.
+
+    Measures the *corpus* — the .jsonl files ingestion produced and cleaning
+    consumes — not everything on disk. A source that unpacked an archive can
+    leave millions of files behind in its ``_z`` scratch dir (see
+    :data:`cybersec_slm.cleaning.common.SCRATCH_DIRS`); those are neither corpus
+    nor worth a ``stat`` each, and pruning them is what keeps this walk fast.
+    """
+    from ..cleaning.common import SCRATCH_DIRS
+
+    files = 0
+    total = 0
+    try:
+        for r, dirs, fs in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
+            for f in fs:
+                if not f.lower().endswith(".jsonl") or f.lower().endswith(".original.jsonl"):
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(r, f))
+                    files += 1
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return files, total
+
+
 def raw_table() -> list[dict]:
-    """Per-source rows for what is physically under ``data/raw/`` (file count + size).
+    """Per-source rows for the .jsonl corpus under ``data/raw/`` (file count + size).
 
     One row per ``<sub-domain>/<source>`` folder, so the table maps the folder
-    tree exactly. Walks the whole raw tree once (100+ GB, so callers should cache
-    it), reporting on-disk bytes rather than catalog figures. Record counts are
-    omitted here because counting them means reading every JSONL line (minutes).
+    tree exactly. ``files`` / ``size_mb`` describe the .jsonl corpus (what was
+    actually ingested and will be cleaned), so they line up with the Records
+    column beside them; fetch scratch on disk is neither counted nor measured.
+    Record counts are omitted because counting them means reading every JSONL
+    line (minutes).
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.exists(raw_root):
         return []
     rows: list[dict] = []
@@ -540,14 +617,7 @@ def raw_table() -> list[dict]:
             for src in os.scandir(dom.path):
                 if not src.is_dir() or src.name.startswith("."):
                     continue
-                files, total = 0, 0
-                for r, _, fs in os.walk(src.path):
-                    for f in fs:
-                        try:
-                            total += os.path.getsize(os.path.join(r, f))
-                            files += 1
-                        except OSError:
-                            pass
+                files, total = _jsonl_stats(src.path)
                 rows.append({"sub-domain": dom.name, "source": src.name,
                              "files": files, "size_mb": total / (1024 * 1024)})
     except OSError:
@@ -601,12 +671,14 @@ def ingest_outcome() -> dict:
         except sqlite3.Error:
             pass
 
-    # Log next: fetch failures and timeouts carry the clearest reasons.
+    # Log next: fetch failures and timeouts carry the clearest reasons. Read the
+    # RUN's log (see _current_run_log) — a worker's log or a stub would carry no
+    # ingest summary at all.
     summary: dict | None = None
-    logs = _pipeline_logs()
-    if logs:
+    run_log = _current_run_log()
+    if run_log:
         try:
-            with open(logs[-1], encoding="utf-8", errors="replace") as f:
+            with open(run_log, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         except OSError:
             lines = []
@@ -742,7 +814,7 @@ def ingest_table(raw_rows: list[dict] | None = None) -> list[dict]:
     except Exception:
         return []
 
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     disk = {(r["sub-domain"], r["source"]): r
             for r in (raw_table() if raw_rows is None else raw_rows)}
     meta = _catalog_meta_by_folder()
@@ -809,7 +881,7 @@ def cleaned_table() -> list[dict]:
     one row per ``<sub-domain>/<source>`` folder with its JSONL record count and
     size on disk. Empty when nothing has been cleaned yet.
     """
-    clean_root = os.path.join(_root(), "data", "clean")
+    clean_root = _clean()
     if not os.path.exists(clean_root):
         return []
     out: list[dict] = []
@@ -947,22 +1019,255 @@ def _run_started_at() -> float | None:
     """Epoch start time of the current/last run.
 
     Prefers the dashboard control file's ``started_at`` (exact for runs launched
-    from the dashboard); falls back to the first timestamp of the newest pipeline
-    log (a CLI run has no control file). Returns None when neither is available.
+    from the dashboard); falls back to the first timestamp of the run's own log
+    (a CLI run has no control file). Returns None when neither is available.
     """
     from . import control
     ts = _parse_log_ts((control.status() or {}).get("started_at") or "")
     if ts is not None:
         return ts
-    logs = _pipeline_logs()
-    if not logs:
+    run_log = _current_run_log()
+    if not run_log:
         return None
     try:
-        with open(logs[-1], encoding="utf-8", errors="replace") as f:
+        with open(run_log, encoding="utf-8", errors="replace") as f:
             first = f.readline()
     except OSError:
         return None
     return _parse_log_ts(first.split("|", 1)[0] if "|" in first else first)
+
+
+def stage_progress_sample() -> dict | None:
+    """One cheap scalar of what the LIVE stage has produced so far.
+
+    ``{"stage", "label", "value", "unit", "what"}`` — or None when nothing is
+    running, or the live stage has no meaningful throughput to sample.
+
+    Each stage is measured in the unit it actually moves, which is why this is a
+    per-stage lookup rather than one number: sourcing accumulates catalog rows,
+    ingest finishes sources, clean grows ``data/clean`` on disk, and schema grows
+    the final dataset. EDA is a single scan with no incremental output, so it has
+    no sample.
+
+    Every branch must stay cheap enough to call once a second: this is sampled to
+    derive a rate, so an expensive read here would cost more than the work it
+    measures. That rules out record counts (reading every byte of data/clean) in
+    favour of bytes on disk.
+    """
+    if run_status()["state"] != "running":
+        return None
+    key = (run_phase() or {}).get("phase")
+    if key == "source":
+        return {"stage": key, "label": "Sourcing", "unit": "rows",
+                "what": "catalog rows discovered",
+                "value": float(_catalog_total() or 0)}
+    if key == "ingest":
+        return {"stage": key, "label": "Ingest", "unit": "sources",
+                "what": "sources fetched",
+                "value": float(_completed_count())}
+    if key == "clean":
+        return {"stage": key, "label": "Clean", "unit": "MB",
+                "what": "cleaned output on disk",
+                "value": _dir_size_mb(_clean())}
+    if key == "schema":
+        path = os.path.join(_final(), "dataset.jsonl")
+        size = os.path.getsize(path) / (1024 * 1024) if os.path.exists(path) else 0.0
+        return {"stage": key, "label": "Schema", "unit": "MB",
+                "what": "final dataset written", "value": size}
+    return None
+
+
+def stage_timeline() -> list[dict]:
+    """When each stage of the current/last run started and stopped.
+
+    One row per stage the run actually reached::
+
+        [{"stage", "label", "start_s", "end_s", "duration_s", "running"}, ...]
+
+    ``start_s`` / ``end_s`` are seconds since the run's first log line, so the x
+    axis is "time since the run began" and needs no wall-clock conversion. A stage
+    ends where the next one begins; the furthest stage reached runs to *now* while
+    the run is live, and to its last log line once it is not.
+
+    Read from the run's own log (see :func:`_current_run_log`) using the canonical
+    markers in :mod:`cybersec_slm.stages`, so it works for a dashboard run and a
+    bare CLI run alike. Stages that were skipped (a ``--resume`` plan drops
+    ``source``) never appear, because they never logged. Empty when no run has
+    logged anything.
+    """
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+
+    # First timestamped line is t=0. A loguru line is "<ts> | LEVEL | ...".
+    stamped: list[tuple[float, str]] = []
+    for ln in lines:
+        ts = _parse_log_ts(ln.split("|", 1)[0] if "|" in ln else ln)
+        if ts is not None:
+            stamped.append((ts, ln))
+    if not stamped:
+        return []
+    t0 = stamped[0][0]
+    last_ts = stamped[-1][0]
+
+    # Earliest timestamp at which each stage's marker appears.
+    starts: dict[str, float] = {}
+    for ts, ln in stamped:
+        for stage in stages.STAGES:
+            if stage.key in starts:
+                continue
+            if any(m in ln for m in stage.markers):
+                starts[stage.key] = ts
+
+    if not starts:
+        return []
+    # Pipeline order, not first-seen order: a later stage's marker can appear in
+    # an earlier stage's chatter, and the spine is the truth about progression.
+    ordered = [(k, starts[k]) for k in stages.stage_keys() if k in starts]
+    live = run_status()["state"] == "running"
+    now = time.time()
+
+    out: list[dict] = []
+    for i, (key, start) in enumerate(ordered):
+        if i + 1 < len(ordered):
+            end = ordered[i + 1][1]           # ends where the next stage begins
+            running = False
+        else:
+            end = now if live else last_ts    # the furthest stage reached
+            running = live
+        out.append({
+            "stage": key,
+            "label": stages.get_stage(key).label,
+            "start_s": max(start - t0, 0.0),
+            "end_s": max(end - t0, 0.0),
+            "duration_s": max(end - start, 0.0),
+            "running": running,
+        })
+    return out
+
+
+# Per-source raw .jsonl bytes, memoized: the clean ETA needs them every refresh
+# and data/raw does not change while cleaning runs.
+_RAW_SIZES_TTL_S = 60.0
+_raw_sizes_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _raw_sizes_by_sid() -> dict[str, int]:
+    """``{"<sub-domain>/<source>": jsonl_bytes}`` for every raw source with data."""
+    global _raw_sizes_cache
+    now = time.monotonic()
+    if _raw_sizes_cache is not None and now - _raw_sizes_cache[0] < _RAW_SIZES_TTL_S:
+        return _raw_sizes_cache[1]
+    raw_root = _raw()
+    sizes: dict[str, int] = {}
+    if os.path.isdir(raw_root):
+        try:
+            for dom in os.scandir(raw_root):
+                if not dom.is_dir() or dom.name.startswith("."):
+                    continue
+                for src in os.scandir(dom.path):
+                    if not src.is_dir() or src.name.startswith("."):
+                        continue
+                    files, total = _jsonl_stats(src.path)
+                    if files:
+                        sizes[f"{dom.name}/{src.name}"] = total
+        except OSError:
+            pass
+    _raw_sizes_cache = (now, sizes)
+    return sizes
+
+
+def _cleaned_ledger_sids() -> list[str]:
+    """Sources recorded cleaned, in the order they finished (append-only)."""
+    path = os.path.join(_logs(), "cleaned_sources.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return []
+
+
+def _resume_skipped() -> int:
+    """How many sources this run's clean stage skipped as already cleaned.
+
+    The ledger spans every resume, so it cannot say what *this* run has done. The
+    run logs the skip count at startup and the ledger is append-only, so the
+    entries past that mark are exactly this run's work.
+    """
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"clean: resume skipping (\d+) already-cleaned", ln)
+                if m:
+                    return int(m.group(1))
+    except OSError:
+        pass
+    return 0
+
+
+def _clean_workers() -> int:
+    """Worker count this run's clean pass reported (1 when it did not say)."""
+    path = _current_run_log()
+    if not path or not os.path.exists(path):
+        return 1
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.search(r"clean: parallelizing over (\d+) workers", ln)
+                if m:
+                    return max(int(m.group(1)), 1)
+    except OSError:
+        pass
+    return 1
+
+
+def clean_eta(elapsed_s: float) -> tuple[float | None, str]:
+    """``(remaining_seconds, basis)`` for the clean stage, measured in bytes.
+
+    Source count is the wrong unit: sources span a kilobyte to twenty gigabytes,
+    so "N of M sources" projects nonsense. Cleaning cost tracks records, and raw
+    .jsonl bytes are the cheapest close proxy.
+
+    Two corrections make this honest rather than merely linear:
+
+    * Only *this* run's sources count toward the rate (see :func:`_resume_skipped`);
+      dividing every resume's work by this run's elapsed would inflate it.
+    * The tail is bounded by the single biggest remaining source, because the pool
+      parallelises per source and one file is cleaned by one worker. A purely
+      linear projection promises a finish the scheduler cannot deliver, so the
+      estimate is the larger of the two.
+    """
+    sizes = _raw_sizes_by_sid()
+    if not sizes:
+        # No per-source signal to project from (raw purged, or already consumed).
+        return None, "finalizing"
+    ledger = _cleaned_ledger_sids()
+    done_this_run = ledger[_resume_skipped():]
+    done_bytes = sum(sizes.get(s, 0) for s in done_this_run)
+    if elapsed_s <= 0 or done_bytes <= 0:
+        return None, "clean-warmup"          # nothing finished yet: no rate to use
+
+    remaining = {s: n for s, n in sizes.items() if s not in set(ledger)}
+    if not remaining:
+        # Every source is cleaned, but the phase is still `clean`: this is the
+        # cross-source dedup tail, whose cost has nothing to do with the per-source
+        # rate. Saying "0 seconds" here would claim the run is done while a long
+        # pass is still going, so name the tail instead of inventing a number.
+        return None, "finalizing"
+    rate = done_bytes / elapsed_s                       # bytes/s, all workers
+    linear = sum(remaining.values()) / rate
+    # One source cannot go faster than one worker.
+    per_worker = rate / _clean_workers()
+    tail = max(remaining.values()) / per_worker if per_worker > 0 else 0.0
+    return max(linear, tail), "clean-bytes"
 
 
 def run_timing() -> dict:
@@ -995,7 +1300,13 @@ def run_timing() -> dict:
         eta_s = max(elapsed_s / completed * (total - completed), 0.0)
         total_s = elapsed_s + eta_s
         basis = "ingest-linear"
-    elif pkey in ("clean", "eda", "schema"):
+    elif pkey == "clean":
+        # Clean is the long pole on a large corpus, so "finalizing" was the least
+        # useful thing to say for the stage that takes the most wall-clock.
+        eta_s, basis = clean_eta(elapsed_s)
+        if eta_s is not None:
+            total_s = elapsed_s + eta_s
+    elif pkey in ("eda", "schema"):
         basis = "finalizing"
     else:
         basis = "starting"
@@ -1128,21 +1439,50 @@ def _dir_size_mb(path: str) -> float:
     return total / (1024 * 1024)
 
 
+# Per-file record-count memo: path -> (mtime, size, count). A cleaned .jsonl is
+# written once and then left alone, so its count cannot change while its (mtime,
+# size) identity holds. Without this, one count of data/clean re-read every byte
+# (32s at 9.5 GB, and it grows with the corpus) — on a 20s refresh the Overview
+# could never keep up with itself, which is what made the dashboard crawl during a
+# run. Bounded by the number of .jsonl files (hundreds), so it stays small.
+_JSONL_COUNT_MEMO: dict[str, tuple[float, int, int]] = {}
+
+
+def _count_file_records(path: str) -> int:
+    """Non-empty records in one .jsonl, re-read only when the file changed."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return 0
+    hit = _JSONL_COUNT_MEMO.get(path)
+    if hit is not None and hit[0] == stat.st_mtime and hit[1] == stat.st_size:
+        return hit[2]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            count = sum(1 for ln in f if ln.strip())
+    except OSError:
+        return 0
+    _JSONL_COUNT_MEMO[path] = (stat.st_mtime, stat.st_size, count)
+    return count
+
+
 def _count_jsonl_records(path: str) -> int:
-    """Count non-empty JSONL records under a directory tree."""
+    """Count non-empty JSONL records under a directory tree.
+
+    Per-file counts are memoized by (mtime, size), so a refresh during a run only
+    reads the files the workers actually touched.
+    """
     if not os.path.exists(path):
         return 0
+    from ..cleaning.common import SCRATCH_DIRS
+
     count = 0
     try:
-        for root, _, files in os.walk(path):
+        for root, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if d not in SCRATCH_DIRS]
             for name in files:
-                if name.endswith(".jsonl"):
-                    file_path = os.path.join(root, name)
-                    try:
-                        with open(file_path, encoding="utf-8", errors="replace") as f:
-                            count += sum(1 for ln in f if ln.strip())
-                    except OSError:
-                        pass
+                if name.endswith(".jsonl") and not name.endswith(".original.jsonl"):
+                    count += _count_file_records(os.path.join(root, name))
     except OSError:
         pass
     return count
@@ -1246,20 +1586,29 @@ def _catalog_lines_by_folder() -> dict:
 def _raw_on_disk_totals(measure_size: bool = True) -> dict:
     """Raw-stage totals restricted to sources physically present under ``data/raw/``.
 
-    Iterates the on-disk ``<sub-domain>/<source>`` folders and joins each to its
-    catalog line/size via :func:`_catalog_lines_by_folder`, so Sources, Records and
+    Iterates the on-disk ``<sub-domain>/<source>`` folders so Sources, Records and
     Size all describe the same population (the data actually on this machine) rather
     than the whole catalog. Only folders that actually hold a ``.jsonl`` file are
     counted, so a folder created during ingest that produced no records is excluded
-    (matching "produced data"); a counted folder the catalog has no measured figures
-    for contributes to the count but not the totals. Returns
-    ``{"sources", "lines", "size_mb"}`` (all zero when no raw tree exists).
+    (matching "produced data"). Returns ``{"sources", "lines", "size_mb"}`` (all
+    zero when no raw tree exists).
 
-    ``measure_size=False`` skips the per-source ``os.walk`` byte count (the slow
-    part: raw can be 100+ GB), returning ``size_mb`` = 0.0 so the caller can render
-    live source/record counts cheaply and fill size from a cached measurement.
+    Records are COUNTED ON DISK, not joined from the catalog's ``Total Lines``.
+    The catalog was measured against the live corpus and is not trustworthy: it
+    claimed 17,972,727 raw records where disk held 44,761,032 (+149%). 242 of the
+    370 fetched sources had no catalog figure at all — 14.4M records that the
+    funnel simply could not see — and among those it did have, 62 disagreed with
+    disk by more than 2% (Microsoft alone by 9.5M). A number that is fast and
+    wrong is worse than one that is slow and right, and the count is memoized per
+    file by (mtime, size) (:func:`_count_file_records`) then cached on a long TTL
+    (:func:`cached.raw_records`), so it is paid once per session.
+
+    ``measure_size=False`` skips both the per-source ``os.walk`` byte count and the
+    record scan (the slow parts: raw is ~90 GB of .jsonl), returning ``size_mb`` =
+    0.0 and ``lines`` = 0 so the caller can render live *source* counts cheaply and
+    fill both from the cached measurements.
     """
-    raw_root = os.path.join(_root(), "data", "raw")
+    raw_root = _raw()
     if not os.path.isdir(raw_root):
         return {"sources": 0, "lines": 0, "size_mb": 0.0}
 
@@ -1277,12 +1626,21 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
                 if not _folder_has_jsonl(src.path):
                     continue
                 sources += 1
-                ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
-                lines += ln
-                # Accurate on-disk size means an os.walk per source (raw is
-                # 100+ GB); the cheap live path uses the catalog's per-folder size
-                # instead so the funnel can refresh every second without a walk.
-                size_mb += _dir_size_mb(src.path) if measure_size else sz
+                _ln, sz = key_ls.get((dom.name, src.name), (0.0, 0.0))
+                # Measured size is fast enough (<5ms) for live refreshes.
+                # Lines are interpolated from the catalog's expectation to stay live
+                # without paying the massive cost of a full JSONL file read.
+                actual_size_mb = _jsonl_stats(src.path)[1] / (1024 * 1024)
+                if measure_size:
+                    lines += _count_jsonl_records(src.path)
+                else:
+                    if sz > 0:
+                        lines += _ln * (actual_size_mb / sz)
+                    elif actual_size_mb > 0:
+                        lines += _count_jsonl_records(src.path)
+                    else:
+                        lines += _ln
+                size_mb += actual_size_mb
     except OSError:
         pass
     return {"sources": sources, "lines": int(lines), "size_mb": size_mb}
@@ -1291,20 +1649,20 @@ def _raw_on_disk_totals(measure_size: bool = True) -> dict:
 def data_funnel(measure_size: bool = True) -> dict:
     """Aggregate Raw -> Cleaned -> Final metrics for the Overview funnel.
 
-    Source counts and sizes come from what is physically on disk under the data
-    root (the honest per-machine state); raw line/size totals come from the
-    catalog, which is authoritative and fast (a live count of the raw tree would
-    read 100+ GB). Cleaned and final counts are read directly since those trees
-    are small.
+    Every figure describes what is physically on disk under the data root (the
+    honest per-machine state). Raw *and* cleaned records are counted, never taken
+    from the catalog (whose ``Total Lines`` understated the live corpus by 149%)
+    nor from the clean report (which describes one pass rather than the corpus —
+    see the Cleaned block below), nor from the manifest (which only exists once a
+    normalize pass has finished — see the Final block below).
 
-    ``measure_size=False`` skips the two ``os.walk`` byte counts (raw + clean) and
-    the ``data/clean`` JSONL record scan, returning those figures as 0 so the
-    Overview can refresh live source/record counts every second cheaply and pull
-    sizes from a cached snapshot. Callers that need sizes (the cached wrappers and
-    the per-stage pages) keep the default.
+    ``measure_size=False`` skips the byte counts and every record scan, returning
+    those figures as 0 so the Overview can refresh live *source* counts every
+    second cheaply and fill records/sizes from cached snapshots
+    (:func:`cached.raw_records`, :func:`cached.cleaned_records`,
+    :func:`cached.raw_size_mb`, :func:`cached.final_stats`). Callers that need
+    them (the cached wrappers and the per-stage pages) keep the default.
     """
-    man = manifest()
-    rc = clean_report()
     nr = normalize_report()
 
     # Raw: count the source folders present and derive line totals only for
@@ -1315,24 +1673,32 @@ def data_funnel(measure_size: bool = True) -> dict:
     raw_lines = raw_totals["lines"] if raw_sources else 0
     raw_size_mb = raw_totals["size_mb"] if raw_sources else 0.0
 
-    # Cleaned: prefer the clean report total when available, otherwise count the
-    # actual JSONL records present under data/clean/ so the UI remains informative.
-    # The clean tree is small, so its size is always measured; only the expensive
-    # per-record JSONL scan is skipped in the cheap (live) path (the report total
-    # covers it once a clean run has produced one).
-    clean_root = os.path.join(_root(), "data", "clean")
+    # Cleaned: count what is physically under data/clean/. The clean report's TOTAL
+    # is a per-PASS statistic and must NOT be used as the corpus size — a --resume
+    # pass rewrites the report from only the sources it cleaned (the rest are
+    # skipped via the ledger), and final_global_dedup deletes records from
+    # data/clean after the report is written. Disk is the only figure that stays
+    # true across resumes and dedup. The per-record scan is memoized per file
+    # (see _count_file_records), so a refresh only re-reads what changed; the cheap
+    # live path still skips it and the Overview fills it from a short-TTL cache.
+    clean_root = _clean()
     cleaned_size_mb = _dir_size_mb(clean_root)
     cleaned_sources = _count_source_dirs(clean_root)
-    cleaned_lines = int(rc.get("total", {}).get("out", 0)) if rc.get("total") else 0
-    if cleaned_lines == 0 and measure_size:
-        cleaned_lines = _count_jsonl_records(clean_root)
+    cleaned_lines = _count_jsonl_records(clean_root) if measure_size else 0
 
-    # Final: manifest is the canonical source of truth.
+    # Final: counted from dataset.jsonl, NOT from the manifest. The manifest is
+    # only written when a whole normalize pass finishes, so during a run (and
+    # after any interrupted one) it is absent while the dataset is large and
+    # growing: the row read 0 sources / 0 records beside a multi-GB Size. Same
+    # rule as Raw and Cleaned above - disk is the only figure that survives a
+    # resume. The scan is incremental (see final_stats), so the cost is paid once.
     final_file = os.path.join(_final(), "dataset.jsonl")
     appended_size_mb = (os.path.getsize(final_file) / (1024 * 1024)
                         if os.path.exists(final_file) else 0.0)
-    appended_lines = man.get("record_count", 0) if man else 0
-    appended_sources = len(man.get("sources", {})) if man else 0
+    fs = final_stats.scan(final_file) if measure_size else final_stats.FinalStats()
+    appended_lines = fs.records
+    appended_sources = fs.sources
+    appended_tokens = fs.tokens
 
     # Normalization losses - shown in the funnel so the cleaned→final drop is explained.
     norm_counts = (nr or {}).get("counts", {})
@@ -1347,6 +1713,7 @@ def data_funnel(measure_size: bool = True) -> dict:
         "appended": {
             "sources": appended_sources,
             "lines": appended_lines,
+            "tokens": appended_tokens,
             "size_mb": appended_size_mb,
             "synthetic_excluded": synthetic_excluded,
             "near_dups": near_dups,
@@ -1455,84 +1822,57 @@ def loss_breakdown() -> dict:
 
 
 # -------------------------------------------------------------- stage funnels -
-def sourcing_funnel() -> dict:
-    """What the last sourcing run pulled back, and what it kept — a strict funnel.
+def sourcing_totals() -> dict:
+    """Every discovery run added up: how much was looked at to build this catalog.
 
-    Reads the ``funnel`` block of the newest ``summary-*.json`` (written by
-    :func:`cybersec_slm.sourcing.run.discover`) and turns it into display rows::
+    The per-run funnel in each ``summary-*.json`` answers "where did this run's
+    hits go". It cannot answer the question an operator actually asks, which is
+    what the catalog cost: 1,020 sources were not found in one run, and the newest
+    summary knows nothing about the ones before it. This reads every summary.
 
-        {"ran": bool, "found": int,
-         "rows": [{"stage", "detail", "count", "pct"} ...],   # the funnel, in order
-         "restricted_hosts": [{"host", "count"} ...],         # legal-scope cost
-         "by_domain": [{"sub-domain", "found", "dropped", "candidates", "kept_pct"}]}
+    ``ratio`` is hits examined per source appended, which is the honest headline:
+    "looked through 41,000 results to catalog 1,020 sources" says whether the
+    keywords are aimed well far better than any single run's numbers do.
 
-    ``ran`` is False on a fresh checkout, or when the newest summary predates the
-    funnel block (an older run) — the caller shows a hint rather than a table of
-    zeros that looks like a run which found nothing.
+    Returns zeros and ``runs: 0`` when no run has recorded a funnel yet (the
+    funnel post-dates some summaries), rather than pretending.
     """
-    summ = latest_source_summary() or {}
-    f = summ.get("funnel") or {}
-    if not f:
-        return {"ran": False, "found": 0, "rows": [], "restricted_hosts": [],
-                "by_domain": []}
+    paths = sorted(glob.glob(os.path.join(_logs(), "discovered", "summary-*.json")))
+    totals = {"runs": 0, "with_funnel": 0, "found": 0, "dropped": 0,
+              "duplicates": 0, "candidates": 0, "unprocessed": 0, "appended": 0,
+              "new": 0, "dropped_by": {}, "license": {}, "elapsed_s": 0.0}
+    for path in paths:
+        summ = _read_json(path)
+        if not summ:
+            continue
+        totals["runs"] += 1
+        totals["new"] += _to_int(summ, "new")
+        totals["appended"] += _to_int(summ, "appended")
+        try:
+            totals["elapsed_s"] += float(summ.get("elapsed_s") or 0)
+        except (TypeError, ValueError):
+            pass
+        fn = summ.get("funnel")
+        if not fn:
+            # Pre-funnel runs still count toward runs/appended: they really did
+            # add sources. Their hits are simply unknown, which `with_funnel`
+            # makes visible rather than burying in a total that looks complete.
+            continue
+        totals["with_funnel"] += 1
+        for key in ("found", "duplicates", "candidates", "unprocessed"):
+            totals[key] += _to_int(fn, key)
+        totals["dropped"] += _to_int(fn, "dropped_total")
+        for cat, n in (fn.get("dropped") or {}).items():
+            totals["dropped_by"][cat] = totals["dropped_by"].get(cat, 0) + int(n or 0)
+        for verdict, n in (fn.get("license") or {}).items():
+            totals["license"][verdict] = totals["license"].get(verdict, 0) + int(n or 0)
 
-    found = _to_int(f, "found")
+    totals["ratio"] = (round(totals["found"] / totals["appended"], 1)
+                       if totals["appended"] else 0.0)
+    totals["dropped_by"] = dict(sorted(totals["dropped_by"].items(),
+                                       key=lambda kv: (-kv[1], kv[0])))
+    return totals
 
-    def pct(n: int) -> float:
-        return round(100 * n / found, 1) if found else 0.0
-
-    dropped = f.get("dropped") or {}
-    lic = f.get("license") or {}
-    rows = [{"stage": "search hits", "detail": "returned by SearXNG",
-             "count": found, "pct": 100.0 if found else 0.0}]
-    rows += [{"stage": f"dropped: {cat}",
-              "detail": _DROP_DETAIL.get(cat, ""),
-              "count": _to_int(dropped, cat), "pct": pct(_to_int(dropped, cat))}
-             for cat in dropped]
-    rows += [
-        {"stage": "dropped: duplicate", "detail": "already in the catalog, or seen this run",
-         "count": _to_int(f, "duplicates"), "pct": pct(_to_int(f, "duplicates"))},
-        {"stage": "candidates", "detail": "survived the filters, licence resolved",
-         "count": _to_int(f, "candidates"), "pct": pct(_to_int(f, "candidates"))},
-        {"stage": "  licence ok", "detail": "clearly commercial -> keepable",
-         "count": _to_int(lic, "ok"), "pct": pct(_to_int(lic, "ok"))},
-        {"stage": "  licence unknown", "detail": "blank or unrecognised -> needs a human",
-         "count": _to_int(lic, "unknown"), "pct": pct(_to_int(lic, "unknown"))},
-        {"stage": "  licence blocked", "detail": "confirmed red (copyleft / NC / ARR)",
-         "count": _to_int(lic, "blocked"), "pct": pct(_to_int(lic, "blocked"))},
-        {"stage": "appended", "detail": "written to the catalog",
-         "count": _to_int(f, "appended"), "pct": pct(_to_int(f, "appended"))},
-    ]
-    unprocessed = _to_int(f, "unprocessed")
-    if unprocessed:
-        rows.insert(-4, {
-            "stage": "unprocessed",
-            "detail": "fetched, but the run hit its cap/budget before examining them",
-            "count": unprocessed, "pct": pct(unprocessed)})
-
-    by_domain = []
-    for dom, d in sorted((f.get("by_domain") or {}).items()):
-        dfound = _to_int(d, "found")
-        by_domain.append({
-            "sub-domain": dom, "found": dfound, "dropped": _to_int(d, "dropped"),
-            "candidates": _to_int(d, "candidates"),
-            "kept_pct": (round(100 * _to_int(d, "candidates") / dfound, 1)
-                         if dfound else 0.0),
-        })
-
-    hosts = [{"host": h, "count": n}
-             for h, n in (f.get("restricted_by_host") or {}).items()]
-    return {"ran": True, "found": found, "rows": rows,
-            "restricted_hosts": hosts, "by_domain": by_domain}
-
-
-# Drop category -> the one-line explanation shown next to it.
-_DROP_DETAIL = {
-    "bad link": "empty or host-less URL",
-    "junk host": "social / video / Q&A host",
-    "restricted host": "licence bars commercial reuse (see docs/sources/legal_scope.md)",
-    "listing page": "a search / tag / topic page, not a single source",
-}
 
 # Ingest status -> (display label, why). Mirrors ingest_table()'s `status` values.
 _INGEST_STATUS = {
@@ -1652,3 +1992,4 @@ def sidecar(kind: str, limit: int = 100) -> list[dict]:
         if len(out) >= limit:
             break
     return out
+

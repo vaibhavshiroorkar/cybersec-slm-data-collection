@@ -1,3 +1,4 @@
+﻿import csv
 import json
 import os
 
@@ -19,6 +20,26 @@ def _read_all(root):
                 with open(os.path.join(r, fn), encoding="utf-8") as f:
                     text += f.read()
     return text
+
+
+class _StubR:
+    def redact(self, text):
+        return text, 0
+
+
+class _StubL:
+    def detect(self, text):
+        return "en"
+
+    def lang_allowed(self, lang):
+        return True
+
+
+class _StubT:
+    backend = "stub"
+
+    def translate(self, text, src=None):
+        return text, True
 
 
 def _redirect_outputs(monkeypatch, tmp_path):
@@ -277,6 +298,221 @@ def test_cleaner_cache_builds_transformers_once(tmp_path, monkeypatch):
     pipeline.reset_cleaner_cache()
 
 
+def test_clean_one_source_scans_only_its_own_folder(tmp_path, monkeypatch):
+    """clean_one_source walks only its own source folder, not the whole raw tree.
+
+    data/raw holds millions of non-.jsonl fetch artifacts next to a few hundred
+    .jsonl inputs, so walking the whole tree to find one source's files cost
+    minutes — and it ran once per source, in every worker.
+    """
+    pipeline.reset_cleaner_cache()
+
+    class _R:
+        def redact(self, text):
+            return text, 0
+
+    class _L:
+        def detect(self, text):
+            return "en"
+
+        def lang_allowed(self, lang):
+            return True
+
+    class _T:
+        backend = "stub"
+
+        def translate(self, text, src=None):
+            return text, True
+
+    monkeypatch.setattr(pipeline, "Redactor", _R)
+    monkeypatch.setattr(pipeline, "LangFilter", _L)
+    monkeypatch.setattr(pipeline, "Translator", _T)
+
+    clean_dir = _redirect_outputs(monkeypatch, tmp_path)
+    corpus = tmp_path / "corpus"
+    body = ("A sufficiently long english sentence that survives the anomaly and "
+            "structural checks without being dropped from the corpus today.")
+    _write_jsonl(str(corpus / "Dom" / "srcA" / "a.jsonl"),
+                 [{"source": "a", "url": "", "license": "", "text": body}])
+    _write_jsonl(str(corpus / "Dom" / "srcB" / "b.jsonl"),
+                 [{"source": "b", "url": "", "license": "", "text": body}])
+
+    walked: list[str] = []
+    real_find = pipeline.find_input_files
+
+    def _spy(input_dir):
+        walked.append(os.path.abspath(input_dir))
+        return real_find(input_dir)
+
+    monkeypatch.setattr(pipeline, "find_input_files", _spy)
+
+    rows = pipeline.clean_one_source(str(corpus / "Dom" / "srcA"),
+                                     raw_root=str(corpus), clean_data_dir=clean_dir)
+
+    # The walk is scoped to the source folder — the raw root is never walked.
+    assert walked == [os.path.abspath(str(corpus / "Dom" / "srcA"))]
+    # Outputs are still named relative to raw_root, so data/clean mirrors data/raw.
+    assert rows and rows[0]["file"] == "Dom/srcA/a.jsonl"
+    assert rows[0]["sub_domain"] == "Dom" and rows[0]["source"] == "srcA"
+    assert os.path.exists(os.path.join(clean_dir, "Dom", "srcA", "a.jsonl"))
+    assert not os.path.exists(os.path.join(clean_dir, "Dom", "srcB"))
+    pipeline.reset_cleaner_cache()
+
+
+def test_report_rows_merge_across_resumed_passes(tmp_path, monkeypatch):
+    """A resumed pass adds to the clean report instead of replacing it.
+
+    run_clean only holds the rows for sources IT cleaned — a resume skips the rest
+    via the ledger — so writing the report from that subset alone shrank it to the
+    resumed sources, making every per-mechanism counter describe part of the corpus
+    while claiming to describe all of it.
+    """
+    monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+
+    first = [{"sub_domain": "Dom", "source": "s1", "file": "Dom/s1/a.jsonl",
+              **{k: 0 for k in pipeline.REPORT_COLS[3:]}}]
+    first[0]["in"], first[0]["out"], first[0]["pii_redacted"] = 10, 8, 2
+    pipeline._write_report(first)
+
+    # A later --resume pass cleans only s2 and knows nothing about s1.
+    second = [{"sub_domain": "Dom", "source": "s2", "file": "Dom/s2/b.jsonl",
+               **{k: 0 for k in pipeline.REPORT_COLS[3:]}}]
+    second[0]["in"], second[0]["out"], second[0]["pii_redacted"] = 5, 4, 1
+    pipeline._write_report(pipeline.merge_report_rows(second))
+
+    with open(os.path.join(str(tmp_path / "reports"), "clean_report.csv"),
+              encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    files = [r for r in rows if r["sub_domain"] != "TOTAL"]
+    total = next(r for r in rows if r["sub_domain"] == "TOTAL")
+
+    assert sorted(r["file"] for r in files) == ["Dom/s1/a.jsonl", "Dom/s2/b.jsonl"]
+    assert total["in"] == "15" and total["out"] == "12"     # both passes, not just s2
+    assert total["pii_redacted"] == "3"
+
+
+def test_report_rows_merge_updates_a_recleaned_source(tmp_path, monkeypatch):
+    """Re-cleaning a source replaces its row rather than duplicating it."""
+    monkeypatch.setattr(pipeline, "REPORTS", str(tmp_path / "reports"))
+
+    def _row(out):
+        r = {"sub_domain": "Dom", "source": "s1", "file": "Dom/s1/a.jsonl",
+             **{k: 0 for k in pipeline.REPORT_COLS[3:]}}
+        r["in"], r["out"] = 10, out
+        return r
+
+    pipeline._write_report([_row(8)])
+    pipeline._write_report(pipeline.merge_report_rows([_row(6)]))
+
+    with open(os.path.join(str(tmp_path / "reports"), "clean_report.csv"),
+              encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    files = [r for r in rows if r["sub_domain"] != "TOTAL"]
+    total = next(r for r in rows if r["sub_domain"] == "TOTAL")
+    assert len(files) == 1 and files[0]["out"] == "6"       # the re-clean wins
+    assert total["out"] == "6"                              # not 14
+
+
+def test_shard_files_leaves_small_files_whole(tmp_path):
+    """Almost every source keeps its exact current single output file."""
+    f = tmp_path / "a.jsonl"
+    f.write_bytes(b'{"t":1}\n' * 100)
+    out = pipeline.shard_files([(str(f), "Dom", "src", "Dom/src/a.jsonl")],
+                               min_bytes=10_000, target_records=10)
+    assert out == [(str(f), "Dom", "src", "Dom/src/a.jsonl", 0, None)]
+
+
+def test_shard_files_splits_a_big_file_into_windows(tmp_path):
+    f = tmp_path / "big.jsonl"
+    f.write_bytes(b'{"t":1}\n' * 25)                       # 25 records
+    out = pipeline.shard_files([(str(f), "Dom", "src", "Dom/src/big.jsonl")],
+                               min_bytes=1, target_records=10)
+    assert [(o[3], o[4], o[5]) for o in out] == [
+        ("Dom/src/big.p000.jsonl", 0, 10),
+        ("Dom/src/big.p001.jsonl", 10, 20),
+        ("Dom/src/big.p002.jsonl", 20, 25),
+    ]
+
+
+def test_shard_size_is_capped_by_bytes_for_huge_records(tmp_path):
+    """A row count alone is the wrong shard size.
+
+    This corpus has files whose records average ~400 KB, where 20k records is
+    still a multi-GB shard and one worker owns the tail again. The byte cap must
+    bite first for those, while ordinary small-record files keep using the row
+    count.
+    """
+    fat = tmp_path / "fat.jsonl"
+    fat.write_bytes(b'{"t":"' + b"x" * 994 + b'"}\n' * 1)      # 1 record ~1 KB
+    with open(fat, "wb") as f:
+        for _ in range(10):
+            f.write(b'{"t":"' + b"x" * 994 + b'"}\n')          # 10 records, ~10 KB
+    # Byte budget of 2 KB over ~1 KB records -> ~2 records per shard, not 20k.
+    monkey_target_bytes = 2 * 1024
+    import cybersec_slm.cleaning.pipeline as p
+    old = p.SHARD_TARGET_BYTES
+    p.SHARD_TARGET_BYTES = monkey_target_bytes
+    try:
+        out = p.shard_files([(str(fat), "Dom", "src", "Dom/src/fat.jsonl")],
+                            min_bytes=1, target_records=20_000)
+    finally:
+        p.SHARD_TARGET_BYTES = old
+    assert len(out) == 5                       # 10 records / 2 per shard
+    assert [(o[4], o[5]) for o in out][:2] == [(0, 2), (2, 4)]
+
+
+def test_shard_names_preserve_sorted_order(tmp_path):
+    """final_global_dedup walks data/clean sorted and keeps the FIRST copy of a
+    duplicate, so shard names must sit exactly where the original file sat -
+    otherwise sharding would silently change which source a shared record is
+    attributed to."""
+    big = tmp_path / "a.jsonl"
+    big.write_bytes(b'{"t":1}\n' * 25)
+    small = tmp_path / "b.jsonl"
+    small.write_bytes(b'{"t":1}\n')
+    out = pipeline.shard_files(
+        [(str(big), "Dom", "src", "Dom/src/a.jsonl"),
+         (str(small), "Dom", "src", "Dom/src/b.jsonl")],
+        min_bytes=10, target_records=10)
+    rels = sorted(o[3] for o in out)
+    # every shard of a.jsonl still sorts before b.jsonl, and in record order
+    assert rels == ["Dom/src/a.p000.jsonl", "Dom/src/a.p001.jsonl",
+                    "Dom/src/a.p002.jsonl", "Dom/src/b.jsonl"]
+
+
+def test_sharding_cleans_the_same_records_as_one_whole_file(tmp_path, monkeypatch):
+    """The quality guarantee: a window only selects WHICH records a worker reads,
+    so the cleaned corpus is the same set either way."""
+    monkeypatch.setattr(pipeline, "Redactor", _StubR)
+    monkeypatch.setattr(pipeline, "LangFilter", _StubL)
+    monkeypatch.setattr(pipeline, "Translator", _StubT)
+    pipeline.reset_cleaner_cache()
+
+    corpus = tmp_path / "corpus"
+    recs = [{"source": "x", "url": "", "license": "",
+             "text": f"A distinct english cleaning record number {i} long enough "
+                     "to survive the structural and anomaly gates."}
+            for i in range(25)]
+    _write_jsonl(str(corpus / "Dom" / "src" / "a.jsonl"), recs)
+    files = [(str(corpus / "Dom" / "src" / "a.jsonl"), "Dom", "src",
+              "Dom/src/a.jsonl")]
+
+    whole = str(tmp_path / "whole")
+    for chunk in pipeline.shard_files(files, min_bytes=10 ** 9, target_records=10):
+        pipeline.clean_chunk(chunk, clean_data_dir=whole)
+
+    sharded = str(tmp_path / "sharded")
+    chunks = pipeline.shard_files(files, min_bytes=1, target_records=10)
+    assert len(chunks) == 3                                  # actually sharded
+    for chunk in chunks:
+        pipeline.clean_chunk(chunk, clean_data_dir=sharded)
+
+    # Same records out, regardless of how the file was divided across workers.
+    assert sorted(_read_all(whole).splitlines()) == sorted(
+        _read_all(sharded).splitlines())
+    pipeline.reset_cleaner_cache()
+
+
 def test_resume_dedup_skips_done_files(tmp_path, monkeypatch):
     """resume=True reloads the checkpoint, skips already-finished files, and still
     dedups a newly added file against the persisted exact-hash set."""
@@ -297,3 +533,4 @@ def test_resume_dedup_skips_done_files(tmp_path, monkeypatch):
         assert rec in f.read()                          # Alpha untouched
     with open(os.path.join(clean_dir, "Beta", "b.jsonl"), encoding="utf-8") as f:
         assert f.read().strip() == ""                   # Beta dup dropped
+

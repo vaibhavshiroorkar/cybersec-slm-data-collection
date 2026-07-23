@@ -1,6 +1,7 @@
-import sys
+﻿import sys
 import time
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.dashboard import control
 
 DUMMY = [sys.executable, "-c", "import time; time.sleep(30)"]
@@ -23,7 +24,7 @@ def test_start_status_stop(tmp_path, monkeypatch):
         res = control.start(_command=DUMMY)
         assert res["ok"] is True and res["pid"]
         # control file written under logs/
-        assert (tmp_path / "logs" / control.CONTROL_NAME).exists()
+        assert (tmp_path / "logs" / PROFILE / control.CONTROL_NAME).exists()
         st = control.status()
         assert st["running"] is True and st["pid"] == res["pid"]
         # double start is refused
@@ -40,10 +41,54 @@ def test_start_status_stop(tmp_path, monkeypatch):
     assert control.status()["running"] is False
 
 
+def test_status_resume_reflects_the_command_actually_launched(tmp_path, monkeypatch):
+    """status() must report what is RUNNING, not what the caller asked for.
+
+    A full run's argv is built per stage from that page's saved settings, so a
+    saved ``resume: true`` on the Clean page puts ``--resume`` in the plan even
+    when the caller passed ``resume=False``. status() used to echo the caller's
+    flag, so it announced a fresh run while the pipeline resumed — and skipped
+    every source in the ledger.
+    """
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage",
+                        lambda key: {"resume": True} if key == "clean" else {})
+    monkeypatch.setattr(control, "_spawn_detached", lambda cmd, root, logs: 4242)
+    try:
+        control.start(stage="all", resume=False,
+                      settings={"skip_source": True, "skip_ingest": True})
+        st = control.status()
+        assert st["resume"] is True, "a plan containing --resume must report resume=True"
+    finally:
+        control._clear_control()
+
+
+def test_explicit_resume_false_overrides_a_saved_resume(tmp_path, monkeypatch):
+    """An explicit override must be able to force a run to be fresh."""
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage",
+                        lambda key: {"resume": True} if key == "clean" else {})
+    plan = control.build_full_plan(
+        {"skip_source": True, "skip_ingest": True, "resume": False}, resume=False)
+    assert not any("--resume" in argv for argv in plan)
+
+
+def test_status_resume_false_for_a_fresh_plan(tmp_path, monkeypatch):
+    _use_root(tmp_path, monkeypatch)
+    monkeypatch.setattr(control.settings_store, "get_stage", lambda key: {})
+    monkeypatch.setattr(control, "_spawn_detached", lambda cmd, root, logs: 4243)
+    try:
+        control.start(stage="all", resume=False,
+                      settings={"skip_source": True, "skip_ingest": True})
+        assert control.status()["resume"] is False
+    finally:
+        control._clear_control()
+
+
 def test_stale_control_reads_idle(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
-    logs = tmp_path / "logs"
-    logs.mkdir()
+    logs = tmp_path / "logs" / PROFILE
+    logs.mkdir(parents=True, exist_ok=True)
     (logs / control.CONTROL_NAME).write_text(
         '{"pid": 999999, "started_at": "x", "resume": false}', encoding="utf-8")
     st = control.status()
@@ -53,16 +98,16 @@ def test_stale_control_reads_idle(tmp_path, monkeypatch):
 
 def test_reset_deletes_data_and_logs(tmp_path, monkeypatch):
     _use_root(tmp_path, monkeypatch)
-    (tmp_path / "data" / "clean").mkdir(parents=True)
-    (tmp_path / "data" / "clean" / "x.jsonl").write_text("{}", encoding="utf-8")
-    (tmp_path / "logs" / "eda").mkdir(parents=True)
-    (tmp_path / "logs" / "clean_report.csv").write_text("a", encoding="utf-8")
+    (tmp_path / "data" / PROFILE / "clean").mkdir(parents=True)
+    (tmp_path / "data" / PROFILE / "clean" / "x.jsonl").write_text("{}", encoding="utf-8")
+    (tmp_path / "logs" / PROFILE / "eda").mkdir(parents=True)
+    (tmp_path / "logs" / PROFILE / "clean_report.csv").write_text("a", encoding="utf-8")
     res = control.reset()
     assert res["ok"] is True
     assert set(res["removed"]) == {"data", "logs"}
     assert res["skipped"] == []
-    assert not (tmp_path / "data").exists()
-    assert not (tmp_path / "logs").exists()
+    assert not (tmp_path / "data" / PROFILE).exists()
+    assert not (tmp_path / "logs" / PROFILE).exists()
 
 
 def test_reset_removes_readonly_files(tmp_path, monkeypatch):
@@ -72,8 +117,8 @@ def test_reset_removes_readonly_files(tmp_path, monkeypatch):
     import stat
 
     _use_root(tmp_path, monkeypatch)
-    (tmp_path / "data" / "raw").mkdir(parents=True)
-    ro = tmp_path / "data" / "raw" / "locked.jsonl"
+    (tmp_path / "data" / PROFILE / "raw").mkdir(parents=True)
+    ro = tmp_path / "data" / PROFILE / "raw" / "locked.jsonl"
     ro.write_text("{}", encoding="utf-8")
     os.chmod(ro, stat.S_IREAD)           # read-only: the case that used to leak
     try:
@@ -81,7 +126,7 @@ def test_reset_removes_readonly_files(tmp_path, monkeypatch):
         assert res["ok"] is True
         assert "data" in res["removed"]
         assert res["skipped"] == []
-        assert not (tmp_path / "data").exists()
+        assert not (tmp_path / "data" / PROFILE).exists()
     finally:
         if ro.exists():
             os.chmod(ro, stat.S_IWRITE)
@@ -94,7 +139,7 @@ def test_reset_refused_while_running(tmp_path, monkeypatch):
         res = control.reset()
         assert res["ok"] is False
         assert "stop the running pipeline" in res["error"]
-        assert (tmp_path / "logs" / control.CONTROL_NAME).exists()
+        assert (tmp_path / "logs" / PROFILE / control.CONTROL_NAME).exists()
     finally:
         control.stop()
 
@@ -284,3 +329,4 @@ def test_build_command_eda_taxonomy_agnostic_thresholds():
 def test_build_command_eda_tunables_dropped_for_ingest_stage():
     cmd = control.build_command("ingest", settings={"min_total_records": 100})
     assert "--min-total-records" not in _joined(cmd)
+

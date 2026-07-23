@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Commercial-only license gate for ingestion.
 
 A source is fetched only if its license clearly permits *unencumbered commercial
@@ -31,6 +31,8 @@ from __future__ import annotations
 import os
 import re
 from typing import Literal
+
+from ..core import logger
 
 # Non-commercial, copyleft, share-alike, proprietary, or unresolved-restrictive.
 # `lgpl`/`agpl` are listed explicitly because a `\bgpl\b` boundary would not match
@@ -65,7 +67,17 @@ _ALLOW = re.compile(
     # sourcing.taxonomies.OWNED_LICENSE) and never scraped off a page, so a
     # third-party source cannot talk its way past the gate by printing these words
     # — the host has to be on the profile's owned list for the stamp to be applied.
-    r"first[- ]party|owner[- ]authori[sz]ed"
+    r"first[- ]party|owner[- ]authori[sz]ed|"
+    # A metadata-only index (title/date/URL). Facts, not copyrightable, so it is
+    # the one usable form of an All-Rights-Reserved source's feed. The label is
+    # never scraped: rss.scrape_rss stamps it only when it has actually reduced the
+    # record to its facts, so the claim and the record cannot diverge.
+    r"metadata index|"
+    # GODL-India (Government Open Data License - India), the licence on data.gov.in.
+    # It permits use, adaptation and derivative works "for all lawful commercial
+    # and non-commercial purposes" with attribution -- clearly commercial. See
+    # docs/sources/legal_scope.md, which lists data.gov.in as allowed.
+    r"godl|government open data license"
     r")\b"
 )
 
@@ -116,12 +128,74 @@ def license_verdict(raw: str | None) -> Literal["ok", "blocked", "unknown"]:
     return "unknown"
 
 
+# The only values that turn the gate off. Everything else, including anything
+# unrecognized, leaves it on: see _enforced.
+_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
 def _enforced() -> bool:
-    """Whether the gate is active (default on; env can turn it off)."""
+    """Whether the gate is active. Default on, and it fails closed.
+
+    This switch decides whether a confirmed-red licence gets fetched, so a value
+    it does not understand must never be read as "off". It used to test for
+    membership of the *on* words and return False for anything else, which meant
+    a typo (``yess``), a wrong-shaped value (``2``) or an empty assignment
+    (``CYBERSEC_SLM_ENFORCE_LICENSE_GATE=``) silently disabled the gate for every
+    source. Now only an explicit, recognized off value disables it; anything
+    unrecognized enforces and says so, because a switch that quietly does the
+    dangerous thing on a typo is worse than no switch.
+    """
     env = os.environ.get("CYBERSEC_SLM_ENFORCE_LICENSE_GATE")
     if env is None:
         return True
-    return env.strip().lower() in ("1", "true", "yes", "on")
+    val = env.strip().lower()
+    if val in _OFF_VALUES:
+        return False
+    if val not in _ON_VALUES:
+        logger.warning(
+            f"CYBERSEC_SLM_ENFORCE_LICENSE_GATE={env!r} is not a recognized "
+            f"value; keeping the licence gate ON. Use one of "
+            f"{sorted(_OFF_VALUES)} to disable it.")
+    return True
+
+
+def _fetch_hf_license(ref: str) -> str | None:
+    try:
+        from huggingface_hub import dataset_info
+        info = dataset_info(ref, token=os.environ.get("HF_TOKEN"))
+        if info and getattr(info, "cardData", None):
+            lic = info.cardData.get("license", None)
+            if isinstance(lic, list):
+                return " ".join(str(l) for l in lic)
+            elif lic:
+                return str(lic)
+    except Exception as e:
+        logger.debug(f"Failed to fetch HF license for {ref}: {e}")
+    return None
+
+
+def _fetch_github_license(url: str) -> str | None:
+    if not url: return None
+    import requests
+    m = re.search(r"github\.com/([^/]+)/([^/]+)", url)
+    if m:
+        owner, repo = m.groups()
+        repo = repo.replace(".git", "")
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/license"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            headers["Authorization"] = f"token {token}"
+        try:
+            r = requests.get(api_url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                lic = data.get("license", {})
+                return lic.get("spdx_id") or lic.get("name")
+        except Exception as e:
+            logger.debug(f"Failed to fetch GitHub license for {url}: {e}")
+    return None
 
 
 def is_license_ok(descriptor: dict) -> tuple[bool, str]:
@@ -133,4 +207,28 @@ def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     """
     if not _enforced():
         return True, "license-gate-disabled"
-    return classify_license(descriptor.get("license"))
+        
+    lic_str = descriptor.get("license")
+    
+    # 1. Classify the existing string first
+    verdict = license_verdict(lic_str)
+    if verdict == "ok":
+        return True, classify_license(lic_str)[1]
+    elif verdict == "blocked":
+        return False, classify_license(lic_str)[1]
+        
+    # 2. It's unknown/missing. Fetch it if possible!
+    kind = descriptor.get("kind")
+    fetched = None
+    if kind == "hf":
+        fetched = _fetch_hf_license(descriptor.get("ref"))
+    elif kind == "github":
+        fetched = _fetch_github_license(descriptor.get("url") or descriptor.get("start_url"))
+        
+    if fetched:
+        logger.info(f"Dynamically fetched missing license: {fetched!r}")
+        return classify_license(fetched)
+        
+    # Fallback to the original classification which will return False for unknown
+    return classify_license(lic_str)
+

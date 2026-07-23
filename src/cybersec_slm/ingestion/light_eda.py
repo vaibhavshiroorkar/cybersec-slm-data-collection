@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Per-source light EDA — the ingestion-gate quality check.
 
 Runs immediately after a source is fetched and converted to JSONL, *before*
@@ -85,6 +85,22 @@ def _has_jsonl_files(folder: str) -> bool:
     for _ in find_input_files(folder):
         return True
     return False
+
+
+# Hazard severities, least to most serious. Mirrors hazard_scan.scan_record's two
+# levels; an unknown value sorts lowest rather than raising, so a new severity
+# added there degrades to "reported" instead of breaking the ingest gate.
+_SEVERITY_ORDER = ("info", "warning")
+
+
+def _worse(candidate: str | None, current: str | None) -> bool:
+    """True when ``candidate`` is a more serious severity than ``current``."""
+    def rank(s: str | None) -> int:
+        try:
+            return _SEVERITY_ORDER.index(s or "info")
+        except ValueError:
+            return 0
+    return current is None or rank(candidate) > rank(current)
 
 
 def assess_source(folder: str, descriptor: dict, *,
@@ -194,12 +210,23 @@ def assess_source(folder: str, descriptor: dict, *,
     hazards = hazard_scan.scan_source_sample(records, max_records=SAMPLE_SIZE) \
         if scan_hazards else []
     if hazards:
-        # Summarize by type for the report (don't include full snippets at source level)
+        # Summarize by type for the report (don't include full snippets at source
+        # level). Each finding carries its own severity (scan_record assigns
+        # "warning" to script/iframe, javascript: and shell metacharacters, "info"
+        # to the rest); this used to hardcode "info" here and throw that away, so
+        # every hazard reached the report looking equally unremarkable. Collapsing
+        # by type means one row stands for many findings, so the row takes the
+        # worst severity among them: an operator scanning the column needs to see
+        # the reason to look, not whichever finding happened to sort last.
         type_counts: dict[str, int] = {}
+        type_severity: dict[str, str] = {}
         for h in hazards:
-            type_counts[h["type"]] = type_counts.get(h["type"], 0) + 1
+            t = h["type"]
+            type_counts[t] = type_counts.get(t, 0) + 1
+            if _worse(h.get("severity"), type_severity.get(t)):
+                type_severity[t] = h.get("severity") or "info"
         report["flags"]["security_hazards"] = [
-            {"type": t, "count": c, "severity": "info"}
+            {"type": t, "count": c, "severity": type_severity.get(t, "info")}
             for t, c in sorted(type_counts.items())
         ]
         logger.info(f"  light-eda FLAG {label}: {len(hazards)} security hazard(s) "
@@ -239,3 +266,4 @@ def reject_source(folder: str, report: dict) -> None:
     except OSError:
         pass
     logger.info(f"  light-eda: rejected source moved to {dest}")
+

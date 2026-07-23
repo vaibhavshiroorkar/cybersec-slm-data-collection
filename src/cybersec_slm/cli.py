@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Unified command-line entry point for the pipeline.
 
 Full pipeline (end-to-end):
@@ -53,6 +53,21 @@ def _physical_cores() -> int:
 # pass runs once afterward regardless), so the CLI defaults the clean pool to the
 # physical cores. Capped at 8 to bound per-worker memory; pass 1 for sequential.
 _DEFAULT_CLEAN_WORKERS = min(_physical_cores(), 8)
+
+
+def _apply_pii_engine(args) -> None:
+    """Publish ``--pii-engine`` to the environment for the clean stage.
+
+    An environment variable rather than a module global on purpose: the clean
+    stage runs in *spawned* pool workers, which re-import the cleaning modules
+    from scratch and would never observe an assignment made in this process. The
+    environment is the one channel that crosses that boundary (children inherit
+    it), which is the same mechanism ``CYBERSEC_SLM_PII_MAX_CHARS`` and
+    ``CYBERSEC_SLM_TRANSLATE`` already use.
+    """
+    engine = getattr(args, "pii_engine", None)
+    if engine:
+        os.environ["CYBERSEC_SLM_PII_ENGINE"] = engine
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -118,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="MinHash permutation count (default 128)")
     c.add_argument("--allowed-langs", nargs="*", default=None,
                    help="language codes to keep (default: en)")
+    c.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
+                   help="PII redaction engine (default: presidio). 'presidio' adds a "
+                        "scoped spaCy NER pass for person names on top of the regex "
+                        "pass, at roughly 300x the cost per record; needs "
+                        "`uv sync --extra pii-ner`")
 
     # ── normalize / schema (stage 5) ──────────────────────────────────────────
     n = sub.add_parser("normalize", aliases=["schema"],
@@ -189,6 +209,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip the security-hazard scan (script/iframe injection, "
                          "base64 blobs, malware TLDs) during the light-EDA gate; "
                          "default: scan")
+    ig.add_argument("--extractor", choices=("default", "trafilatura"),
+                    default=None,
+                    help="how a crawled page becomes text. 'default' strips known "
+                         "boilerplate tags and keeps the rest; 'trafilatura' "
+                         "detects the main content, dropping menus/sidebars/cookie "
+                         "banners the tag list cannot see (needs the 'crawl' extra; "
+                         "falls back to default if absent). Affects website sources "
+                         "only, on re-crawl.")
     ig.add_argument("--domains", nargs="*", default=None,
                     help="fetch only these Sub-Domains (selective ingest; a fresh "
                          "run wipes only their data/raw/<domain>/ folders)")
@@ -249,6 +277,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="SearXNG base URL (env: SEARXNG_URL; default http://localhost:8080)")
     d.add_argument("--language", default="en",
                    help="SearXNG search language (default: en)")
+    d.add_argument("--countries", nargs="*", default=None,
+                   help="filter sources by these countries (injected into query)")
+    d.add_argument("--fields", nargs="*", default=None,
+                   help="filter sources by these fields (injected into query)")
     d.add_argument("--no-enrich", action="store_true",
                    help="skip fetching per-source metadata (size, license, last "
                         "updated, author, popularity, tags) from the source host; "
@@ -276,6 +308,26 @@ def build_parser() -> argparse.ArgumentParser:
                     help="write Is Synthetic?=Yes for high-confidence gaps "
                          "(review-level matches are never auto-applied)")
 
+    # ── review (model-judged curation aid) ────────────────────────────────────
+    rv = sub.add_parser("review",
+                        help="judge each catalogued source against a plain-English "
+                             "condition with a model; propose-only unless --apply")
+    rv.add_argument("--condition", default=None,
+                    help='what a source must satisfy to stay, in plain English '
+                         '(e.g. "the data must concern India"). Required unless '
+                         "--apply replays an existing report.")
+    rv.add_argument("--sources", default=None,
+                    help="catalog CSV to review (default: the active profile's "
+                         "Sources.csv)")
+    rv.add_argument("--apply", action="store_true",
+                    help="move declined sources to the profile's Excluded.csv. "
+                         "With --condition it re-reviews then applies; alone it "
+                         "replays the newest report, so what you read is what is "
+                         "applied. Low-confidence and 'review' verdicts never move.")
+    rv.add_argument("--report", default=None,
+                    help="with --apply alone, the report to replay "
+                         "(default: the newest under logs/reviews/)")
+
     # ── profile (switch which corpus the pipeline builds) ─────────────────────
     pr = sub.add_parser("profile",
                         help="list / show / switch the pipeline profile "
@@ -293,15 +345,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="schema domain_name label (default: NAME upper-cased)")
     pr_new.add_argument("--use", action="store_true",
                         help="activate the new profile straight away")
-
-    # ── flow (Prefect orchestration) ──────────────────────────────────────────
-    fl = sub.add_parser("flow",
-                        help="run the Prefect build-corpus flow (needs orchestration extra)")
-    fl.add_argument("--sources", default=None, help="path to a sources .csv")
-    fl.add_argument("--no-enforce-eda", action="store_true",
-                    help="run the EDA gate in report-only mode")
-    fl.add_argument("--dvc-push", action="store_true",
-                    help="snapshot + push the dataset to the DVC remote")
 
     # ── dashboard (Streamlit monitor + explorer) ──────────────────────────────
     db = sub.add_parser("dashboard",
@@ -343,6 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "(abandon a hung source; default 1800)")
     a.add_argument("--no-crawler", action="store_true",
                    help="skip website (crawl) sources during ingest for this run")
+    a.add_argument("--pii-engine", choices=("regex", "presidio"), default=None,
+                   help="PII redaction engine for the clean stage (default: presidio). "
+                        "'presidio' adds a scoped spaCy NER pass for person names at "
+                        "roughly 300x the cost per record; needs "
+                        "`uv sync --extra pii-ner`")
     a.add_argument("--no-hazard-scan", action="store_true",
                    help="skip the security-hazard scan (script/iframe injection, "
                         "base64 blobs, malware TLDs) during the light-EDA gate; "
@@ -400,8 +448,44 @@ def _run_profile(args) -> None:
               "page, or edit keywords.yaml in that directory.")
 
 
+def _migrate_layout() -> None:
+    """Move a pre-profile ``data/``/``logs/`` under the active profile, if needed.
+
+    Best-effort and loud: if the rename fails (on Windows, a process still holding
+    a log file open), say so and carry on with whatever layout is there rather than
+    refusing to run. Nothing is copied or deleted, so a failed attempt leaves the
+    corpus exactly as it was.
+    """
+    from . import core
+    try:
+        moved = core.migrate_layout()
+    except OSError as e:
+        core.logger.warning(
+            f"could not move the corpus under its profile ({e}); it is untouched. "
+            f"Close any running pipeline and retry.")
+        return
+    if moved:
+        core.logger.info(
+            f"moved {', '.join(moved)}/ under profile {core.active_profile()!r}: "
+            f"each profile now keeps its own corpus and logs")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+
+    # Move a pre-profile corpus under its profile, once, before any stage reads a
+    # path. Here rather than at core's import because a ProcessPoolExecutor worker
+    # re-imports core, and several processes racing to rename the same tree is how
+    # you lose it. This is the single-process entry point every stage comes
+    # through, and it is a no-op once the move has happened.
+    _migrate_layout()
+
+    # The crawl extractor travels by environment, not by argument: the chain from
+    # here to the choice is run_ingest -> pool worker -> crawl subprocess, and the
+    # environment already crosses both boundaries. Same idiom as
+    # $CYBERSEC_SLM_TRANSLATE / $CYBERSEC_SLM_PII_MAX_CHARS.
+    if getattr(args, "extractor", None):
+        os.environ["CYBERSEC_SLM_EXTRACTOR"] = args.extractor
 
     if args.stage == "profile":
         _run_profile(args)
@@ -410,6 +494,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.action is None:
             # Stage 3: clean the whole raw tree + cross-source dedup.
             from .cleaning import common as clean_common
+            _apply_pii_engine(args)
             if args.min_text_chars is not None:
                 clean_common.MIN_TEXT_CHARS = args.min_text_chars
             if args.max_text_chars is not None:
@@ -488,11 +573,6 @@ def main(argv: list[str] | None = None) -> None:
         from .eda import run_eda
         run_eda(args.input, enforce=not args.no_enforce, profile=args.profile)
 
-    elif args.stage == "flow":
-        from .orchestration.flows import build_corpus
-        build_corpus(args.sources, enforce_eda=not args.no_enforce_eda,
-                     dvc_push=args.dvc_push)
-
     elif args.stage == "validate":
         from .cleaning.schema import validate_corpus
         validate_corpus()
@@ -500,6 +580,29 @@ def main(argv: list[str] | None = None) -> None:
     elif args.stage == "synthetic-scan":
         from .sourcing.synthetic_scan import run_scan
         run_scan(args.sources, apply=args.apply)
+
+    elif args.stage == "review":
+        from .sourcing import review as _review
+        if args.condition:
+            out = _review.run_scan(args.condition, args.sources, apply=args.apply)
+            c = out["counts"]
+            print(f"review: approve={c['approve']} decline={c['decline']} "
+                  f"review={c['review']}  ->  {out['report']}")
+            if not args.apply:
+                print(f"review: propose-only; re-run with --apply to move the "
+                      f"{c['decline']} declined source(s)")
+        elif args.apply:
+            # Replay a recorded report: no second, different set of model calls,
+            # so what was read is exactly what is applied.
+            res = _review.apply_report(args.report, spec=args.sources)
+            if not res["report"]:
+                raise SystemExit("review: no report to apply — run "
+                                 '`review --condition "..."` first')
+            print(f"review: moved {res['moved']} source(s) from "
+                  f"{os.path.basename(res['report'])}")
+        else:
+            raise SystemExit('review: pass --condition "..." to review the '
+                             "catalog, or --apply to replay the newest report")
 
     elif args.stage == "dashboard":
         from .dashboard.launch import launch
@@ -530,7 +633,8 @@ def main(argv: list[str] | None = None) -> None:
                 site_scope=not args.no_site_scope,
                 quality_filter=not args.no_quality_filter,
                 workers=args.workers or 12, enrich=not args.no_enrich,
-                engines=args.engines, target_per_domain=args.target_per_domain)
+                engines=args.engines, target_per_domain=args.target_per_domain,
+                countries=args.countries, fields=args.fields)
         except SearchError as e:
             raise SystemExit(f"source: discovery could not run: {e}") from None
         print(f"source: {summary['found']} hits, {summary['new']} new, "
@@ -544,6 +648,7 @@ def main(argv: list[str] | None = None) -> None:
         if getattr(args, "no_auto_rebalance", False):
             from .eda import config as eda_config
             eda_config.AUTO_REBALANCE = False
+        _apply_pii_engine(args)
         from .ingestion import parallel
         parallel.run_v2_pipeline(
             args.sources,
@@ -562,3 +667,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

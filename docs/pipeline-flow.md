@@ -1,4 +1,4 @@
-# Following the data through the pipeline
+﻿# Following the data through the pipeline
 
 This is the journey of one piece of data, from a name on a list to a finished line
 in the training set. Read it top to bottom and you are walking the same path the
@@ -315,8 +315,7 @@ produced it, and the breakdown by topic and license:
 This is what lets you trust the dataset later, and what lets you scope and roll back
 a bad batch if one is ever found instead of discarding the whole thing. Because
 `unique_content_hashes` and `dataset_sha256` are recorded, you can prove a release
-is exactly what it claims to be. For repeatable releases, [`dvc.yaml`](../dvc.yaml)
-wraps this same build so `dataset.jsonl` and `manifest.json` can be versioned to S3.
+is exactly what it claims to be.
 
 And that is the whole trip. A name on a list becomes a licensed download, becomes a
 flattened JSONL record, gets cleaned and masked and deduplicated, clears a quality
@@ -512,3 +511,4 @@ If you want to see any step for yourself, this is where each pile lives:
 
 For the exact commands and flags, see [commands.md](commands.md). For the reasoning
 behind the design, see [architecture/architecture.md](architecture/architecture.md).
+

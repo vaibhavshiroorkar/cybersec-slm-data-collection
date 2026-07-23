@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Schema (stage 5): the release dataset, its manifest, and a corpus browser.
 
 Read-only. Re-run normalize and watch the log from the Overview page; every value
@@ -27,11 +27,17 @@ norm_tab, fields_tab, manifest_tab, browse_tab = st.tabs(
 # ------------------------------------------------------------- normalize -------
 with norm_tab:
     with ui.section("Normalization"):
-        appended = cached.data_funnel(data.data_root())["appended"]
-        c = st.columns(3)
+        appended = cached.data_funnel(data.scope())["appended"]
+        c = st.columns(4)
         c[0].metric("Sources", charts.fmt_int(appended["sources"]))
         c[1].metric("Records written", charts.fmt_int(appended["lines"]))
         c[2].metric("Size", charts.fmt_size(appended["size_mb"]))
+        # Summed from each record's token_count as the dataset is scanned, not read
+        # off the manifest: the manifest only exists once a normalize pass has
+        # finished, and this number is wanted most while one is still running.
+        c[3].metric("Tokens", charts.fmt_int(appended["tokens"]),
+                    help="Total tokens across `data/final/dataset.jsonl`, summed "
+                         "from every record's `token_count`.")
 
         nr = data.normalize_report()
         if nr:
@@ -166,3 +172,4 @@ with browse_tab:
                     ui.table(preview)
                 else:
                     st.caption(f"No `{kind}` records.")
+

@@ -1,10 +1,11 @@
-"""End-to-end tests for the normalize orchestrator."""
+﻿"""End-to-end tests for the normalize orchestrator."""
 
 from __future__ import annotations
 
 import json
 import os
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.normalize import pipeline
 from cybersec_slm.normalize.schema import CanonicalRecord
 
@@ -22,7 +23,7 @@ def _redirect(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "REJECTED", str(norm / "rejected.jsonl"))
     monkeypatch.setattr(pipeline, "DUPLICATES", str(norm / "duplicates.jsonl"))
     monkeypatch.setattr(pipeline, "DEDUP_SCORES", str(norm / "scores.jsonl"))
-    monkeypatch.setattr(pipeline, "REPORT", str(tmp_path / "logs" / "report.json"))
+    monkeypatch.setattr(pipeline, "REPORT", str(tmp_path / "logs" / PROFILE / "report.json"))
     return norm
 
 
@@ -76,3 +77,4 @@ def test_debug_flag_includes_raw_record(tmp_path, monkeypatch):
     pipeline.Normalizer(resume=False).run(input_dir=str(cdata))
     rej = (norm / "rejected.jsonl").read_text(encoding="utf-8")
     assert "tiny" in rej                            # raw record present under debug
+

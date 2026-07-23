@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Clean (stage 3): inspect the cleaned corpus under data/clean/.
 
 Read-only. Run this stage and watch the log from the Overview page; every value
@@ -17,7 +17,7 @@ st.caption("Cleaned and cross-source deduplicated records under `data/clean/`. "
            "Run this stage from the Overview page.")
 
 # ------------------------------------------------------------------ stats ------
-funnel = cached.data_funnel(data.data_root())
+funnel = cached.data_funnel(data.scope())
 cleaned = funnel["cleaned"]
 with ui.section("Cleaned"):
     c = st.columns(3)
@@ -80,7 +80,7 @@ with ui.section("Per-source cleaning stats",
 # ----------------------------------------------------------- cleaned table -----
 with ui.section("Cleaned sources", "What is physically under `data/clean/` now, "
                                    "measured on disk."):
-    ct_disk = cached.cleaned_table(data.data_root())
+    ct_disk = cached.cleaned_table(data.scope())
     if ct_disk:
         st.caption(f"{len(ct_disk)} sources under `data/clean/`.")
         ui.table(ct_disk, height=340)
@@ -117,3 +117,4 @@ with ui.section("Where did my data go?"):
                  for r in rows[:200]], height=300)
         else:
             st.caption("No per-source clean rows yet.")
+

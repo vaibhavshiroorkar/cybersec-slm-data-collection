@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Pipeline — runs the cleaning stages in flowchart order over data/raw.
 
     Sanitize -> Anomaly Check -> Dedup -> PII Removal -> Language filter -> data/clean/
@@ -39,7 +39,11 @@ from .langfilter import LangFilter
 from .pii import Redactor
 from .translate import Translator
 
-DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.json")   # exact-hash set
+DEDUP_CKPT = os.path.join(LOGS, "dedup_checkpoint.txt")    # exact-hash journal
+# The pre-journal format. Kept only so reset_dedup_state can clear it: a stale
+# JSON checkpoint left beside the new one would never be read (the journal path
+# differs) but would sit there looking authoritative.
+DEDUP_CKPT_LEGACY = os.path.join(LOGS, "dedup_checkpoint.json")
 DEDUP_DONE = os.path.join(LOGS, "dedup_done.json")         # files finished this pass
 DEDUP_CKPT_INTERVAL_S = 30.0                               # min seconds between checkpoints
 
@@ -213,6 +217,132 @@ def reset_cleaner_cache() -> None:
     _cleaner_cache.clear()
 
 
+def _source_files(source_dir: str, raw_root: str) -> list[tuple[str, str, str, str]]:
+    """One source folder's .jsonl inputs as (abs_path, sub_domain, source, rel).
+
+    Scans only `source_dir`, but names each output by its path relative to
+    `raw_root`, so data/clean mirrors data/raw. Scoping the walk is what keeps a
+    clean pass affordable: data/raw holds millions of non-.jsonl fetch artifacts
+    beside a few hundred .jsonl inputs, so walking the whole tree costs minutes —
+    a cost that would otherwise be paid once per source, in every worker.
+    """
+    source_dir = os.path.abspath(source_dir)
+    raw_root = os.path.abspath(raw_root)
+    files: list[tuple[str, str, str, str]] = []
+    for ap, _sub, _source, _rel in find_input_files(source_dir):
+        rel = os.path.relpath(ap, raw_root).replace("\\", "/")
+        parts = rel.split("/")
+        sub = parts[0] if parts else "unknown"
+        source = parts[1] if len(parts) > 2 else (parts[0] if parts else "unknown")
+        files.append((ap, sub, source, rel))
+    return files
+
+
+# Sharding thresholds. The pool parallelises per SOURCE and clean_files walks a
+# source's files in order, so one huge file pins exactly one worker: on this
+# corpus a single 20 GB source needed ~50h on its worker while the other five sat
+# idle. Splitting that file into windows lets the pool work on it together.
+#
+# Only files past MIN_BYTES are considered, for two reasons: sharding a small file
+# buys nothing, and deciding to shard costs a full line count (records, not bytes,
+# are what a window addresses) which is far too expensive to pay for every file.
+SHARD_MIN_BYTES = 256 * 1024 * 1024
+SHARD_TARGET_RECORDS = 20_000
+# Record count alone is the wrong size for a shard: this corpus holds files whose
+# records average ~400 KB, where 20k records is still an 8 GB shard and one worker
+# is back to owning the whole tail. Cap a shard by bytes too, using the file's own
+# mean record size, so a shard is a similar amount of WORK whatever the row shape.
+SHARD_TARGET_BYTES = 256 * 1024 * 1024
+
+
+def count_records(path: str) -> int:
+    """Line count of a .jsonl, read as bytes (never decodes, never builds strings)."""
+    n = 0
+    try:
+        with open(path, "rb") as f:
+            for _ in f:
+                n += 1
+    except OSError:
+        return 0
+    return n
+
+
+def shard_files(files, *, min_bytes: int | None = None,
+                target_records: int | None = None) -> list[tuple]:
+    """Expand ``(ap, sub, source, rel)`` inputs into ``(..., out_rel, start, end)``.
+
+    A file under ``min_bytes`` yields exactly one window covering all of it, so
+    the overwhelming majority of sources keep their current single output file and
+    layout. A file over it is split into ``target_records``-sized windows, each
+    writing its own ``<stem>.pNNN.jsonl``.
+
+    The shard name is chosen so the *sorted* order of data/clean is unchanged:
+    ``a.p000.jsonl`` still sorts after any earlier file and before ``b.jsonl``,
+    exactly where ``a.jsonl`` sat. That matters because ``final_global_dedup``
+    walks in sorted order and keeps the first copy of a duplicate — reordering the
+    tree would silently change which source a shared record is attributed to.
+
+    Records themselves are untouched: a window only selects which records a worker
+    reads, so the cleaned output is the same set either way.
+
+    The thresholds resolve at call time, not as default arguments: a default binds
+    the module constant once at import and could never be tuned afterwards.
+    """
+    min_bytes = SHARD_MIN_BYTES if min_bytes is None else min_bytes
+    target_records = SHARD_TARGET_RECORDS if target_records is None else target_records
+    out: list[tuple] = []
+    for ap, sub, source, rel in files:
+        try:
+            size = os.path.getsize(ap)
+        except OSError:
+            size = 0
+        if size < min_bytes:
+            out.append((ap, sub, source, rel, 0, None))   # whole file, one window
+            continue
+        total = count_records(ap)
+        if total <= 1:
+            out.append((ap, sub, source, rel, 0, None))
+            continue
+        # Whichever limit bites first: row count for ordinary records, bytes for
+        # the huge-record files where 20k rows would still be a multi-GB shard.
+        by_bytes = max(1, int(SHARD_TARGET_BYTES // max(size // total, 1)))
+        step = max(1, min(target_records, by_bytes))
+        if total <= step:
+            out.append((ap, sub, source, rel, 0, None))
+            continue
+        stem = rel[:-6] if rel.endswith(".jsonl") else rel
+        for i, start in enumerate(range(0, total, step)):
+            end = min(start + step, total)
+            out.append((ap, sub, source, f"{stem}.p{i:03d}.jsonl", start, end))
+    return out
+
+
+def clean_chunk(chunk: tuple, *, clean_data_dir: str | None = None,
+                flagged_dir: str | None = None, dropped_dir: str | None = None,
+                limit: int | None = None,
+                drop_non_english: bool = False) -> list[dict]:
+    """Clean one ``(ap, sub, source, out_rel, start, end)`` window.
+
+    The per-source deduper is disabled here exactly as it is for a whole source
+    (cross-source dedup is deferred to :func:`final_global_dedup`), so splitting a
+    file across workers cannot change what dedup does — there is no per-source
+    dedup state for a shard boundary to divide.
+
+    Every output root is an argument that resolves at call time. A pool worker is
+    a *spawned* process: it re-imports this module and rebuilds ``OUT_CLEAN_DATA``
+    from the real data root, so a worker that read the module global would ignore
+    a caller's redirected paths entirely and write into the live corpus.
+    """
+    deduper = Deduper(enabled=False)
+    return clean_files(
+        [chunk], deduper=deduper, redactor=_cleaner(Redactor),
+        langf=_cleaner(LangFilter), translator=_cleaner(Translator),
+        out_cleaned=clean_data_dir if clean_data_dir is not None else OUT_CLEAN_DATA,
+        out_flagged=flagged_dir if flagged_dir is not None else OUT_FLAGGED,
+        out_dropped=dropped_dir if dropped_dir is not None else OUT_DROPPED,
+        limit=limit, drop_non_english=drop_non_english)
+
+
 def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
                      clean_data_dir: str = OUT_CLEAN_DATA,
                      limit: int | None = None,
@@ -228,10 +358,7 @@ def clean_one_source(source_dir: str, *, raw_root: str = RAW_DATA,
     they are reused from a process-local cache (`_cleaner`) rather than rebuilt for
     every source.
     """
-    source_dir = os.path.abspath(source_dir)
-    files = [t for t in find_input_files(raw_root)
-             if os.path.abspath(t[0]).startswith(source_dir + os.sep)
-             or os.path.abspath(t[0]) == source_dir]
+    files = _source_files(source_dir, raw_root)
     if not files:
         return []
     deduper = Deduper(enabled=False)
@@ -259,15 +386,7 @@ def clean_source_folder(folder: str, *, redactor, langf, translator,
     single time in the parent. Cross-source global dedup is deferred to
     `final_global_dedup`, so the deduper here is disabled. Returns report rows.
     """
-    folder = os.path.abspath(folder)
-    raw_root = os.path.abspath(raw_root)
-    files: list[tuple[str, str, str, str]] = []
-    for ap, _sub, _source, _rel in find_input_files(folder):
-        rel = os.path.relpath(ap, raw_root).replace("\\", "/")
-        parts = rel.split("/")
-        sub = parts[0] if parts else "unknown"
-        source = parts[1] if len(parts) > 2 else (parts[0] if parts else "unknown")
-        files.append((ap, sub, source, rel))
+    files = _source_files(folder, raw_root)
     if not files:
         return []
     deduper = Deduper(enabled=False)
@@ -283,7 +402,7 @@ def reset_dedup_state() -> None:
     Called at the start of a fresh (non-resume) build so a stale checkpoint from a
     previous corpus can never flag this build's records as duplicates.
     """
-    for p in (DEDUP_CKPT, DEDUP_DONE):
+    for p in (DEDUP_CKPT, DEDUP_CKPT_LEGACY, DEDUP_DONE):
         try:
             os.remove(p)
         except FileNotFoundError:
@@ -406,9 +525,59 @@ def final_global_dedup(clean_data_dir: str = OUT_CLEAN_DATA, *,
     return stats
 
 
+def _report_path() -> str:
+    return os.path.join(REPORTS, "clean_report.csv")
+
+
+def _coerce_counts(row: dict) -> dict:
+    """A report row with its counter cells as ints.
+
+    CSV gives every cell back as a string; the in-memory rows a pass produces hold
+    ints. Merging the two without this makes `_write_report`'s totalling add a str
+    to an int.
+    """
+    out = dict(row)
+    for col in REPORT_COLS[3:]:
+        try:
+            out[col] = int(float(out.get(col) or 0))
+        except (TypeError, ValueError):
+            out[col] = 0
+    return out
+
+
+def read_report_rows() -> list[dict]:
+    """Per-source rows already in the clean report (the TOTAL row excluded)."""
+    path = _report_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            return [_coerce_counts(r) for r in csv.DictReader(f)
+                    if r.get("sub_domain") != "TOTAL"]
+    except OSError:
+        return []
+
+
+def merge_report_rows(new_rows: list[dict]) -> list[dict]:
+    """``new_rows`` merged over the rows already in the report, keyed by ``file``.
+
+    A pass only holds the rows for the sources it actually cleaned: a ``--resume``
+    run skips the rest via the ledger, and a selective run only touches the chosen
+    sub-domains. Writing the report from that subset alone silently shrank it to
+    those sources, so every counter derived from it described part of the corpus
+    while claiming to describe all of it. Keying on ``file`` means a re-cleaned
+    source updates its row instead of duplicating it, which keeps the merge
+    idempotent across repeated resumes.
+    """
+    merged = {r.get("file"): r for r in read_report_rows()}
+    for r in new_rows:
+        merged[r.get("file")] = r
+    return list(merged.values())
+
+
 def _write_report(rows: list[dict]) -> str:
     os.makedirs(REPORTS, exist_ok=True)
-    path = os.path.join(REPORTS, "clean_report.csv")
+    path = _report_path()
     totals = _new_counts()
     for r in rows:
         for k in totals:
@@ -503,3 +672,4 @@ def build_report_from_outputs() -> str:
     dropped = count_tree(OUT_DROPPED)
     logger.info(f"outputs -> cleaned={cleaned} flagged={flagged} dropped={dropped}")
     return f"cleaned={cleaned} flagged={flagged} dropped={dropped}"
+

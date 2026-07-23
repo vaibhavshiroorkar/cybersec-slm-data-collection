@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Streamlit entrypoint: the Overview control center.
 
 Runs the whole pipeline and shows live status, the corpus funnel, and the release
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import time
 
 import streamlit as st
 
@@ -22,6 +23,28 @@ st.set_page_config(page_title="cybersec-slm dashboard", layout="wide")
 ui.inject_css()
 
 ui.app_header("cybersec-slm-data-collection")
+
+
+@st.cache_resource
+def _migrate_once() -> list[str]:
+    """Move a pre-profile corpus under its profile, once per dashboard process.
+
+    ``cache_resource`` so it runs on the first script execution and not on every
+    rerun: the move is two renames and idempotent, but a Streamlit page re-executes
+    top to bottom on every interaction and there is no reason to keep asking.
+    """
+    from cybersec_slm import core
+    try:
+        return core.migrate_layout()
+    except OSError as e:
+        core.logger.warning(f"could not move the corpus under its profile ({e})")
+        return []
+
+
+if _migrate_once():
+    st.info(f"Moved the existing corpus under the `{data.active_profile()}` "
+            f"profile. Each profile now keeps its own `data/` and `logs/`, so "
+            f"switching profiles shows that profile's corpus rather than this one.")
 
 
 # ---------------------------------------------------------------- live strip ---
@@ -57,17 +80,12 @@ def _live() -> None:
                   "finished": "done"}.get(t.get("basis"), "—")
         top[3].metric("Est. total", _basis if running else "—")
 
-    # Live sources bar + "Stage N of 5" caption, shown only while a run is active.
+    # "Stage N of 5" caption, shown only while a run is active. The sources-checked
+    # bar that used to sit here is gone: the corpus funnel renders the same figure
+    # from the same ingest_progress() a few hundred pixels below, so the Overview
+    # showed one progress bar twice.
     if running:
-        ip = data.ingest_progress()
-        total = ip.get("total") or 0
-        checked = ip.get("checked") or 0
-        pct = (checked / total) if total else 0.0
-        st.progress(min(pct, 1.0),
-                    text=f"Ingest  ·  {charts.fmt_int(checked)} / "
-                         f"{charts.fmt_int(total)} sources ({pct * 100:.0f}%)"
-                         if total else
-                         f"Ingest  ·  {charts.fmt_int(checked)} sources")
+        checked = data.ingest_progress().get("checked") or 0
         idx, tot = phase.get("index"), phase.get("total")
         if idx and tot:
             st.caption(f"Stage {idx} of {tot}  ·  {phase.get('label', '')}")
@@ -99,11 +117,31 @@ with ui.section("Run the full pipeline"):
     stage_labels = ["Sourcing", "Ingest", "Clean", "EDA", "Schema"]
 
     # Connected pill toggle bar: lit = will run this launch, dimmed = skipped. All
-    # five lit by default (the full pipeline).
+    # five lit until told otherwise (the full pipeline).
+    #
+    # The selection is persisted rather than held in widget state. Streamlit drops
+    # a widget's state as soon as a rerun does not render it, so visiting any other
+    # page reset the toggles to all-five, and a dimmed stage quietly came back. It
+    # is saved per profile, alongside the per-stage settings, so it also survives a
+    # restart: a stage the operator turned off stays off until they turn it on.
+    _saved = control.settings_store.get_stage("overview").get("stages")
+    _default = ([label for label in stage_labels if label in _saved]
+                if isinstance(_saved, list) else stage_labels)
+    # Re-hydrate the widget's own key rather than passing default=. Streamlit
+    # ignores `default` once the key exists in session state, and drops that key
+    # the moment a rerun does not render the widget, so `default` alone restores
+    # the saved value on some navigations and not others. Seeding the key when it
+    # is missing restores it on every path into this page, and Streamlit then
+    # owns it for as long as the widget keeps rendering.
+    if "overview_stage_pills" not in st.session_state:
+        st.session_state["overview_stage_pills"] = _default
     selected_labels = st.pills(
         "Stages to run", stage_labels, selection_mode="multi",
-        default=stage_labels, key="overview_stage_pills",
-        help="Lit = will run this launch. Dimmed = skipped.")
+        key="overview_stage_pills",
+        help="Lit = will run this launch. Dimmed = skipped. Kept until you "
+             "change it, across pages and restarts.") or []
+    if list(selected_labels) != _default:
+        control.settings_store.save_stage("overview", {"stages": list(selected_labels)})
     selected_keys = {k for k, label in zip(stage_keys, stage_labels, strict=True)
                      if label in selected_labels}
     run_settings = {f"skip_{k}": True for k in stage_keys if k not in selected_keys}
@@ -138,7 +176,69 @@ with ui.section("Run the full pipeline"):
         res = control.start("all", settings={**run_settings, "resume": True})
         st.rerun() if res.get("ok") else st.error(res["error"])
 
-    b = st.columns(4)
+    def _do_quick_finish() -> None:
+        # Stop first: the snapshot must not race the clean pass it is snapshotting.
+        # The ledger is untouched by a stop, so the resume inside the plan picks up
+        # exactly where this run left off and nothing is recleaned.
+        if control.status()["running"]:
+            control.stop()
+        res = control.start("quick-finish", settings=run_settings)
+        st.rerun() if res.get("ok") else st.error(res["error"])
+
+    def _do_eda_fix() -> None:
+        # Same reason Quick finish stops first: the fix's own clean rounds must not
+        # race a clean pass already in flight. The ledger survives a stop, so the
+        # resume inside each round picks up exactly where this run left off.
+        if control.status()["running"]:
+            control.stop()
+        res = control.start("eda-fix", settings=run_settings)
+        st.rerun() if res.get("ok") else st.error(res["error"])
+
+    b = st.columns(5)
+    # The two multi-stage recipes live behind More: they are deliberate,
+    # occasional actions, and putting them beside Start/Resume/Stop invited a
+    # mis-click into a run that reorders the whole pipeline.
+    with b[4].popover("More", use_container_width=True):
+        st.caption("Multi-stage recipes. Each stops a run in flight first, then "
+                   "resumes from its checkpoint, so nothing is refetched or "
+                   "recleaned.")
+        if st.button("Quick finish", key="more_quick_finish",
+                     use_container_width=True,
+                     help="Pause cleaning and build a dataset from what is already "
+                          "cleaned: EDA (observe only) and Schema run over "
+                          "data/clean as it stands, then cleaning resumes from its "
+                          "checkpoint and a final EDA + Schema rebuild over the "
+                          "fuller corpus. Nothing is recleaned; the snapshot's gate "
+                          "never blocks the run, because a partial corpus fails it "
+                          "by construction."):
+            _do_quick_finish()
+        if st.button("EDA fix", key="more_eda_fix", use_container_width=True,
+                     help="Balance the corpus: source only the sub-domains the EDA "
+                          "gate reports as starved, ingest and clean what arrives, "
+                          "then look again, repeating until it balances or "
+                          "discovery runs dry. Only adds data, never deletes it. "
+                          "The EDA page shows what it would target."):
+            _do_eda_fix()
+        st.divider()
+        if st.button("Test run", key="more_test_run", disabled=running,
+                     use_container_width=True,
+                     help="Health check after a change: seeds a small synthetic "
+                          "corpus into a throwaway data root and runs clean, EDA, "
+                          "schema and the schema validator over it, reporting "
+                          "pass/fail per stage. It cannot touch your corpus: the "
+                          "run's data root is a temp directory, so the real one is "
+                          "not reachable from it. Offline, and takes seconds."):
+            _res = control.start("test-run")
+            st.rerun() if _res.get("ok") else st.error(_res["error"])
+
+        _tr = control.test_report()
+        if _tr:
+            _mark = "passed" if _tr.get("ok") else "FAILED"
+            _bad = [s["step"] for s in _tr.get("steps", []) if not s["ok"]]
+            (st.success if _tr.get("ok") else st.error)(
+                f"Last test run {_mark} in {_tr.get('seconds')}s"
+                + (f"  ·  broke at: {', '.join(_bad)}" if _bad else "")
+                + f"  ·  {_tr.get('ts', '')}")
     if b[0].button("Start", disabled=running, use_container_width=True,
                    help="Run the lit stages in order, keeping existing data: "
                         "ingest and clean skip sources already fetched/cleaned, so "
@@ -157,7 +257,7 @@ with ui.section("Run the full pipeline"):
         st.rerun()
 
     def _do_reset() -> None:
-        res = control.reset()
+        res = control.reset(stages=selected_keys)
         if not res.get("ok"):
             st.error(res["error"])
         else:
@@ -170,12 +270,12 @@ with ui.section("Run the full pipeline"):
         st.rerun()
 
     if b[3].button("Reset", disabled=running, use_container_width=True,
-                   help="Permanently delete the entire data/ folder and logs "
+                   help="Permanently delete the data and logs for the selected stages "
                         "(asks to confirm first)"):
         st.session_state["_confirm_reset"] = True
         st.rerun()
     if st.session_state.get("_confirm_reset") and not running:
-        st.warning("This permanently deletes the entire data/ folder and logs. "
+        st.warning("This permanently deletes data and logs for the selected stages. "
                    "This cannot be undone.")
         rc = st.columns(4)
         if rc[0].button("Yes, reset", use_container_width=True):
@@ -191,7 +291,7 @@ with ui.section("Run the full pipeline"):
     elif cstat.get("stale"):
         st.caption("Previous run ended without a clean stop.")
     else:
-        st.caption("Reset asks to confirm, then deletes the entire data/ folder.")
+        st.caption("Reset asks to confirm, then deletes data for the selected stages.")
 
 # ------------------------------------------------------------------- funnel ----
 def _data_funnel_snapshot(measure_size: bool = True) -> dict:
@@ -239,11 +339,17 @@ def _corpus_funnel() -> None:
     reflowing the rest of the page.
     """
     funnel = _data_funnel_snapshot(measure_size=False)
-    _root = data.data_root()
-    funnel["raw"]["size_mb"] = cached.raw_size_mb(_root)
+    # The 'raw' metrics (size_mb, lines) now grow live from disk in data_funnel()
+    # using linear interpolation, so they stay perfectly in sync with the live
+    # source count without needing long-TTL cached overrides.
+    _scope = data.scope()
     # Cleaned records grow live as clean workers write; the clean report only lands
     # when the pass finishes, so read the on-disk count (cached, short TTL) instead.
-    funnel["cleaned"]["lines"] = cached.cleaned_records(_root)
+    funnel["cleaned"]["lines"] = cached.cleaned_records(_scope)
+    # Same treatment for the final dataset, which grows live as normalize appends
+    # and whose manifest only lands when the pass finishes. Reading it from the
+    # manifest showed 0 records beside a multi-GB Size for the whole run.
+    funnel["appended"].update(cached.final_stats(_scope))
     prog = data.ingest_progress()
     pct = (prog["checked"] / prog["total"]) if prog["total"] else 0.0
     st.progress(min(pct, 1.0),
@@ -257,6 +363,132 @@ def _corpus_funnel() -> None:
 with ui.section("Corpus funnel"):
     _corpus_funnel()
 
+
+# --------------------------------------------------------- stage activity ------
+def _timeline_chart(rows: list[dict]):
+    """Gantt of stage activity: stages on y, minutes since the run began on x."""
+    import altair as alt
+
+    order = [r["stage"] for r in rows]          # pipeline order, not alphabetical
+    base = alt.Chart(alt.Data(values=rows))
+    bars = base.mark_bar(cornerRadius=4, height=14).encode(
+        x=alt.X("start_min:Q", title="Minutes since the run began",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+        x2="end_min:Q",
+        y=alt.Y("stage:N", title=None, sort=order,
+                axis=alt.Axis(grid=False, domain=False, ticks=False,
+                              labelColor="#c3c2b7", labelFontSize=12)),
+        color=alt.Color("state:N", title="Stage",
+                        scale=alt.Scale(domain=list(charts.TIMELINE_STATES),
+                                        range=[charts.TIMELINE_DONE_COLOR,
+                                               charts.TIMELINE_RUNNING_COLOR]),
+                        legend=alt.Legend(orient="top", direction="horizontal",
+                                          labelColor="#c3c2b7",
+                                          titleColor="#c3c2b7")),
+        tooltip=[alt.Tooltip("stage:N", title="Stage"),
+                 alt.Tooltip("state:N", title="State"),
+                 alt.Tooltip("duration:N", title="Duration"),
+                 alt.Tooltip("start_min:Q", title="Started (min)", format=".1f")],
+    )
+    # Direct label per bar: five bars is few enough to label every one, and it
+    # keeps duration readable without a hover (and off the colour alone).
+    labels = base.mark_text(align="left", dx=6, fontSize=11,
+                            color="#c3c2b7").encode(
+        x=alt.X("end_min:Q"), y=alt.Y("stage:N", sort=order), text="duration:N")
+    return (bars + labels).properties(height=28 * len(rows) + 40).configure_view(
+        strokeWidth=0).configure_legend(labelFontSize=11, titleFontSize=11)
+
+
+@st.fragment(run_every=5)
+def _stage_activity() -> None:
+    """Live stage activity, refreshed every 5s.
+
+    Slower than the funnel's 1s tick on purpose: this reads the run's whole log
+    and only changes when a stage boundary is crossed, which is minutes apart.
+    """
+    rows = charts.stage_timeline_rows(data.stage_timeline())
+    if not rows:
+        st.caption("No stage activity yet. Start a run from the panel above.")
+        return
+    st.altair_chart(_timeline_chart(rows), use_container_width=True)
+    st.caption("Each bar spans from when a stage first logged to when the next "
+               "one began; the running stage extends to now. Stages a resumed "
+               "plan skipped never logged, so they are absent rather than empty.")
+
+
+# Rendered near the bottom (just above the gate + release row) — the timeline is
+# history, read after the live strip, funnel, and log rather than before them.
+
+# ------------------------------------------------------------- live throughput --
+def _rate_chart(rows: list[dict], unit: str):
+    """Per-second throughput of the live stage: one series, no legend."""
+    import altair as alt
+
+    base = alt.Chart(alt.Data(values=rows))
+    line = base.mark_line(strokeWidth=2, color=charts.LIVE_RATE_COLOR,
+                          interpolate="monotone").encode(
+        x=alt.X("elapsed_s:Q", title="Seconds watched",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+        y=alt.Y("rate:Q", title=f"{unit}/s",
+                axis=alt.Axis(grid=True, gridOpacity=0.15, domain=False,
+                              tickColor="#52514e", labelColor="#c3c2b7",
+                              titleColor="#c3c2b7")),
+    )
+    # Crosshair + tooltip: a line chart is read by pointing at it.
+    hover = alt.selection_point(nearest=True, on="pointerover",
+                                fields=["elapsed_s"], empty=False)
+    points = base.mark_point(size=60, opacity=0, color=charts.LIVE_RATE_COLOR).encode(
+        x=alt.X("elapsed_s:Q"), y=alt.Y("rate:Q"),
+        tooltip=[alt.Tooltip("rate:Q", title=f"{unit}/s", format=".2f"),
+                 alt.Tooltip("elapsed_s:Q", title="Seconds watched", format=".0f")],
+    ).add_params(hover)
+    rule = base.mark_rule(color="#52514e").encode(x="elapsed_s:Q").transform_filter(hover)
+    return (line + rule + points).properties(height=180).configure_view(strokeWidth=0)
+
+
+@st.fragment(run_every=1)
+def _live_rate() -> None:
+    """The live stage's throughput, sampled once a second.
+
+    One slot that follows the run: the metric is whatever the current stage
+    actually moves (see data.stage_progress_sample), so the chart re-scales and
+    relabels itself at a stage boundary instead of the page growing a chart per
+    stage. Samples are per browser session and reset when the run's pid changes,
+    because a rate carried across two different runs is not a rate.
+    """
+    sample = data.stage_progress_sample()
+    if sample is None:
+        st.caption("No live stage to chart. The throughput graph follows the "
+                   "running stage.")
+        return
+
+    pid = data.run_status().get("pid")
+    buf = st.session_state.get("_rate_buf")
+    if not buf or buf.get("pid") != pid or buf.get("stage") != sample["stage"]:
+        buf = {"pid": pid, "stage": sample["stage"], "samples": []}
+    buf["samples"] = (buf["samples"] +
+                      [{"t": time.time(), "value": sample["value"]}])[-300:]
+    st.session_state["_rate_buf"] = buf
+
+    rows = charts.live_rate_rows(buf["samples"])
+    if len(rows) < 2:
+        st.caption(f"Sampling {sample['label']} ({sample['what']})… the rate needs "
+                   "a few seconds of history.")
+        return
+    st.altair_chart(_rate_chart(rows, sample["unit"]), use_container_width=True)
+    latest = rows[-1]["rate"]
+    st.caption(f"{sample['label']}  ·  {sample['what']}  ·  now "
+               f"{latest:,.2f} {sample['unit']}/s  ·  last {len(rows)}s")
+
+
+with ui.section("Live throughput",
+                "How fast the current stage is moving, sampled every second."):
+    _live_rate()
+
 # ---------------------------------------------------------------- pipeline log -
 _sess = data.run_status()
 
@@ -266,10 +498,26 @@ def _pipeline_log() -> None:
     ui.log_box(data.log_tail(200))
 
 
+@st.dialog("Full Pipeline Log", width="large")
+def _show_full_log() -> None:
+    # Read the full log lines and join them with newlines
+    lines = data.full_log()
+    log_text = "\n".join(lines)
+    # language=None prevents PrismJS from crashing the browser tab on huge logs
+    st.code(log_text, language=None)
+    
+    col1, col2 = st.columns([4, 1])
+    if col2.button("Exit / Close", type="primary", use_container_width=True):
+        st.rerun()
+
+
 with ui.section("Pipeline log"):
     if _sess.get("newest_log"):
-        st.caption(f"session (pid) `{_sess.get('pid') or '?'}`  ·  log file "
-                   f"`logs/{os.path.basename(_sess['newest_log'])}`")
+        _col1, _col2 = st.columns([4, 1])
+        _col1.caption(f"session (pid) `{_sess.get('pid') or '?'}`  ·  log file "
+                      f"`logs/{os.path.basename(_sess['newest_log'])}`")
+        if _col2.button("View full log & Copy", use_container_width=True):
+            _show_full_log()
     _pipeline_log()
 
     with st.expander("Session history"):
@@ -282,6 +530,11 @@ with ui.section("Pipeline log"):
                        "current": "yes" if h["current"] else ""} for h in hist])
         else:
             st.caption("No pipeline sessions yet.")
+
+# --------------------------------------------------------- stage activity ------
+with ui.section("Stage activity",
+                "Which stage the run has been in, over time."):
+    _stage_activity()
 
 # ------------------------------------------------------------ gate + release ---
 eda = data.latest_eda()
@@ -310,12 +563,20 @@ with left:
 
 with right:
     with ui.section("Release"):
-        if not man:
-            st.caption("No manifest yet. Run the pipeline to reach the schema stage.")
+        # Records, Tokens and Size come from the dataset on disk, not the manifest:
+        # normalize only writes the manifest when a whole pass finishes, so during a
+        # run (and after an interrupted one) these read zero beside a multi-GB file.
+        # Unique hashes stays on the manifest, which is the only thing that counts
+        # them, and so is absent until the pass completes.
+        _rel = cached.final_stats(data.scope())
+        if not _rel["lines"] and not man:
+            st.caption("No dataset yet. Run the pipeline to reach the schema stage.")
         else:
             ui.stat_grid([
-                ("Records", charts.fmt_int(man.get("record_count"))),
-                ("Unique hashes", charts.fmt_int(man.get("unique_content_hashes"))),
-                ("Tokens", charts.fmt_int(man.get("token_total"))),
-                ("Domains", charts.fmt_int(len(man.get("domains") or {}))),
+                ("Records", charts.fmt_int(_rel["lines"])),
+                ("Unique hashes", charts.fmt_int(man.get("unique_content_hashes"))
+                                  if man else "n/a"),
+                ("Tokens", charts.fmt_int(_rel["tokens"])),
+                ("Size", charts.fmt_size(_rel["size_mb"])),
             ], cols=2)
+

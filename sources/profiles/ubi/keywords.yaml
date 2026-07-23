@@ -1,160 +1,235 @@
-domain_name: BANKING_COMPLIANCE
+﻿domain_name: BANKING_COMPLIANCE
 subdomains:
   AML-KYC:
     code: AML_KYC
     datasets:
-    - anti money laundering dataset
-    - AML transaction monitoring dataset
-    - money laundering detection dataset github
-    - suspicious transaction detection dataset
-    - financial crime dataset huggingface
-    - synthetic AML transaction dataset
-    - AMLSim synthetic money laundering dataset
-    - know your customer dataset
-    - customer due diligence dataset
-    - sanctions screening list dataset
-    - beneficial ownership register dataset
-    - politically exposed persons dataset
-    - financial fraud detection dataset
-    - entity resolution sanctions dataset
-    - Prevention of Money Laundering Act 2002 indiacode
-    - PMLA Maintenance of Records Rules 2005 gazette
+      - anti money laundering dataset
+      - AML transaction monitoring dataset
+      - money laundering detection dataset github
+      - suspicious transaction detection dataset
+      - financial crime dataset huggingface
+      - synthetic AML transaction dataset
+      - AMLSim synthetic money laundering dataset
+      - know your customer dataset
+      - customer due diligence dataset
+      - sanctions screening list dataset
+      - beneficial ownership register dataset
+      - politically exposed persons dataset
+      - financial fraud detection dataset
+      - entity resolution sanctions dataset
+      - Prevention of Money Laundering Act 2002 indiacode
+      - PMLA Maintenance of Records Rules 2005 gazette
+      - India PMLA case corpus
+      - FIU India suspicious transaction report
+      - hawala transaction dataset India
+      - India FATF mutual evaluation
+      - RBI master direction KYC 2016
+      - benami transaction dataset India
+    links:
+      - https://www.unionbankofindia.bank.in
+      - https://rbi.org.in
+      - https://www.sebi.gov.in
+      - https://www.mca.gov.in
+      - https://dbie.rbi.org.in
+      - https://data.rbi.org.in
+      - https://www.iba.org.in
+      - https://iibf.org.in
+      - https://fiuindia.gov.in
+      - https://enforcementdirectorate.gov.in
+      - https://www.fatf-gafi.org
     text:
-    - customer due diligence explained
-    - know your customer process explained
-    - money laundering typologies explained
-    - beneficial ownership identification explained
-    - sanctions screening explained
-    - transaction monitoring rules explained
-    - politically exposed persons explained
-    - risk based approach anti money laundering explained
-    - trade based money laundering explained
-    - correspondent banking risk explained
+      - customer due diligence explained
+      - know your customer process explained
+      - money laundering typologies explained
+      - beneficial ownership identification explained
+      - sanctions screening explained
+      - transaction monitoring rules explained
+      - politically exposed persons explained
+      - risk based approach anti money laundering explained
+      - trade based money laundering explained
+      - correspondent banking risk explained
     vocab:
-    - aml
-    - beneficial ownership
-    - cdd
-    - due diligence
-    - financial crime
-    - kyc
-    - money laundering
-    - pmla
-    - politically exposed
-    - sanctions
-    - suspicious transaction
-    - terrorist financing
+      - due diligence
+      - aml
+      - money laundering
+      - terrorist financing
+      - financial crime
+      - beneficial ownership
+      - suspicious transaction
+      - politically exposed
+      - sanctions
+      - pmla
+      - cdd
+      - kyc
   Compliance and Risk Management:
     code: COMPLIANCE_RISK
     datasets:
-    - credit risk dataset
-    - operational risk loss event dataset
-    - market risk value at risk dataset
-    - Basel III capital adequacy dataset
-    - bank capital ratio dataset
-    - banking regulation text dataset huggingface
-    - regulatory compliance NLP dataset
-    - regtech compliance dataset github
-    - financial risk management dataset github
-    - credit default prediction dataset
-    - loan default dataset
-    - stress testing scenario dataset banking
-    - banking statistics India open data
-    - Banking Regulation Act 1949 indiacode
-    - Reserve Bank of India Act 1934 indiacode
-    - financial regulatory filings corpus
+      - credit risk dataset
+      - operational risk loss event dataset
+      - market risk value at risk dataset
+      - Basel III capital adequacy dataset
+      - bank capital ratio dataset
+      - banking regulation text dataset huggingface
+      - regulatory compliance NLP dataset
+      - regtech compliance dataset github
+      - financial risk management dataset github
+      - credit default prediction dataset
+      - loan default dataset
+      - stress testing scenario dataset banking
+      - banking statistics India open data
+      - Banking Regulation Act 1949 indiacode
+      - Reserve Bank of India Act 1934 indiacode
+      - financial regulatory filings corpus
+      - RBI master circular prudential norms
+      - SEBI circular dataset
+      - India NPA data banking sector
+      - RBI DBIE banking statistics India
+      - India financial stability report corpus
+      - CRAR Indian banks dataset
+      - RBI annual report statistical tables
+    links:
+      - https://www.unionbankofindia.bank.in/en/home
+      - https://rbi.org.in
+      - https://www.sebi.gov.in
+      - https://www.mca.gov.in
+      - https://dbie.rbi.org.in
+      - https://data.rbi.org.in
+      - https://www.iba.org.in
+      - https://iibf.org.in
+      - https://www.bis.org
+      - https://www.icai.org
+      - https://www.nifm.nic.in
     text:
-    - Basel III capital framework explained
-    - operational risk management banking explained
-    - credit risk management explained
-    - market risk management explained
-    - internal capital adequacy assessment process explained
-    - bank stress testing methodology explained
-    - non performing asset classification explained
-    - risk based supervision explained
-    - compliance function in banks explained
-    - regulatory reporting explained
+      - Basel III capital framework explained
+      - operational risk management banking explained
+      - credit risk management explained
+      - market risk management explained
+      - internal capital adequacy assessment process explained
+      - bank stress testing methodology explained
+      - non performing asset classification explained
+      - risk based supervision explained
+      - compliance function in banks explained
+      - regulatory reporting explained
     vocab:
-    - basel
-    - capital adequacy
-    - compliance
-    - credit risk
-    - market risk
-    - npa
-    - operational risk
-    - provisioning
-    - prudential
-    - regulatory reporting
-    - risk management
-    - stress testing
+      - capital adequacy
+      - prudential
+      - basel
+      - compliance
+      - credit risk
+      - regulatory reporting
+      - market risk
+      - npa
+      - stress testing
+      - provisioning
+      - operational risk
+      - risk management
   Corporate Governance:
     code: CORP_GOVERNANCE
     datasets:
-    - corporate governance dataset
-    - board composition dataset
-    - board of directors dataset github
-    - corporate disclosure dataset huggingface
-    - related party transaction dataset
-    - ESG governance dataset
-    - executive compensation dataset
-    - insider trading dataset
-    - shareholding pattern dataset India open data
-    - annual report corpus dataset
-    - Companies Act 2013 indiacode
-    - corporate ownership structure dataset
+      - corporate governance dataset
+      - board composition dataset
+      - board of directors dataset github
+      - corporate disclosure dataset huggingface
+      - related party transaction dataset
+      - ESG governance dataset
+      - executive compensation dataset
+      - insider trading dataset
+      - shareholding pattern dataset India open data
+      - annual report corpus dataset
+      - Companies Act 2013 indiacode
+      - corporate ownership structure dataset
+      - India SEBI LODR compliance dataset
+      - NSE BSE shareholding pattern dataset India
+      - India annual report corpus listed companies
+      - MCA21 corporate filings dataset
+      - SEBI corporate governance circular
+      - India board diversity dataset
+    links:
+      - https://www.unionbankofindia.bank.in
+      - https://rbi.org.in
+      - https://www.sebi.gov.in
+      - https://www.mca.gov.in
+      - https://dbie.rbi.org.in
+      - https://data.rbi.org.in
+      - https://www.iba.org.in
+      - https://iibf.org.in
+      - https://www.bseindia.com
+      - https://www.nseindia.com
+      - https://www.mca.gov.in/content/mca/global/en/acts-rules/ebooks/acts.html
+      - https://indiacorplaw.in
     text:
-    - corporate governance principles explained
-    - board committee structure explained
-    - related party transactions explained
-    - insider trading regulation explained
-    - director duties and responsibilities explained
-    - board evaluation process explained
-    - audit committee role explained
-    - shareholder rights explained
-    - corporate disclosure obligations explained
+      - corporate governance principles explained
+      - board committee structure explained
+      - related party transactions explained
+      - insider trading regulation explained
+      - director duties and responsibilities explained
+      - board evaluation process explained
+      - audit committee role explained
+      - shareholder rights explained
+      - corporate disclosure obligations explained
     vocab:
-    - annual report
-    - board committee
-    - board of directors
-    - companies act
-    - corporate governance
-    - director
-    - disclosure
-    - insider trading
-    - related party
-    - shareholder
+      - board of directors
+      - disclosure
+      - board committee
+      - corporate governance
+      - annual report
+      - director
+      - shareholder
+      - companies act
+      - related party
+      - insider trading
   Internal Audit:
     code: INTERNAL_AUDIT
     datasets:
-    - internal audit dataset
-    - audit findings dataset
-    - risk based internal audit dataset
-    - audit report text dataset huggingface
-    - continuous auditing dataset github
-    - internal control testing dataset
-    - audit sampling dataset
-    - financial statement audit dataset
-    - audit workpaper corpus
-    - control deficiency dataset
-    - process mining audit event log dataset
-    - audit analytics dataset github
+      - internal audit dataset
+      - audit findings dataset
+      - risk based internal audit dataset
+      - audit report text dataset huggingface
+      - continuous auditing dataset github
+      - internal control testing dataset
+      - audit sampling dataset
+      - financial statement audit dataset
+      - audit workpaper corpus
+      - control deficiency dataset
+      - process mining audit event log dataset
+      - audit analytics dataset github
+      - CAG India audit report corpus
+      - RBI inspection report banking
+      - ICAI standard on auditing India
+      - India concurrent audit manual
+      - bank IS audit report India
+      - IIA standard internal audit India
+    links:
+      - https://www.unionbankofindia.bank.in
+      - https://rbi.org.in
+      - https://www.sebi.gov.in
+      - https://www.mca.gov.in
+      - https://dbie.rbi.org.in
+      - https://data.rbi.org.in
+      - https://www.iba.org.in
+      - https://iibf.org.in
+      - https://www.iiai.org.in
+      - https://www.icai.org/post/standards-on-auditing
+      - https://www.cag.gov.in
     text:
-    - risk based internal audit explained
-    - internal audit framework explained
-    - concurrent audit banking explained
-    - internal control over financial reporting explained
-    - audit sampling methodology explained
-    - three lines of defence model explained
-    - audit evidence and documentation explained
-    - internal audit charter explained
-    - audit planning methodology explained
+      - risk based internal audit explained
+      - internal audit framework explained
+      - concurrent audit banking explained
+      - internal control over financial reporting explained
+      - audit sampling methodology explained
+      - three lines of defence model explained
+      - audit evidence and documentation explained
+      - internal audit charter explained
+      - audit planning methodology explained
     vocab:
-    - audit evidence
-    - audit finding
-    - audit sampling
-    - concurrent audit
-    - control deficiency
-    - internal audit
-    - internal control
-    - rbia
-    - three lines of defence
-    - workpaper
+      - rbia
+      - three lines of defence
+      - internal control
+      - workpaper
+      - control deficiency
+      - audit sampling
+      - audit finding
+      - internal audit
+      - audit evidence
+      - concurrent audit
+

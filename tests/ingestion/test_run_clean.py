@@ -1,12 +1,47 @@
-"""run_clean cleans the whole raw tree, cross-source dedups, and drops raw."""
+﻿"""run_clean cleans the whole raw tree, cross-source dedups, and drops raw."""
 
 from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import Future
 
 from cybersec_slm.cleaning import pipeline
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.ingestion import parallel
+
+
+class _InlineExecutor:
+    """Synchronous stand-in for ProcessPoolExecutor: submit runs now, in-process.
+
+    A REAL pool spawns workers that re-import the package and rebuild their own
+    data-root globals, so this module's redirected output dirs would be invisible
+    to them and the test would clean straight into the live corpus. (That is not
+    hypothetical: it is what put a `Test/` tree under a real data/clean.) Running
+    inline keeps the redirection honest and the test fast.
+    """
+
+    _processes: dict = {}
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        fut = Future()
+        try:
+            fut.set_result(fn(*args, **kwargs))
+        except Exception as e:  # noqa: BLE001
+            fut.set_exception(e)
+        return fut
+
+    def shutdown(self, *a, **k):
+        pass
 
 
 def _write_jsonl(path, records):
@@ -48,7 +83,7 @@ class _StubTranslator:
 
 def _wire(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
@@ -94,17 +129,82 @@ def test_run_clean_resume_skips_already_cleaned_sources(tmp_path, monkeypatch):
     # First run cleans both sources and writes the checkpoint.
     result1 = parallel.run_clean()
     assert result1["files"] == 2
-    assert (tmp_path / "logs" / "cleaned_sources.txt").exists()
+    assert (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").exists()
 
     # Add a new source and rerun with resume. The already-cleaned sources should be skipped.
     _write_jsonl(str(raw / "Test" / "s3" / "c.jsonl"), [{"text": distinct}])
     result2 = parallel.run_clean(resume=True)
 
     assert result2["files"] == 1
-    cleaned = (tmp_path / "logs" / "cleaned_sources.txt").read_text(encoding="utf-8").splitlines()
+    cleaned = (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").read_text(
+        encoding="utf-8").splitlines()
     assert "Test/s1" in cleaned
     assert "Test/s2" in cleaned
     assert "Test/s3" in cleaned
+    pipeline.reset_cleaner_cache()
+
+
+def test_sharded_source_is_ledgered_only_when_every_window_is_done(tmp_path,
+                                                                   monkeypatch):
+    """The ledger must keep meaning "fully cleaned, skip on resume".
+
+    A big file is split across workers, so a source now finishes in several
+    pieces. Recording it after the first piece would let a resume skip a source
+    whose file was only half cleaned - silently losing records from the corpus.
+    """
+    _raw, _dup, _distinct = _wire(monkeypatch, tmp_path)
+    # One record per window, so s1 (2 records) really is split in two.
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+
+    result = parallel.run_clean(workers=2)
+    cleaned = (tmp_path / "logs" / PROFILE / "cleaned_sources.txt").read_text(
+        encoding="utf-8").split()
+
+    # Each source appears exactly ONCE, however many windows it took.
+    assert sorted(cleaned) == ["Test/s1", "Test/s2"]
+    assert cleaned.count("Test/s1") == 1
+    # s1's 2 records became 2 windows -> 3 report rows across the 2 sources.
+    assert result["files"] == 3
+    pipeline.reset_cleaner_cache()
+
+
+def test_work_is_ordered_by_source_so_the_ledger_advances(tmp_path, monkeypatch):
+    """Windows of one source stay together, smallest source first.
+
+    The ledger records a source only when ALL its windows finish. Ordering by
+    window size interleaves sources, so every worker chews the biggest source at
+    once and no source completes for hours - leaving no checkpoint to resume from
+    and no rate to estimate from.
+    """
+    raw = tmp_path / "raw"
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    # big: 4 records -> 4 windows. small: 1 record -> 1 window.
+    _write_jsonl(str(raw / "D" / "big" / "a.jsonl"), [{"text": f"r{i}"} for i in range(4)])
+    _write_jsonl(str(raw / "D" / "small" / "b.jsonl"), [{"text": "r"}])
+
+    work = parallel._clean_work(
+        [(str(raw / "D" / "big"), "D/big"), (str(raw / "D" / "small"), "D/small")],
+        str(raw))
+
+    assert [sid for sid, _c in work] == ["D/small", "D/big", "D/big", "D/big", "D/big"]
+
+
+def test_sharded_clean_keeps_every_record(tmp_path, monkeypatch):
+    """Sharding is a scheduling change: the corpus it produces is unchanged."""
+    _raw, dup, distinct = _wire(monkeypatch, tmp_path)
+    monkeypatch.setattr(pipeline, "SHARD_MIN_BYTES", 1)
+    monkeypatch.setattr(pipeline, "SHARD_TARGET_RECORDS", 1)
+    monkeypatch.setattr(parallel, "ProcessPoolExecutor", _InlineExecutor)
+
+    parallel.run_clean(workers=2)
+    body = _read_all(str(tmp_path / "clean"))
+    # s1's two records survive; s2's copy of `dup` is the cross-source duplicate
+    # that final_global_dedup removes -- exactly as without sharding.
+    assert distinct in body
+    assert body.count(dup) == 1
     pipeline.reset_cleaner_cache()
 
 
@@ -124,7 +224,7 @@ def test_run_clean_keep_raw_false_deletes_raw(tmp_path, monkeypatch):
 
 def _wire_two_domains(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
@@ -175,7 +275,7 @@ def test_run_clean_selective_purge_raw_deletes_only_chosen(tmp_path, monkeypatch
 
 def _wire_two_sources_one_domain(monkeypatch, tmp_path):
     raw = tmp_path / "raw"
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     monkeypatch.setattr(parallel.core, "RAW_DATA", str(raw))
     monkeypatch.setattr(parallel.core, "LOGS", str(logs))
     monkeypatch.setattr(parallel, "CLEANED_LEDGER", str(logs / "cleaned_sources.txt"))
@@ -222,3 +322,4 @@ def test_run_clean_row_level_purge_raw_deletes_only_chosen_source(tmp_path, monk
     assert not (raw / "DomA" / "s1").exists()        # chosen source raw purged
     assert (raw / "DomA" / "s2").is_dir()            # sibling source preserved
     pipeline.reset_cleaner_cache()
+

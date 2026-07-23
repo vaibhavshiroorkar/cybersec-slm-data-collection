@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Map a search :class:`~.search.Result` into a catalog (Sources.csv) row.
 
 The catalog's columns (exact order) are the contract between this crawler and the
@@ -22,6 +22,46 @@ SHEET_COLUMNS: tuple[str, ...] = CATALOG_COLUMNS
 
 # Fields the crawler fills vs. leaves for ingestion/humans.
 _BLANK = ""
+
+# "Field" is the broad subject the profile covers, one level above Sub-Domain.
+# Derived from the active profile's domain name, with a title-cased fallback so a
+# new domain gets a sensible label without a code change.
+_FIELD_BY_DOMAIN = {
+    "BANKING_COMPLIANCE": "Finance",
+    "CYBERSEC": "Cybersecurity",
+}
+
+# Signals that a source is Indian rather than global. A ``.in`` host is the strong
+# one; the rest catch Indian regulators/institutions on ``.gov``/``.org`` hosts and
+# in the row text.
+_INDIA_HINTS = (
+    "india", "indian", "reserve bank of india", "rbi", "sebi", "irdai", "npci",
+    "union bank", "unionbank", "nseindia", "bseindia", "mca.gov", "incometax",
+    "gst", "godl", "data.gov.in",
+)
+
+
+def field_label() -> str:
+    """The broad ``Field`` for the active profile (e.g. Finance, Cybersecurity)."""
+    try:
+        from .catalog import domain_name
+        dn = (domain_name() or "").strip()
+    except Exception:
+        return _BLANK
+    if not dn:
+        return _BLANK
+    return _FIELD_BY_DOMAIN.get(dn, dn.replace("_", " ").title())
+
+
+def country_for(link: str, text: str = "") -> str:
+    """Classify a source as ``India`` or ``Global`` from its host and row text."""
+    host = urlparse(link or "").netloc.lower().removeprefix("www.")
+    if host.endswith(".in"):
+        return "India"
+    blob = f"{host} {text}".lower()
+    if any(hint in blob for hint in _INDIA_HINTS):
+        return "India"
+    return "Global"
 
 
 def _derive_name(result: Result) -> str:
@@ -56,6 +96,8 @@ def build_row(result: Result, default_domain: str, *,
     row = {c: _BLANK for c in SHEET_COLUMNS}
     row["Name"] = _derive_name(result)
     row["Sub-Domain"] = domain
+    row["Field"] = field_label()
+    row["Country"] = country_for(result.link, f"{result.title} {result.snippet}")
     row["Description"] = result.snippet[:300]
     row["Dataset Link"] = result.link
     row["Category"] = category
@@ -67,9 +109,9 @@ def build_row(result: Result, default_domain: str, *,
 # Sheet values the Category / Original Format columns take, matching what
 # :func:`~.classify.infer_category_and_format` writes for a discovered source, so
 # a hand-added row is indistinguishable from a crawled one.
-CATEGORIES: tuple[str, ...] = ("Dataset", "Repository", "Document", "Website")
+CATEGORIES: tuple[str, ...] = ("Dataset", "Repository", "Document", "Website", "Feed", "API")
 FORMATS: tuple[str, ...] = ("JSONL", "JSON", "CSV", "PARQUET", "XLSX", "TXT",
-                            "PDF", "XML", "HTML")
+                            "PDF", "XML", "HTML", "RSS", "ATOM")
 
 
 def build_manual_row(*, name: str, subdomain: str, link: str,
@@ -103,6 +145,8 @@ def build_manual_row(*, name: str, subdomain: str, link: str,
     row["Dataset Link"] = link
     row["Category"] = category.strip() or inferred_cat
     row["Original Format"] = original_format.strip() or inferred_fmt
+    row["Field"] = field_label()
+    row["Country"] = country_for(link, f"{name} {description}")
     row["License"] = license.strip()
     row["Is Synthetic?"] = "Yes" if is_synthetic else _BLANK
     row["Date Added"] = today or date.today().strftime("%d/%m/%Y")
@@ -115,3 +159,4 @@ def build_manual_row(*, name: str, subdomain: str, link: str,
 def row_to_list(row: dict[str, str]) -> list[str]:
     """Flatten a row dict to a values list in :data:`SHEET_COLUMNS` order."""
     return [row.get(c, _BLANK) for c in SHEET_COLUMNS]
+

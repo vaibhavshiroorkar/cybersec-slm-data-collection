@@ -1,16 +1,17 @@
-"""Headless tests for the agent's read-only tool wrappers (no Streamlit, no network)."""
+﻿"""Headless tests for the agent's read-only tool wrappers (no Streamlit, no network)."""
 
 import json
 import os
 
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.dashboard import agent_tools
 
 
 def _seed(root: str) -> None:
     """Write a minimal but realistic set of pipeline artifacts under `root`."""
-    logs = os.path.join(root, "logs")
+    logs = os.path.join(root, "logs", PROFILE)
     eda = os.path.join(logs, "eda")
-    final = os.path.join(root, "data", "final")
+    final = os.path.join(root, "data", PROFILE, "final")
     os.makedirs(eda, exist_ok=True)
     os.makedirs(final, exist_ok=True)
 
@@ -180,3 +181,4 @@ def test_bare_root_degrades_gracefully(tmp_path, monkeypatch):
     assert agent_tools.get_stage_reports() == {"clean": None, "normalize": None}
     assert agent_tools.search_dataset() == {"rows": [], "match_count": 0, "capped": False}
     assert agent_tools.get_rejected_or_dupes("rejected") == []
+

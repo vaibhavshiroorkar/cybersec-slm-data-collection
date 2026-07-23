@@ -1,4 +1,4 @@
-# Architecture
+﻿# Architecture
 
 How the pipeline works, end to end. This is the companion to the
 [README](../../README.md): the README tells you how to run it; this document
@@ -26,15 +26,15 @@ Two ideas shape everything:
   repository stays code-only. `core.py` also holds the shared logger and the JSONL
   read/write and hashing helpers used by every stage.
 - **Security is part of the flow, not a layer on top.** A version-controlled
-  source allowlist gates ingestion; reject logs are metadata-only; every release
+  the URL screen gates ingestion; reject logs are metadata-only; every release
   ships a content-hashed manifest so a bad batch can be scoped and rolled back.
   See [Security controls](#security-controls).
 
 ## One run mode: parallel streaming
 
 Ingestion and cleaning are fused and run in parallel. `cybersec-slm run` and
-`cybersec-slm all` both drive `ingestion/parallel.py::run_streaming`; the Prefect
-`flow` wraps the same per-source function. One worker process per source does
+`cybersec-slm all` both drive `ingestion/parallel.py::run_streaming`. One worker
+process per source does
 fetch → clean → delete raw (`ingestion/worker.py`), sources are isolated (a bad one
 returns `status="failed"` instead of crashing the pool), and after the pool drains a
 single cross-source dedup pass runs over `data/clean/`. `run` stops there; `all` and
@@ -42,7 +42,7 @@ single cross-source dedup pass runs over `data/clean/`. `run` stops there; `all`
 
 **Resumable, cheap re-runs.** `--resume` skips sources already fetched+cleaned in a
 prior run (recorded per-source in `logs/completed_sources.txt`, keyed by the
-allowlist `descriptor_key`) and picks the final dedup pass back up where it stopped,
+`sources.descriptor_key`) and picks the final dedup pass back up where it stopped,
 so an interrupted build never re-downloads multi-GB sources. A fresh run (the
 default) resets that ledger and the dedup checkpoint so nothing is silently skipped.
 Failed sources are never recorded, so they retry on the next run.
@@ -57,7 +57,8 @@ Search, builds a candidate row per hit, drops any URL already in the catalog
 (`sources/Sources.csv`).
 
 This stage only *proposes* sources for a human to review. Nothing here reaches
-ingestion directly; the gate between "discovered" and "fetched" is the allowlist.
+ingestion directly; the gates between "discovered" and "fetched" are the URL
+screen and the licence gate.
 
 ## Stage 1: Ingestion → `data/raw/`
 
@@ -69,21 +70,32 @@ each source through its handler and normalizes everything to JSONL:
 - **html**: a few crawlable sites (Playwright/Chromium)
 - **nvd**: the NVD CVE feed (optional API key for higher rate limits)
 
-The **source allowlist** (`ingestion/allowlist.py`) is the key control here. Only
-sources marked `status: approved` in `sources/allowlist.yaml` are fetched;
-everything else is skipped and logged. This is the anti-poisoning gate: a
-substituted or compromised upstream cannot enter the corpus under a trusted name.
-It fails open (allow-all, with a warning) when the file is absent so a fresh
-checkout still runs, and `CYBERSEC_SLM_ENFORCE_ALLOWLIST=1` forces enforcement
-(the Docker image sets this).
+The **URL screen** (`ingestion/urlscreen.py`) is the first control here. Every
+fetch goes through `common.http_get` / `common.download`, and both screen the URL
+before requesting it: non-HTTP schemes, embedded credentials, and any host that
+*resolves* to a private, loopback, link-local or reserved address are refused.
+Redirects are followed by hand so each hop is re-screened, since a public URL that
+302s to the cloud metadata endpoint would otherwise reach it.
+
+This replaced a hand-maintained source allowlist (`ingestion/allowlist.py` +
+`sources/allowlist.yaml`), removed in `3aa6f20`: the catalog is the source list,
+and suitability is decided by code rather than an approve list somebody has to
+keep current. The screen is a rule instead, so it needs no maintenance and cannot
+go stale. Note what it does and does not do: it stops the pipeline reaching
+somewhere it should not, not a catalogued public source being substituted
+upstream. Integrity-pinning downloads to a published hash is the open item for
+that, and it is on the checklist in
+[security-requirements.md](../security-requirements.md).
 
 A second gate, the **license gate** (`ingestion/license_gate.py`), runs
-immediately after the allowlist in the worker: a source is fetched only if its
+immediately after in the worker: a source is fetched only if its
 `Sources.csv` license clearly permits unencumbered commercial use. It is
 **default-deny** — copyleft (GPL/LGPL), share-alike / non-commercial Creative
 Commons (`-SA` / `-NC`), and any license string it doesn't recognise as clearly
-commercial are skipped with a `license: …` reason, distinct from the allowlist's
-`allowlist: …` skip. This keeps legally-unusable data out of a commercially-trained
+commercial are skipped with a `license: …` reason. It fails **closed**: any value
+of `CYBERSEC_SLM_ENFORCE_LICENSE_GATE` it does not recognise keeps the gate on and
+warns, because a switch that silently does the dangerous thing on a typo is worse
+than no switch. This keeps legally-unusable data out of a commercially-trained
 corpus without depending on the manual license triage having been applied
 consistently before a source was approved. `CYBERSEC_SLM_ENFORCE_LICENSE_GATE=0`
 disables it for local runs.
@@ -175,18 +187,12 @@ language, the EDA snapshot, pipeline version, git commit, and a sha256 of the
 dataset file. See [canonical_schema.md](canonical_schema.md) for the field-by-field
 contract.
 
-## Orchestration, versioning, deployment
+## Running a build
 
-- **Prefect** (`orchestration/flows.py`): `cybersec-slm flow` wraps the same stage
-  functions in a `build-corpus` flow: load secrets → ingest + clean per source
-  (mapped, retried, isolated) → cross-source dedup → EDA gate → normalize →
-  optional DVC snapshot. Prefect is optional; the decorators degrade to no-ops so
-  the helpers stay unit-testable.
-- **DVC** (`dvc.yaml`): `dvc repro` rebuilds the corpus and versions the outputs
-  to an S3 remote, with the EDA and normalize reports tracked as metrics. See
-  [dvc.md](../operations/dvc.md).
-- **AWS**: Dockerized, with a Terraform skeleton (ECR / ECS / S3 / IAM / Secrets
-  Manager) and CI/CD. See [deploy.md](../operations/deploy.md).
+`cybersec-slm all` drives the whole pipeline in one process; each stage can also
+be run on its own. The image in `Dockerfile` packages the same entry point for
+container runs, reading secrets from the environment at runtime rather than
+baking them in. See [commands.md](../commands.md).
 
 ## Security controls
 
@@ -196,11 +202,11 @@ response toward something traceable, reversible, and auditable.
 | Stage | Controls |
 |---|---|
 | Sourcing | Discovered sources seeded `pending` (human review before fetch); dry-run + CSV audit artifact |
-| Ingestion | Version-controlled source allowlist (anti-poisoning); default-deny commercial-license gate; per-source process isolation; provenance ingest ledger |
+| Ingestion | URL screen (scheme/credential/private-address, re-checked across redirects); default-deny commercial-license gate that fails closed; download byte cap + zip-bomb guard; binary reporting on fetched archives; per-source process isolation; provenance ingest ledger |
 | Cleaning | PII redaction (Presidio + regex fallback); documented PII blind spots + sampled manual review; anomaly quarantine to `flagged/`; auditable `dropped/` reasons |
 | EDA | Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned append-only run history |
 | Normalization | Strict schema validation (closed enums); metadata-only reject logs; per-source failure escalation; per-record near-dup scores; content hashing |
-| Release | Provenance manifest (datasheet); DVC-versioned releases for scoped rollback |
+| Release | Provenance manifest (datasheet) with content hashes for scoped rollback |
 | CI / supply chain | Secret scanning (gitleaks, full history); dependency audit (pip-audit); least-privilege CI token |
 | Deployment | ECR immutable tags + scan-on-push; S3 public-access block + SSE + versioning; least-privilege IAM task role; secrets injected at runtime, never baked in |
 
@@ -229,5 +235,8 @@ Both `data/` and `logs/` are resolved relative to `CYBERSEC_SLM_DATA_ROOT`
 
 Optional API keys are read from `.env` (auto-loaded; shell environment wins). See
 the [README configuration table](../../README.md#configuration) for the full list.
-EDA gate thresholds and the allowlist enforcement flag are environment-overridable;
-see `eda/config.py` and `ingestion/allowlist.py`.
+EDA gate thresholds, the licence-gate switch and the fetch caps are
+environment-overridable; see `eda/config.py`, `ingestion/license_gate.py`,
+`ingestion/common.py` (`CYBERSEC_SLM_MAX_DOWNLOAD_BYTES`) and
+`ingestion/archive.py` (`CYBERSEC_SLM_MAX_UNZIP_BYTES`).
+

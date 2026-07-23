@@ -1,4 +1,4 @@
-# Commands
+﻿# Commands
 
 The complete command reference for the pipeline. The [README](../README.md) covers
 the quickstart; this page is the detail, every stage, flag, and run mode, plus
@@ -48,7 +48,6 @@ uv run cybersec-slm normalize           # canonical 22-field dataset            
 | `eda [--no-enforce] [--profile]` | Validate the corpus and apply the sufficiency gate → `logs/eda/` |
 | `normalize [--fresh]` | Schema-normalize into `data/final/dataset.jsonl` + manifest |
 | `source [--dry-run]` | Discover sources via search engines → `sources/Sources.csv` |
-| `flow [--dvc-push]` | Run the pipeline via Prefect (needs the `orchestration` extra) |
 | `validate` | Check `data/clean/` records against the schema |
 | `dashboard [--port N]` | Read-only Streamlit monitor + dataset explorer (needs `--extra dashboard`) |
 | `all [--resume]` | Run the full pipeline, end to end |
@@ -127,11 +126,6 @@ fetched. The NVD handler reads `NVD_API_KEY` for a higher rate limit.
 Sub-domains and their keywords are read from `sources/keywords.yaml` (editable;
 falls back to the built-in lists when absent), shared with the dashboard.
 
-**`flow`** (Prefect orchestration, needs the `orchestration` extra)
-- `--sources PATH`: path/URL to a sources file.
-- `--no-enforce-eda`: run the EDA gate in report-only mode.
-- `--dvc-push`: snapshot and push the dataset to the DVC remote.
-
 ## How a run executes
 
 Ingestion and cleaning are fused and run in parallel: one worker process per source
@@ -181,9 +175,6 @@ the image name:
 docker run --rm --env-file .env -v "$(pwd)/out:/work" cybersec-slm cybersec-slm eda
 ```
 
-See [operations/deploy.md](operations/deploy.md) for the AWS path (ECR / ECS /
-Prefect Cloud).
-
 ## Configuration
 
 Optional API keys are read from a `.env` file, auto-loaded at startup; shell
@@ -207,7 +198,6 @@ EDA gate thresholds are environment-overridable too; see `src/cybersec_slm/eda/c
 ## Optional extras
 
 ```bash
-uv sync --extra orchestration   # Prefect + prefect-aws (for `flow` and AWS deploy)
 ```
 
 - **orchestration** powers `cybersec-slm flow` and the ECS deployment.
@@ -229,3 +219,4 @@ failing the run.
 uv run pytest                  # full test suite
 uv run ruff check src tests    # lint
 ```
+

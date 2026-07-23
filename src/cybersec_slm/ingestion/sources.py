@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """CSV-driven source catalog (offline / local file).
 
 Reads a local CSV describing what to fetch and maps each row to a *source
@@ -35,6 +35,7 @@ import os
 import re
 from urllib.parse import urlparse
 
+from . import rss as _rss
 from .common import GOV_US, logger
 
 # The catalog lives in the repo's ``sources/`` dir (curated, version-controlled),
@@ -62,7 +63,7 @@ def __getattr__(name: str):
 # Shared by the sourcing crawler (which appends rows) and the cleaning driver
 # (which writes the Cleaned* columns back), so the column list lives in one place.
 CATALOG_COLUMNS: tuple[str, ...] = (
-    "Name", "Sub-Domain", "Description", "Dataset Link", "File Count",
+    "Name", "Sub-Domain", "Field", "Country", "Description", "Dataset Link", "File Count",
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
     "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
     "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
@@ -285,6 +286,12 @@ def _row_to_descriptor(row: dict) -> dict | None:
             kind = "api"          # NVD CVE 2.0 — paginated REST API (fetch_nvd)
         elif low.endswith(".xml.zip") or ("cwe.mitre.org" in low and ".xml" in low):
             kind = "xml"          # MITRE CWE — XML-in-ZIP needing custom parsing (scrape_cwe)
+        elif _rss.is_feed_url(low):
+            # RSS/Atom (scrape_rss). Before the website/url fallbacks, which is
+            # where these used to land: a feed downloaded as an opaque file
+            # produced no records and no error, so the source looked fetched.
+            # After the CWE test above, which is also .xml and has its own fetcher.
+            kind = "rss"
         elif "huggingface.co/datasets/" in low:
             kind = "hf"
         elif "kaggle.com/datasets/" in low:
@@ -324,13 +331,22 @@ def _row_to_descriptor(row: dict) -> dict | None:
     if kind == "feed":
         return dict(kind="feed", domain=domain, slug=slug, title=name,
                     license=lic, url=url, json_key=_feed_key(slug, row))
+    if kind == "rss":
+        # metadata_only stamps the feed as a facts-only index (title/date/URL). Set
+        # by a "Metadata Only" catalog column, or forced when the licence is the
+        # metadata-index licence, so an All-Rights-Reserved feed cannot be
+        # catalogued full-text by omitting the column.
+        meta_only = (_bool(_val(row, "metadata_only"))
+                     or "metadata index" in (lic or "").lower())
+        return dict(kind="rss", domain=domain, slug=slug, title=name,
+                    license=lic, url=url, metadata_only=meta_only)
     if kind == "website":
         prefix = _val(row, "allow_prefix")
         if not prefix:
             p = urlparse(url)
-            prefix = f"{p.scheme}://{p.netloc}{p.path.rsplit('/', 1)[0]}/"
+            prefix = f"{p.scheme}://{p.netloc}/"
         return dict(kind="website", domain=domain, slug=slug, start_url=url,
-                    license=lic, use_js=_bool(_val(row, "use_js")),
+                    license=lic, use_js=_bool(_val(row, "use_js"), default=True),
                     max_pages=_int(_val(row, "max_pages", default="70"), 70),
                     allow_prefix=prefix, description=desc)
     logger.warning(f"unknown kind {kind!r} for source {name!r}; skipping")
@@ -438,10 +454,20 @@ def synthetic_identities(spec: str | None = None) -> frozenset[str]:
     Reads the catalog CSV and returns the :func:`source_identity` of each flagged
     row's ``Dataset Link``. The normalize stage matches record URLs against this
     set to keep synthetic sources out of the final dataset.
+
+    A missing catalog means nothing is flagged synthetic, not an error: normalize
+    runs over ``data/clean``, which can exist without the catalog (a fresh
+    checkout, an isolated test root, a corpus handed over without its sourcing
+    sheet). Returning an empty set there keeps the stage running instead of
+    failing it over a filter that simply has nothing to filter.
     """
     import pandas as pd
 
-    path = _resolve(spec or default_catalog())
+    path = spec or default_catalog()
+    if not os.path.exists(path):
+        logger.debug(f"synthetic_identities: no catalog at {path}; none flagged")
+        return frozenset()
+    path = _resolve(path)
     df = pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8")
     df = _norm_headers(df)
     ids: set[str] = set()
@@ -453,3 +479,4 @@ def synthetic_identities(spec: str | None = None) -> frozenset[str]:
         if ident:
             ids.add(ident)
     return frozenset(ids)
+

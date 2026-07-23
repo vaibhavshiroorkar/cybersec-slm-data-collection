@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Pipeline process control for the dashboard: start / stop / resume / reset.
 
 The read-only dashboard gains a local control plane through this one module (no
@@ -15,12 +15,14 @@ lights up the monitor with no extra wiring.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 from .. import core, stages
@@ -28,25 +30,28 @@ from . import settings_store
 
 CONTROL_NAME = "pipeline_run.json"
 PLAN_NAME = "pipeline_plan.json"
+FIX_NAME = "eda_fix.json"
+TEST_CFG_NAME = "test_run_cfg.json"
+TEST_REPORT_NAME = "test_run.json"
 
 # Which advanced-settings keys each stage accepts. The dashboard offers only a
 # stage's own flags; build_command drops anything else. Mirrors the CLI.
 _STAGE_FLAGS: dict[str, set[str]] = {
     "all": {"workers", "sources", "source_timeout", "limit", "purge_raw",
             "resume", "no_auto_rebalance", "max_source_gb", "drop_non_english",
-            "no_crawler"},
-    "source": {"domains", "mode", "per_keyword", "max_per_domain", "max_total",
+            "no_crawler", "pii_engine"},
+    "source": {"domains", "per_keyword", "max_per_domain", "max_total",
                "max_minutes", "workers", "time_range", "no_site_scope",
                "no_quality_filter", "dry_run", "searxng_url", "language",
                "no_enrich", "backfill", "backfill_all", "no_blacklist", "limit",
-               "engines", "target_per_domain"},
+               "engines", "target_per_domain", "countries", "fields"},
     "ingest": {"workers", "sources", "source_timeout", "limit", "resume",
                "max_source_gb", "no_crawler", "domains", "sources_only",
-               "no_hazard_scan"},
+               "no_hazard_scan", "extractor"},
     "clean": {"purge_raw", "limit", "resume", "workers", "drop_non_english", "domains",
               "sources_only", "min_text_chars", "max_text_chars", "garbage_max",
               "repeat_max", "near_dup_threshold", "shingle_size", "minhash_perm",
-              "allowed_langs"},
+              "allowed_langs", "pii_engine"},
     "eda": {"no_auto_rebalance", "no_enforce", "min_total_records",
             "min_records_per_subdomain", "max_source_share", "max_drift",
             "max_dup_rate", "min_avg_tokens", "max_topic_cv",
@@ -65,13 +70,13 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("source_timeout", "--source-timeout", "value"),
     ("limit", "--limit", "value"),
     ("max_source_gb", "--max-source-gb", "value"),
-    ("mode", "--mode", "value"),
     ("per_keyword", "--per-keyword", "value"),
     ("max_per_domain", "--max-per-domain", "value"),
     ("max_total", "--max-total", "value"),
     ("max_minutes", "--max-minutes", "value"),
     ("target_per_domain", "--target-per-domain", "value"),
     ("engines", "--engines", "value"),
+    ("extractor", "--extractor", "value"),
     ("time_range", "--time-range", "value"),
     ("searxng_url", "--searxng-url", "value"),
     ("language", "--language", "value"),
@@ -82,6 +87,7 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("near_dup_threshold", "--near-dup-threshold", "value"),
     ("shingle_size", "--shingle-size", "value"),
     ("minhash_perm", "--minhash-perm", "value"),
+    ("pii_engine", "--pii-engine", "value"),
     ("min_total_records", "--min-total-records", "value"),
     ("min_records_per_subdomain", "--min-records-per-subdomain", "value"),
     ("max_source_share", "--max-source-share", "value"),
@@ -109,6 +115,8 @@ _FLAG_SPEC: list[tuple[str, str, str]] = [
     ("domains", "--domains", "list"),
     ("sources_only", "--sources-only", "list"),
     ("allowed_langs", "--allowed-langs", "list"),
+    ("countries", "--countries", "list"),
+    ("fields", "--fields", "list"),
 ]
 
 
@@ -117,8 +125,20 @@ def build_command(stage: str = "all", *, resume: bool = False,
     """Build the ``cybersec-slm <stage> ...`` command for a launch.
 
     Only the flags that ``stage`` accepts (per ``_STAGE_FLAGS``) are emitted; any
-    other setting is dropped. ``resume=True`` adds ``--resume`` when the stage
-    supports it. Pure and side-effect-free, so it is unit-tested directly.
+    other setting is dropped. Pure and side-effect-free, so it is unit-tested
+    directly.
+
+    ``resume=True`` forces ``--resume`` on where the stage supports it.
+    ``resume=False`` does NOT force it off — it only declines to add it, so a
+    saved ``resume: true`` in ``settings`` still wins. That is deliberate (a
+    page's saved setting is the user's choice, and silently starting a *fresh*
+    run would wipe their corpus), but it means a caller that needs a guaranteed
+    fresh run must say so explicitly::
+
+        build_command("clean", settings={**saved, "resume": False})
+
+    :func:`start` records which of the two actually happened by reading the argv
+    back, so ``status()`` can never disagree with the running command.
     """
     merged = dict(settings or {})
     if resume:
@@ -176,8 +196,54 @@ def build_full_plan(overrides: dict | None = None, *,
     return plan
 
 
+def build_quick_finish_plan(overrides: dict | None = None) -> list[list[str]]:
+    """Snapshot the corpus cleaned so far, then carry on cleaning.
+
+    Cleaning a large corpus takes days, and until it finishes there is no dataset
+    to look at. This orders the same stages so there is::
+
+        eda --no-enforce  ->  schema  ->  clean --resume  ->  eda  ->  schema
+
+    The first eda/schema run over ``data/clean`` exactly as it stands, producing a
+    real ``data/final/dataset.jsonl`` from the sources cleaned so far. Cleaning then
+    resumes from its ledger — the snapshot never touches it, so nothing is
+    recleaned — and a final eda/schema rebuilds the dataset over the fuller corpus.
+
+    Two details make it safe rather than merely convenient:
+
+    * the snapshot's eda is ``--no-enforce``. A partial corpus fails the
+      sufficiency gate by construction, and an enforced failure would end the run
+      before it got back to cleaning — turning "snapshot and continue" into "stop".
+    * the snapshot skips ``final_global_dedup`` (that only runs at the end of a
+      clean pass), but ``normalize`` does its own exact + near dedup, so the
+      snapshot dataset is still deduplicated.
+
+    Pure and side-effect-free, like the other plan builders.
+    """
+    over = dict(overrides or {})
+    snap = {**settings_store.get_stage("eda"), **over, "no_enforce": True}
+    clean = {**settings_store.get_stage("clean"), **over}
+    final_eda = {**settings_store.get_stage("eda"), **over}
+    schema = {**settings_store.get_stage("schema"), **over}
+    return [
+        stage_argv("eda", settings=snap),                  # snapshot: observe only
+        stage_argv("schema", settings=schema),
+        stage_argv("clean", resume=True, settings=clean),  # carry on from the ledger
+        stage_argv("eda", settings=final_eda),
+        stage_argv("schema", settings=schema),
+    ]
+
+
 def _logs_dir() -> str:
-    return os.path.join(core.data_root(), "logs")
+    """This profile's logs. Resolved per call, not from core's frozen LOGS.
+
+    Everything the control plane keeps lives here (``pipeline_run.json``, the plan,
+    the eda-fix config, the test-run report), so scoping it per profile is what
+    stops one profile's run being reported as the other's: a ubi run used to make
+    the dashboard say "running" while the operator was looking at cybersec, and
+    ``start`` refused to launch profile B because profile A was live.
+    """
+    return core.logs_dir()
 
 
 def _control_file() -> str:
@@ -186,6 +252,70 @@ def _control_file() -> str:
 
 def _plan_file() -> str:
     return os.path.join(_logs_dir(), PLAN_NAME)
+
+
+def _fix_file() -> str:
+    return os.path.join(_logs_dir(), FIX_NAME)
+
+
+def _test_cfg_file() -> str:
+    return os.path.join(_logs_dir(), TEST_CFG_NAME)
+
+
+def test_report_file() -> str:
+    """Where a Test run's result lands, under the *real* root (not the scratch)."""
+    return os.path.join(_logs_dir(), TEST_REPORT_NAME)
+
+
+def test_report() -> dict | None:
+    """The last Test run's report, or None."""
+    try:
+        with open(test_report_file(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _make_scratch_root() -> str:
+    """A throwaway data root for a Test run, seeded with the profile's sources.
+
+    The whole safety property rests on this: the child is spawned with
+    ``CYBERSEC_SLM_DATA_ROOT`` pointed here, so every path it computes lands
+    inside it. The real corpus is not merely "not written to" -- it is not
+    reachable from the child at all.
+
+    It has to be created by the *parent*, because ``core`` freezes its paths at
+    import: a child that set the variable on itself would already have bound the
+    real root by the time it ran a line.
+
+    The profile's ``sources/`` is copied in (small: CSVs and a YAML) so the
+    taxonomy and catalog resolve normally rather than silently falling back to
+    built-in defaults, which would make the run test something other than this
+    profile.
+    """
+    scratch = tempfile.mkdtemp(prefix="cybersec-slm-testrun-")
+    src = os.path.join(core.data_root(), "sources")
+    if os.path.isdir(src):
+        try:
+            shutil.copytree(src, os.path.join(scratch, "sources"))
+        except OSError:
+            pass          # a fresh checkout has none; the built-ins then apply
+    return scratch
+
+
+def build_fix_config(settings: dict | None = None) -> dict:
+    """The config an ``eda-fix`` run is handed.
+
+    ``fix_rounds`` and ``fix_step`` steer the loop itself rather than any one
+    stage, so they are lifted out here; everything left over is the per-stage
+    override layer, exactly as for a full run. Pure and side-effect-free.
+    """
+    from . import rebalance  # local: rebalance imports this module
+
+    over = dict(settings or {})
+    rounds = over.pop("fix_rounds", None) or rebalance.DEFAULT_ROUNDS
+    step = over.pop("fix_step", None) or rebalance.DEFAULT_ROW_STEP
+    return {"rounds": int(rounds), "step": int(step), "settings": over}
 
 
 def _read_control() -> dict | None:
@@ -237,14 +367,22 @@ def status() -> dict:
     }
 
 
-def _spawn_detached(cmd: list[str], *, root: str, logs: str) -> int:
+def _spawn_detached(cmd: list[str], *, root: str, logs: str,
+                    profile: str | None = None) -> int:
     """Launch ``cmd`` detached with the dashboard's data root; return its PID.
 
     The child survives dashboard reruns and can be killed as a whole tree; its
     stdout/stderr go to ``logs/pipeline_control.out`` while the pipeline writes its
     own ``logs/pipeline.<pid>.log`` that the live monitor tails.
+
+    The profile is pinned into the child's environment, not left to it. A child
+    re-reads ``sources/active_profile`` at its own import, so switching profiles in
+    the dashboard mid-run used to silently re-point the *running* child's next
+    stage at the other corpus. Pinning it means a launch builds the profile it was
+    started for, whatever the operator does afterwards.
     """
-    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root}
+    env = {**os.environ, "CYBERSEC_SLM_DATA_ROOT": root,
+           "CYBERSEC_SLM_PROFILE": profile or core.active_profile(root)}
     out = open(os.path.join(logs, "pipeline_control.out"), "ab")
     kwargs: dict = {"cwd": root, "env": env, "stdout": out, "stderr": out,
                     "stdin": subprocess.DEVNULL}
@@ -284,22 +422,62 @@ def start(stage: str = "all", *, resume: bool = False,
     root = core.data_root()
     logs = _logs_dir()
     os.makedirs(logs, exist_ok=True)
+    
+    # Archive any previous pipeline logs to keep the root directory clean
+    import glob, shutil
+    archive = os.path.join(logs, "archive")
+    os.makedirs(archive, exist_ok=True)
+    for p in glob.glob(os.path.join(logs, "pipeline.*.log")):
+        try:
+            shutil.move(p, os.path.join(archive, os.path.basename(p)))
+        except OSError:
+            pass
+
+    # ``resumed`` is read back off the argv that is actually launched, never off
+    # the caller's flag. Each stage of a full run is built from its own page's
+    # saved settings, so a saved ``resume: true`` on the Clean page puts
+    # ``--resume`` in the plan even when the caller passed ``resume=False``.
+    # Echoing the caller's flag made status() announce a fresh run while the
+    # pipeline resumed and skipped every source in its ledger.
     if _command is not None:
         cmd = _command
-    elif stage == "all":
-        # Full run: one detached orchestrator that runs the five stages in order,
-        # each with its own page's saved settings (overridden by ``settings``, the
-        # Overview panel). The plan is handed to it via logs/pipeline_plan.json.
-        plan = build_full_plan(settings, resume=resume)
+        resumed = bool(resume or (settings or {}).get("resume"))
+    elif stage in ("all", "quick-finish"):
+        # One detached orchestrator running a plan of stages in order, each with
+        # its own page's saved settings (overridden by ``settings``, the Overview
+        # panel). The plan is handed to it via logs/pipeline_plan.json.
+        plan = (build_quick_finish_plan(settings) if stage == "quick-finish"
+                else build_full_plan(settings, resume=resume))
         with open(_plan_file(), "w", encoding="utf-8") as f:
             json.dump(plan, f)
         cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_all", _plan_file()]
+        resumed = any("--resume" in argv for argv in plan)
+    elif stage == "test-run":
+        # The one launch that does not run against the real data root. The scratch
+        # root is made here rather than in the child because core freezes its paths
+        # at import, so a child could not re-point itself after the fact.
+        scratch = _make_scratch_root()
+        cfg = {"report": test_report_file(), "scratch": scratch}
+        with open(_test_cfg_file(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_test",
+               _test_cfg_file()]
+        root = scratch          # spawn the child against the scratch root
+        resumed = False
+    elif stage == "eda-fix":
+        # The looping orchestrator: it decides each round's stages from the gate's
+        # own report, so it takes a config rather than a fixed plan.
+        with open(_fix_file(), "w", encoding="utf-8") as f:
+            json.dump(build_fix_config(settings), f)
+        cmd = [sys.executable, "-m", "cybersec_slm.dashboard.run_fix", _fix_file()]
+        resumed = True          # its ingest and clean rounds always resume
     else:
         cmd = build_command(stage, resume=resume, settings=settings)
+        resumed = "--resume" in cmd
     pid = _spawn_detached(cmd, root=root, logs=logs)
 
     ctl = {"pid": pid, "cmd": cmd, "stage": stage,
-           "resume": bool(resume or (settings or {}).get("resume")),
+           "resume": resumed,
            "started_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     with open(_control_file(), "w", encoding="utf-8") as f:
         json.dump(ctl, f)
@@ -372,28 +550,77 @@ def _force_rmtree(path: str) -> list[str]:
     return failed
 
 
-def reset() -> dict:
-    """Delete ALL pipeline output (``data/`` and ``logs/``) under the data root.
+def reset(stages: set[str] | None = None) -> dict:
+    """Delete pipeline output for the specified stages (or all if None).
 
-    Refuses while a run is active (stop it first). The ``data/`` folder is cleared
-    completely (read-only files included); ``logs/`` is cleared too, except a log
-    file the current process still holds open, which is reported in ``skipped``
-    rather than silently left behind. The curated catalog under ``sources/`` is
-    never touched. Returns ``{ok, removed, skipped}``.
+    Scoped to the active profile.
+    Refuses while a run is active (stop it first). Returns ``{ok, removed, skipped, profile}``.
     """
     if status()["running"]:
         return {"ok": False, "error": "stop the running pipeline before resetting"}
-    root = core.data_root()
+    profile = core.active_profile()
     removed: list[str] = []
     skipped: list[str] = []
-    for sub in ("data", "logs"):
-        path = os.path.join(root, sub)
-        if not os.path.isdir(path):
+    
+    if stages is None or len(stages) >= 5:
+        for sub, path in (("data", core.data_dir()), ("logs", core.logs_dir())):
+            if not os.path.isdir(path):
+                continue
+            skipped.extend(_force_rmtree(path))
+            if os.path.isdir(path):
+                continue
+            removed.append(sub)
+        return {"ok": True, "removed": removed, "skipped": skipped, "profile": profile}
+
+    data_d = core.data_dir()
+    logs_d = core.logs_dir()
+    targets = []
+    
+    if "source" in stages:
+        targets.extend([
+            os.path.join(logs_d, "discovered"),
+        ] + glob.glob(os.path.join(logs_d, "sourcing-summary-*.json")))
+        
+    if "ingest" in stages:
+        targets.extend([
+            os.path.join(data_d, "raw"),
+            os.path.join(logs_d, "ingest_log.sqlite"),
+            os.path.join(logs_d, "completed_sources.txt")
+        ] + glob.glob(os.path.join(logs_d, "ingest-failure-*.json")))
+        
+    if "clean" in stages:
+        targets.extend([
+            os.path.join(data_d, "clean"),
+            os.path.join(logs_d, "clean_report.csv"),
+            os.path.join(logs_d, "clean_report.json"),
+        ])
+        
+    if "eda" in stages:
+        targets.extend([
+            os.path.join(logs_d, "eda_report.json")
+        ] + glob.glob(os.path.join(logs_d, "eda-*.json")))
+        
+    if "schema" in stages:
+        targets.extend([
+            os.path.join(data_d, "final"),
+            os.path.join(logs_d, "normalize_report.json"),
+            os.path.join(logs_d, "schema_validation.json"),
+        ])
+
+    for path in targets:
+        if not os.path.exists(path):
             continue
-        skipped.extend(_force_rmtree(path))
         if os.path.isdir(path):
-            # A locked entry kept the tree alive (only ever the live log file);
-            # data/ has no such handle, so it is always fully removed here.
-            continue
-        removed.append(sub)
-    return {"ok": True, "removed": removed, "skipped": skipped}
+            sk = _force_rmtree(path)
+            skipped.extend(sk)
+            if not os.path.isdir(path):
+                removed.append(os.path.basename(path))
+        else:
+            try:
+                os.remove(path)
+                removed.append(os.path.basename(path))
+            except OSError:
+                skipped.append(path)
+                
+    return {"ok": True, "removed": removed, "skipped": skipped, "profile": profile}
+

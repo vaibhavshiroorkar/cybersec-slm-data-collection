@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Crawl openly-licensed cybersecurity websites -> JSONL (one record per page).
 
 The crawl engine is Scrapy, run as an isolated subprocess
@@ -17,6 +17,7 @@ import subprocess
 import sys
 from urllib.parse import urlparse
 
+from . import crawl_runner
 from .common import (
     HEADERS,
     ONE_MB,
@@ -45,7 +46,17 @@ def _record_failed(log, *, slug, domain, desc, start_url, lic, status) -> None:
                origin_format="html", license=lic, status=status)
 
 
-def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, log):
+def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, log,
+          extractor: str | None = None):
+    """Crawl one site into JSONL.
+
+    ``extractor`` picks how a page becomes text (see
+    :mod:`cybersec_slm.ingestion.crawl_runner`): ``default`` strips known
+    boilerplate tags and keeps the rest, ``trafilatura`` detects the main content.
+    It rides in the JSON config the runner subprocess already reads, so choosing
+    one needs no new plumbing. ``$CYBERSEC_SLM_EXTRACTOR`` sets it for a run
+    without threading the flag through every caller.
+    """
     folder = os.path.join(BASE, domain, slug)
     os.makedirs(folder, exist_ok=True)
     out = os.path.join(folder, slug + ".jsonl")
@@ -54,6 +65,8 @@ def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, l
         "max_pages": int(max_pages), "use_js": bool(use_js), "out_path": out,
         "user_agent": UA, "download_delay": DOWNLOAD_DELAY_S,
         "close_timeout": CLOSE_TIMEOUT_S, "license": lic, "description": desc,
+        "extractor": (extractor or os.environ.get("CYBERSEC_SLM_EXTRACTOR")
+                      or crawl_runner.EXTRACTOR_DEFAULT),
     }
     logger.info(f"=== WEBSITE: {desc} ({urlparse(start_url).netloc}) ===")
     try:
@@ -84,3 +97,4 @@ def crawl(domain, slug, start_url, lic, use_js, max_pages, allow_prefix, desc, l
                domain=domain, description=desc, source_url=start_url,
                origin_format="html", jsonl_mb=round(size / ONE_MB, 1), rows=n,
                sha256=sha256_file(out), license=lic, status="ok")
+

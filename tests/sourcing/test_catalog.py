@@ -1,4 +1,4 @@
-"""Offline tests for the persistent, editable keyword catalog."""
+﻿"""Offline tests for the persistent, editable keyword catalog."""
 
 import pytest
 
@@ -19,7 +19,7 @@ def test_save_load_round_trip(tmp_path):
     cat = {"My Domain": {"datasets": ["a dataset", "b dataset"], "text": ["c guide"]}}
     catalog.save(cat, p)
     back = catalog.load(p)
-    expected = {"My Domain": {**cat["My Domain"], "code": "", "vocab": []}}
+    expected = {"My Domain": {**cat["My Domain"], "links": [], "code": "", "vocab": []}}
     assert back == expected
 
 
@@ -175,7 +175,7 @@ def test_update_subdomain_none_means_leave_alone(tmp_path):
     _seed_one(p)
     catalog.update_subdomain("Old Name", path=p)          # no fields at all
     assert catalog.load(p)["Old Name"] == {
-        "datasets": ["ds1", "ds2"], "text": ["tx1"], "code": "OLD",
+        "datasets": ["ds1", "ds2"], "text": ["tx1"], "links": [], "code": "OLD",
         "vocab": ["term"]}
 
 
@@ -217,3 +217,4 @@ def test_update_subdomain_preserves_the_saved_domain_name(tmp_path):
     catalog.set_domain_name("MEDTECH", p)
     catalog.update_subdomain("Old Name", name="New Name", path=p)
     assert catalog.domain_name(p) == "MEDTECH"
+

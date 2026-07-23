@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Infer sheet fields that are knowable from a search result alone."""
 
 from __future__ import annotations
@@ -16,6 +16,13 @@ def infer_category_and_format(url: str) -> tuple[str, str]:
         fmt = low.rsplit(".", 1)[-1].upper()
         fmt = {"JSONL": "JSONL", "XLSX": "XLSX"}.get(fmt, fmt)
         return "Dataset", fmt
+
+    if low.endswith((".rss", ".atom", ".xml")) or "/feed" in low or "/rss" in low:
+        fmt = "XML" if low.endswith(".xml") else ("RSS" if "rss" in low else "ATOM")
+        return "Feed", fmt
+
+    if host.startswith("api.") or "/api/" in low or "graphql" in low or low.endswith(".json"):
+        return "API", "JSON"
 
     if "huggingface.co" in host and "/datasets/" in low:
         return "Dataset", ""
@@ -70,3 +77,4 @@ def refine_domain(default_domain: str, title: str, snippet: str,
         if s > best_score:
             best_domain, best_score = domain, s
     return best_domain
+

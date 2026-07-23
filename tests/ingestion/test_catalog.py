@@ -1,4 +1,4 @@
-"""Catalog loader tests — Sources.csv -> descriptors (no network)."""
+﻿"""Catalog loader tests — Sources.csv -> descriptors (no network)."""
 
 from __future__ import annotations
 
@@ -56,8 +56,17 @@ def test_real_catalog_loads_with_infra_sources(monkeypatch):
     # The committed catalog must load and include the NVD + CWE rows. Those rows
     # live in the cybersec profile; the ubi profile ships an empty catalog that
     # sourcing fills, so pin the profile rather than reading whichever is active.
+    #
+    # This is the one test that wants the real checkout: the suite's root conftest
+    # pins the data root to a temp directory so no test can touch a developer's
+    # corpus, and reading the committed catalog means opting back out of that. It
+    # only reads.
+    import os
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    monkeypatch.setenv("CYBERSEC_SLM_DATA_ROOT", repo)
     monkeypatch.setenv("CYBERSEC_SLM_PROFILE", "cybersec")
     descriptors = sources.load_descriptors(sources.default_catalog())
     kinds = {d["kind"] for d in descriptors}
     assert len(descriptors) > 0
     assert {"api", "xml"} <= kinds
+

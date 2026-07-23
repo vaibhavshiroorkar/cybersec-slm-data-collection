@@ -1,4 +1,4 @@
-% =================================================================
+﻿% =================================================================
 %  IEEE Conference Paper
 %  Title : CyberCorpus: An Automated Pipeline for
 %          Sub-Domain Cybersecurity Data Collection
@@ -126,7 +126,7 @@ Penedo et al. \cite{penedo2023refinedweb} introduce RefinedWeb, applying URL fil
 
 In line with Al-Sada et al. \cite{alsada2025attck}, Rani et al. \cite{rani2024ttpxhunter}, and Abdeen et al. \cite{abdeen2023smet}, models built on the MITRE ATT\&CK framework or similar structured approaches perform significantly better at tactics-techniques-procedures (TTP) extraction and CVE tagging than reference-based learning, supporting the claim that explicitly allocating each collected record to a sub-domain matters. Where these works apply structure at the level of individual model outputs (for example, mapping a report onto an ATT\&CK technique), the pipeline applies the same principle earlier, at the level of the training record itself, tagging every record to one of twelve canonical sub-domains before it can enter the released corpus. Park and You \cite{park2023pretrained} show that source-type multiplicity improves generalisation across cyber threat intelligence models, further justifying a heterogeneous mix of adapters (API feeds, PDFs, structured feeds, and crawled HTML) rather than a single, easily normalised source type.
 
-On tooling, Leskovec et al. \cite{leskovec2014mmd} survey the MinHash/LSH techniques used in the second deduplication tier, and their complexity analysis justifies replacing an all-pairs comparison with a sub-linear approximate search as the pipeline scales past hundreds of thousands of records. Wang et al. \cite{wang2023selfinstruct} motivate separating the fields an annotation owner controls from those the collector controls, a separation of concerns adopted directly in the canonical schema design (Section III-G). Pydantic v2 \cite{pydanticv2} enforces a closed set of attributes, which the pipeline relies on to make schema violations a hard validation failure rather than a silent data-quality issue found downstream. Presidio \cite{presidio2023} redacts PII without custom code, and its rule-and-model hybrid design is why the pipeline can fall back to regular-expression redaction when the primary model is unavailable. Prefect \cite{prefect2023} and DVC \cite{dvc2023} coordinate and version the pipeline steps, giving reproducible, resumable runs and a versioned dataset lineage without either tool being a hard runtime dependency. Schick et al. \cite{schick2023toolformer} introduced the tool-calling approach now implemented by the monitoring agent, whose read-only tool surface is a deliberately narrowed instance of that paradigm. Finally, Tihanyi et al. \cite{tihanyi2024cybermetric} and Alam et al. \cite{alam2024ctibench} provide benchmarks for testing the resulting SLM, and evaluation on them is a natural next step once the pilot corpus in Section V reaches full sub-domain coverage.
+On tooling, Leskovec et al. \cite{leskovec2014mmd} survey the MinHash/LSH techniques used in the second deduplication tier, and their complexity analysis justifies replacing an all-pairs comparison with a sub-linear approximate search as the pipeline scales past hundreds of thousands of records. Wang et al. \cite{wang2023selfinstruct} motivate separating the fields an annotation owner controls from those the collector controls, a separation of concerns adopted directly in the canonical schema design (Section III-G). Pydantic v2 \cite{pydanticv2} enforces a closed set of attributes, which the pipeline relies on to make schema violations a hard validation failure rather than a silent data-quality issue found downstream. Presidio \cite{presidio2023} redacts PII without custom code, and its rule-and-model hybrid design is why the pipeline can fall back to regular-expression redaction when the primary model is unavailable. Schick et al. \cite{schick2023toolformer} introduced the tool-calling approach now implemented by the monitoring agent, whose read-only tool surface is a deliberately narrowed instance of that paradigm. Finally, Tihanyi et al. \cite{tihanyi2024cybermetric} and Alam et al. \cite{alam2024ctibench} provide benchmarks for testing the resulting SLM, and evaluation on them is a natural next step once the pilot corpus in Section V reaches full sub-domain coverage.
 
 \subsection{Positioning of This Work}
 
@@ -240,7 +240,7 @@ This section describes how the methodology of Section III is realised, following
 
 \subsection{Technology Stack}
 
-The pipeline is a Python 3.13+ package managed with the uv package manager (for deterministic lock-file resolution) and exposed through a single command-line utility that is also importable as a Python module. The code is organised as one package per stage (sourcing, ingestion, cleaning, exploratory analysis, normalisation, orchestration, and dashboard), each with a corresponding test module. The source catalogue is a single version-controlled spreadsheet, and a separate directory holds the Terraform configuration. All working directories, that is, temporary or intermediate artifact locations, resolve from a single environment variable that defaults to the current working directory, allowing a code-only repository whose deployment simply points that variable elsewhere. Secrets are read only from an environment file and never encoded into the source. A streaming entry point drives per-source ingestion: a run command executes only until cross-source deduplication completes, whereas an all command continues through normalisation, with matching Prefect equivalents. A resume option lets both commands continue from any interruption by reading the completion ledger, and all generated outputs are excluded from version control.
+The pipeline is a Python 3.13+ package managed with the uv package manager (for deterministic lock-file resolution) and exposed through a single command-line utility that is also importable as a Python module. The code is organised as one package per stage (sourcing, ingestion, cleaning, exploratory analysis, normalisation, and dashboard), each with a corresponding test module. The source catalogue is a single version-controlled spreadsheet. All working directories, that is, temporary or intermediate artifact locations, resolve from a single environment variable that defaults to the current working directory, allowing a code-only repository whose deployment simply points that variable elsewhere. Secrets are read only from an environment file and never encoded into the source. A streaming entry point drives per-source ingestion: a run command executes only until cross-source deduplication completes, whereas an all command continues through normalisation. A resume option lets both commands continue from any interruption by reading the completion ledger, and all generated outputs are excluded from version control.
 
 \subsection{Source Governance}
 
@@ -288,7 +288,7 @@ Normalisation maps cleaned records onto the canonical schema (Pydantic v2), whic
 
 The dashboard is a Streamlit app packaged as an opt-in extra and served locally, which uses a strict read/render separation. One module contains all code that touches disk or SQLite, exposing pure, Streamlit-free functions that are fully unit-testable; a second holds formatting and trend-series helpers; and two more wrap the same read layer for the conversational agent, without importing Streamlit itself. Three pages present this data: a pipeline page, consisting of the auto-refreshing live strip, the sufficiency-gate result, trend charts, a per-source table, and stage reports; a dataset page, a filterable, full-text-searchable explorer keyed over a streamed, never memory-loaded dataset, complete with rejected and de-duplicated record previews; and an agent page, a chatbot-style frontend. The agent makes available seven read-only tools: whether a run is active and how many sources have completed; the latest sufficiency-gate result, including blockers and warnings; record and token counts with domain, source, and language facets; per-source size, row-count, and licence summaries; cleaning and normalisation stage totals; a keyword and facet search returning trimmed snippets; and previews of rejected or duplicate records. None of these tools can trigger a run, retry a source, or write to disk. A tool-calling loop, backed by NVIDIA NIM through an OpenAI-compatible client, alternates between sending the conversation and executing requested tool calls for up to six iterations, bounding latency and cost; every tool dispatch and the model round-trip itself are individually wrapped, so a failure surfaces as a returned error rather than an uncaught exception, and the page falls back to setup instructions when the API key is unset.
 
-Two orchestration paths are available. Prefect wraps the same stage functions in a build-corpus flow, loading secrets, then running per-source ingest and clean (mapped, retried, and isolated), cross-source deduplication, the sufficiency gate, normalisation, and an optional DVC snapshot; Prefect is optional, and its decorators degrade to no-ops when it is not installed, so the underlying functions remain independently testable. DVC versions the corpus and its analysis and normalisation reports to an S3 remote. Deployment is Dockerised, with a Terraform skeleton provisioning ECR, ECS, S3, IAM, and Secrets Manager, and CI/CD for scheduled, versioned corpus releases. Least-privilege access is maintained throughout: the ECS task role can reach only a single data bucket and four named secrets, and the deployed image carries no embedded credentials.
+A single streaming entry point drives the build: per-source ingest and clean (isolated, so one failing source cannot halt the run), cross-source deduplication, the sufficiency gate, and normalisation. No external scheduler or dataset-versioning service is required, which keeps the pipeline reproducible from the repository alone. Traceability is carried by the provenance manifest rather than by an external version store: every record records its source and licence, and the manifest records a content hash of the released dataset, which is what permits a bad batch to be scoped and withdrawn. Deployment is Dockerised, and the image runs as an unprivileged user, writes only to a mounted output volume, and carries no embedded credentials, reading secrets from the environment at run time.
 
 \subsection{Testing and Security Controls}
 
@@ -309,7 +309,7 @@ Ingestion & Default-deny commercial-licence gate; per-source process isolation; 
 Cleaning & PII redaction (Presidio with regex fallback); documented PII blind spots with sampled manual review; anomaly quarantine; auditable drop reasons. \\ \hline
 EDA & Blocking sufficiency gate; source-concentration ceiling; drift detection; versioned, append-only run history. \\ \hline
 Normalisation & Synthetic-source exclusion; strict schema validation with closed enums; metadata-only reject logs; per-source failure escalation; per-record near-duplicate scores; content hashing. \\ \hline
-Release & Provenance manifest (datasheet); DVC-versioned releases enabling scoped rollback. \\ \hline
+Release & Provenance manifest (datasheet) with dataset content hashing, enabling scoped rollback. \\ \hline
 CI / supply chain & Secret scanning (gitleaks, full history); dependency auditing (pip-audit); least-privilege CI token. \\ \hline
 Deployment & Immutable ECR tags with scan-on-push; S3 public-access block, encryption, and versioning; least-privilege IAM task role; secrets injected at runtime, never baked into images. \\ \hline
 \end{tabular}
@@ -553,19 +553,6 @@ Microsoft,
 de-identification service,''
 \textit{Microsoft Open Source Documentation}, 2023.
 [Online]. Available: \url{https://microsoft.github.io/presidio/}
-
-\bibitem{prefect2023}
-Prefect Technologies,
-``Prefect: The easiest way to orchestrate and observe your data
-pipelines,''
-\textit{Prefect Documentation}, 2023.
-[Online]. Available: \url{https://docs.prefect.io}
-
-\bibitem{dvc2023}
-Iterative.ai,
-``DVC: Data version control for machine learning projects,''
-\textit{DVC Documentation}, 2023.
-[Online]. Available: \url{https://dvc.org}
 
 \end{thebibliography}
 

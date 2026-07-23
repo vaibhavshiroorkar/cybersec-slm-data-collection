@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Shared core used by every pipeline stage: one place per purpose.
 
 Holds what ingestion and cleaning both need: an optional-dependency loader,
@@ -53,19 +53,142 @@ if _dotenv is not None:
 
 
 # ---------------------------------------------------------------- paths ------
+# The profile whose corpus is built when nothing says otherwise. Defined here, not
+# in sourcing.taxonomies, because this module must resolve a profile without
+# importing anything from the package: taxonomies and profiles both import core,
+# so core importing them back would be a cycle, and a fatal one -- _make_logger()
+# runs at import (below) and needs LOGS, which needs the profile.
+DEFAULT_PROFILE = "ubi"
+
+# The profiles that ship built in, so a name can be validated without importing
+# sourcing.taxonomies (which would be a cycle). Duplicated on purpose and pinned
+# by tests/test_core.py, which asserts this agrees with taxonomies: two places
+# disagreeing about which profiles exist is worse than the duplication.
+BUILTIN_PROFILES = ("cybersec", "ubi")
+
+# The old, profile-less layout, kept only to recognise a corpus that predates
+# per-profile paths so it can be moved (see migrate_layout).
+_LEGACY_DIRS = ("raw", "clean", "final", "flagged", "dropped", "_stages")
+
+
 def data_root() -> str:
     return os.environ.get("CYBERSEC_SLM_DATA_ROOT") or os.getcwd()
 
 
+def _profile_exists(name: str, root: str) -> bool:
+    return (name in BUILTIN_PROFILES
+            or os.path.isdir(os.path.join(root, "sources", "profiles", name)))
+
+
+def active_profile(root: str | None = None) -> str:
+    """The profile in force: env, else ``sources/active_profile``, else the default.
+
+    Deliberately stdlib-only, for the import-cycle reason above;
+    :func:`sourcing.profiles.active` delegates here so there is one answer to
+    "which profile am I" rather than two that can disagree. Precedence matches
+    what profiles documented: the env var is for a one-off run or a test and
+    outranks what is persisted on disk.
+
+    A name that does not resolve to a real profile falls back to the default, so a
+    stale pointer or a typo degrades to a working pipeline instead of quietly
+    building a corpus under a directory nobody meant.
+    """
+    root = root or data_root()
+    env = (os.environ.get("CYBERSEC_SLM_PROFILE") or "").strip()
+    if env and _profile_exists(env, root):
+        return env
+    try:
+        with open(os.path.join(root, "sources", "active_profile"),
+                  encoding="utf-8") as f:
+            name = f.read().strip()
+        if name and _profile_exists(name, root):
+            return name
+    except OSError:
+        pass
+    return DEFAULT_PROFILE
+
+
+def data_dir(root: str | None = None, profile: str | None = None) -> str:
+    """``<root>/data/<profile>`` -- this profile's corpus, and no other's.
+
+    A function, not a constant, because the dashboard is one long-lived process
+    that has to notice a profile switch. The constants below are the frozen
+    snapshot for a pipeline *stage*, which runs in its own short-lived process.
+    """
+    root = root or data_root()
+    return os.path.join(root, "data", profile or active_profile(root))
+
+
+def logs_dir(root: str | None = None, profile: str | None = None) -> str:
+    """``<root>/logs/<profile>``. Same reasoning as :func:`data_dir`."""
+    root = root or data_root()
+    return os.path.join(root, "logs", profile or active_profile(root))
+
+
+def migrate_layout(root: str | None = None, profile: str | None = None) -> list[str]:
+    """Move a pre-profile ``data/`` and ``logs/`` under ``profile``. Returns what moved.
+
+    Before profiles owned their own corpora, everything lived at ``<root>/data`` and
+    ``<root>/logs``, shared: switching to ``ubi`` showed cybersec's 1.9M records,
+    its EDA report and its manifest, and a ``ubi`` run wrote into the same tree.
+
+    Two renames per tree rather than a copy, so a 100GB corpus moves instantly on
+    the same volume::
+
+        data -> data.migrating ; mkdir data ; data.migrating -> data/<profile>
+
+    Called from process entry points (the CLI, the dashboard), never at import: a
+    ProcessPoolExecutor worker re-imports this module, and several processes racing
+    to rename the same tree is precisely the way to lose it. Idempotent: once moved,
+    the legacy directories are gone and this is a no-op.
+    """
+    root = root or data_root()
+    profile = profile or active_profile(root)
+    moved: list[str] = []
+    for kind in ("data", "logs"):
+        base = os.path.join(root, kind)
+        if not os.path.isdir(base):
+            continue
+        legacy = (any(os.path.isdir(os.path.join(base, d)) for d in _LEGACY_DIRS)
+                  if kind == "data"
+                  else any(os.path.isfile(os.path.join(base, f))
+                           or os.path.isdir(os.path.join(base, f))
+                           for f in ("eda", "clean_report.csv", "ingest_log.sqlite",
+                                     "pipeline_run.json", "discovered")))
+        # An *empty* profile directory does not mean "already migrated": importing
+        # this module creates logs/<profile> before anything has run (_make_logger
+        # does os.makedirs(LOGS) at import). Treating that stub as done left the
+        # real logs stranded at the top level, visible to no profile.
+        dest = os.path.join(base, profile)
+        already = os.path.isdir(dest) and bool(os.listdir(dest))
+        if not legacy or already:
+            continue
+        if os.path.isdir(dest):
+            # The empty stub, removed before the move rather than after: the whole
+            # of `base` is about to become `base/<profile>`, so a stub left inside
+            # would resurface as base/<profile>/<profile>.
+            os.rmdir(dest)
+        tmp = base + ".migrating"
+        os.rename(base, tmp)                 # fails loudly if a run holds a handle
+        os.makedirs(base, exist_ok=True)
+        os.rename(tmp, dest)
+        moved.append(kind)
+    return moved
+
+
 DATA_ROOT = data_root()
-DATA_DIR = os.path.join(DATA_ROOT, "data")          # all generated corpus artifacts
+# Frozen at import, and that is correct for a pipeline stage: it runs in its own
+# process, against one profile, for its lifetime. The dashboard must NOT read
+# these -- it outlives a profile switch -- and goes through data_dir()/logs_dir().
+_PROFILE = active_profile(DATA_ROOT)
+DATA_DIR = data_dir(DATA_ROOT, _PROFILE)            # this profile's artifacts
 RAW_DATA = os.path.join(DATA_DIR, "raw")            # ingestion output / cleaning input
 CLEAN_DATA = os.path.join(DATA_DIR, "clean")        # streaming per-source clean output
 FINAL_DATA = os.path.join(DATA_DIR, "final")        # canonical release dataset + sidecars
 FLAGGED = os.path.join(DATA_DIR, "flagged")         # -> Data Annotation Team
 DROPPED = os.path.join(DATA_DIR, "dropped")         # -> audit
 STAGES = os.path.join(DATA_DIR, "_stages")          # single-stage diagnostics
-LOGS = os.path.join(DATA_ROOT, "logs")              # operational logs (alongside data/)
+LOGS = logs_dir(DATA_ROOT, _PROFILE)                # operational logs (alongside data/)
 
 # Absolute path of this process's pipeline log file (set by _make_logger). The
 # dashboard reads it to follow the actual run's log: a run's pid can differ from
@@ -197,3 +320,4 @@ class JsonlWriter:
 
     def __exit__(self, *exc):
         self.close()
+

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Orchestrate keyword search -> dedup -> enrich -> append for the sourcing stage.
 
 Pipeline per run:
@@ -41,6 +41,7 @@ import csv
 import json
 import os
 import time
+import urllib.parse
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -56,7 +57,7 @@ from .keywords import default_engines
 from .quality import KEEP, reject_host
 from .quality import classify as quality_classify
 from .row import SHEET_COLUMNS, build_row, row_to_list
-from .search import SearchError, searxng_search
+from .search import SearchError, searxng_search, Result
 from .sheet import append_rows, existing_links, normalize_url, valid_counts_by_subdomain
 from .stats import Funnel
 
@@ -91,20 +92,99 @@ def _write_summary(summary: dict, path: str) -> None:
         json.dump(summary, f, indent=2)
 
 
-def _domain_shots(selected: list[str], cat: dict, mode: str
+def _extract_host(url: str) -> str:
+    """Hostname from a URL, ``www.``-stripped; empty string on failure."""
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+        return host.removeprefix("www.")
+    except Exception:
+        return ""
+
+
+# Per-mode filetype qualifiers appended to site-dork shots so we collect
+# structured data files (datasets mode) and PDF documents (both modes).
+_DORK_FILETYPES: dict[str, tuple[str, ...]] = {
+    "datasets": ("filetype:pdf", "filetype:csv", "filetype:xlsx", "filetype:json"),
+    "text":     ("filetype:pdf",),
+    "both":     ("filetype:pdf", "filetype:csv", "filetype:xlsx", "filetype:json"),
+}
+
+
+def _domain_shots(selected: list[str], cat: dict, mode: str,
+                  countries: list[str] | None = None,
+                  fields: list[str] | None = None
                   ) -> dict[str, list[tuple[str, str, bool]]]:
     """Per-domain ordered keyword shots: ``{domain: [(keyword, qualifier, is_ds)]}``.
 
     The discovery driver drains one *result* per domain per rotation from these,
     so sources land evenly across the selected sub-domains rather than filling the
     first domain before the next.
+
+    Shots are ordered in three tiers within each domain:
+
+    1. ``site:host keyword`` dorks  — auto-generated from the domain's direct
+       links: for every (hostname, keyword) pair we emit a bare site-scoped query
+       and one per filetype in :data:`_DORK_FILETYPES` for the run mode.
+       These use the profile's ``site_engines`` (general engines that honour
+       ``site:``) via :func:`~keywords.engines_for_keyword`.
+    2. Plain/generic keyword searches  — the keywords from ``keywords.yaml`` as
+       they are, with no ``site:`` prefix.  These run after the site-dorks for
+       each domain are exhausted.
+
+    Direct links themselves (the raw URLs from the catalog's ``links`` list) are
+    pre-loaded into the cursor buffer *before* any shots fire, so the full
+    priority order is:
+
+        direct links  >  site-dork shots  >  generic keyword searches
     """
+    kw_sets = catalog.keyword_sets(mode, cat)   # list; safe to iterate twice
+    filetypes = _DORK_FILETYPES.get(mode, ("filetype:pdf",))
+
     per_domain: dict[str, list[tuple[str, str, bool]]] = {d: [] for d in selected}
-    for kwdict, qualifier in catalog.keyword_sets(mode, cat):
-        is_ds = qualifier == kw.QUERY_QUALIFIER
-        for domain in selected:
+
+    for domain in selected:
+        # ---- tier 1: site-dork shots from direct-link hostnames ---------------
+        d_links = cat.get(domain, {}).get("links", [])
+        # Deduplicate hostnames (preserving order) so two links on the same host
+        # don't produce duplicate dork sets.
+        seen_hosts: dict[str, None] = {}
+        for lnk in d_links:
+            h = _extract_host(lnk)
+            if h:
+                seen_hosts[h] = None
+        hostnames = list(seen_hosts)
+
+        site_shots: list[tuple[str, str, bool]] = []
+        if hostnames:
+            for kwdict, qualifier in kw_sets:
+                is_ds = qualifier == kw.QUERY_QUALIFIER
+                for keyword in kwdict.get(domain, []):
+                    for host in hostnames:
+                        # broad site-scoped query
+                        site_shots.append((f"site:{host} {keyword}", qualifier, is_ds))
+                        # filetype-specific queries (pdf, csv, …)
+                        for ft in filetypes:
+                            site_shots.append(
+                                (f"site:{host} {keyword} {ft}", qualifier, is_ds))
+
+        # ---- tier 2: plain keyword searches -----------------------------------
+        # Build the suffix to inject for geographical/field targeting
+        suffix_parts = []
+        if countries and "Global" not in countries:
+            suffix_parts.extend(countries)
+        if fields:
+            suffix_parts.extend(fields)
+        suffix = " " + " ".join(suffix_parts) if suffix_parts else ""
+
+        generic_shots: list[tuple[str, str, bool]] = []
+        for kwdict, qualifier in kw_sets:
+            is_ds = qualifier == kw.QUERY_QUALIFIER
             for keyword in kwdict.get(domain, []):
-                per_domain[domain].append((keyword, qualifier, is_ds))
+                injected_keyword = f"{keyword}{suffix}"
+                generic_shots.append((injected_keyword, qualifier, is_ds))
+
+        per_domain[domain] = site_shots + generic_shots
+
     return per_domain
 
 
@@ -115,10 +195,10 @@ def _enrich_and_log(enricher: Enricher, row: dict) -> None:
     logger.info(f"source: license={lic} :: {row.get('Dataset Link', '')}")
 
 
-def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
+def _fill_loop(selected, target_per_domain, global_cap, max_per_domain, csv_path, cursor, seen,
                per_domain_count, by_keyword_agg, new_rows, refill, expired,
                quality_filter, today, enricher, pool, dry_run, domain_vocab,
-               funnel):
+               funnel, valid_only):
     """Valid-gated per-domain fill: top each selected domain up to its
     commercial-valid target.
 
@@ -134,11 +214,14 @@ def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
     ``(appended, target_reached)``.
     """
     existing_valid = valid_counts_by_subdomain(csv_path)
-    need = {d: max(0, target_per_domain - existing_valid.get(d, 0)) for d in selected}
+    if target_per_domain == float('inf'):
+        need = {d: float('inf') for d in selected}
+    else:
+        need = {d: max(0, target_per_domain - existing_valid.get(d, 0)) for d in selected}
     active = [d for d in selected if need[d] > 0 and not cursor[d]["exhausted"]]
     deficits = {d: need[d] for d in selected if need[d] > 0}
-    logger.info(f"source: fill to {target_per_domain}/domain; "
-                f"{len(active)} domain(s) short, deficits {deficits}")
+    logger.info(f"source: valid-gated loop; target/domain={target_per_domain}; "
+                f"{len(active)} domain(s) active")
     appended = 0
 
     def _capped() -> bool:
@@ -192,9 +275,9 @@ def _fill_loop(selected, target_per_domain, global_cap, csv_path, cursor, seen,
 
             kept: list[dict] = []
             for keyword, row in batch:
-                if need[domain] <= 0 or _capped():
+                if need[domain] <= 0 or _capped() or (max_per_domain is not None and per_domain_count[domain] >= max_per_domain):
                     break
-                if license_verdict(row.get("License")) != "ok":
+                if valid_only and license_verdict(row.get("License")) != "ok":
                     continue                        # gathered + enriched, but not kept
                 new_rows.append(row)
                 kept.append(row)
@@ -226,7 +309,8 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
              site_scope: bool = True, quality_filter: bool = True,
              workers: int = 12, client=None, enrich: bool = True,
              engines: str | None = None, target_per_domain: int | None = None,
-             valid_only: bool = False,
+             valid_only: bool = True,
+             countries: list[str] | None = None, fields: list[str] | None = None,
              clock: Callable[[], float] = time.monotonic) -> dict:
     """Run sourcing and return a summary dict.
 
@@ -274,6 +358,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     csv_path = csv_path or default_catalog()
     started = clock()
 
+    if not enrich:
+        valid_only = False
+
     cat = catalog.load()
     all_domains = catalog.subdomains(cat)
     selected = domains or all_domains
@@ -302,11 +389,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     per_domain_count: dict[str, int] = {d: 0 for d in selected}
     by_keyword_agg: dict[tuple[str, str], dict] = {}
 
-    per_domain_shots = _domain_shots(selected, cat, mode)
+    per_domain_shots = _domain_shots(selected, cat, mode, countries, fields)
     target = max_total
     deadline = started + max_minutes * 60 if max_minutes else None
-    fill = target_per_domain is not None
-
     # Route queries to reliable engines (arg > $SEARXNG_ENGINES > a per-mode
     # default) instead of the rate-limited general web engines. These API engines
     # index sources directly and ignore site:/qualifier, so both are dropped while
@@ -322,9 +407,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     def _engines_for(is_ds: bool, keyword: str = "") -> str:
         return engines_override or kw.engines_for_keyword(keyword, is_ds)
 
-    # Fill mode floors the per-query slice so a single GitHub page (up to ~30) is
+    # Valid-gated search floors the per-query slice so a single GitHub page (up to ~30) is
     # captured rather than truncated to the historic default of 5.
-    effective_per_keyword = max(per_keyword, 20) if fill else per_keyword
+    effective_per_keyword = max(per_keyword, 20)
 
     def _reached() -> bool:
         return target is not None and len(new_rows) >= target
@@ -338,14 +423,32 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     # With a budget (or a fill target) set, page deeper until it is met or the
     # search space is exhausted; without one, a single page-1 pass is the historic run.
     last_page = (_MAX_SWEEP_PAGES
-                 if (target is not None or deadline is not None or fill) else 1)
+                 if (target is not None or deadline is not None or target_per_domain is not None) else 1)
 
     # Per-domain search cursor + a small buffer of pending results, so the driver
     # can hand out one result per domain per rotation (even distribution) without
     # re-searching. A whole page (all of a domain's keywords) that yields nothing
     # marks that domain exhausted.
-    cursor = {d: {"si": 0, "page": 1, "page_hits": 0, "buffer": deque(),
-                  "exhausted": not per_domain_shots[d]} for d in selected}
+    #
+    # Priority order within each domain:
+    #   1. Direct links  (pre-loaded into the buffer here — processed before any search)
+    #   2. site:-scoped dorks  (targeted known-website queries, ordered first in shots)
+    #   3. Generic keyword searches
+    cursor = {}
+    for d in selected:
+        buf = deque()
+        d_links = cat.get(d, {}).get("links", [])
+        for link in d_links:
+            funnel.hit(d)
+            agg = by_keyword_agg.setdefault(
+                (d, "<direct link>"),
+                {"domain": d, "keyword": "<direct link>", "hits": 0, "new": 0})
+            agg["hits"] += 1
+            buf.append(("<direct link>", Result(title="", link=link, snippet="direct link")))
+        
+        has_shots = bool(per_domain_shots[d])
+        cursor[d] = {"si": 0, "page": 1, "page_hits": 0, "buffer": buf,
+                     "exhausted": not has_shots and not buf}
     fail_state = {"consecutive": 0, "succeeded_once": False}
 
     def _search(base_query: str, is_ds: bool, page: int):
@@ -372,6 +475,9 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
         c = cursor[domain]
         shots = per_domain_shots[domain]
         while not c["buffer"] and not c["exhausted"]:
+            if not shots:
+                c["exhausted"] = True
+                break
             if c["page"] > last_page:
                 c["exhausted"] = True
                 break
@@ -420,68 +526,12 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     appended_in_fill = 0
     fill_target_reached: bool | None = None
     try:
-        if fill:
-            appended_in_fill, fill_target_reached = _fill_loop(
-                selected, target_per_domain, target, csv_path, cursor, seen,
-                per_domain_count, by_keyword_agg, new_rows, _refill, _expired,
-                quality_filter, today, enricher, pool, dry_run, domain_vocab,
-                funnel)
-        else:
-            # Round-robin: each rotation takes at most one result from each domain,
-            # so accepted sources stay balanced across domains right up to the cutoff.
-            while not _reached() and not _expired():
-                progress = False
-                for domain in selected:
-                    if _reached() or _expired():
-                        break
-                    if _domain_full(domain):
-                        continue
-                    c = cursor[domain]
-                    if not c["buffer"] and not c["exhausted"]:
-                        _refill(domain)
-                    if not c["buffer"]:
-                        continue                   # exhausted / nothing to give
-                    keyword, res = c["buffer"].popleft()
-                    progress = True
-                    category, _ = quality_classify(res)
-                    if quality_filter and category != KEEP:
-                        funnel.drop(domain, category, reject_host(res))
-                        continue
-                    norm = normalize_url(res.link)
-                    if not norm or norm in seen:
-                        funnel.duplicate(domain)
-                        continue
-                    seen.add(norm)                 # also dedup within this run
-                    funnel.candidate(domain)
-                    row = build_row(res, domain, today=today,
-                                    domain_vocab=domain_vocab)
-                    new_rows.append(row)
-                    per_domain_count[domain] += 1
-                    by_keyword_agg[(domain, keyword)]["new"] += 1
-                    budget = target if target is not None else "*"
-                    logger.info(f"source: [{domain}] {len(new_rows)}/{budget} + "
-                                f"{row['Name']} :: {res.link}")
-                    if enricher is not None:
-                        futures.append(pool.submit(_enrich_and_log, enricher, row))
-                if not progress:                   # every domain exhausted / full
-                    logger.info(f"source: search space exhausted at {len(new_rows)} new")
-                    break
-
-            # Drain enrichment before writing so every kept row carries its license.
-            if pool is not None:
-                for fut in futures:
-                    try:
-                        fut.result()
-                    except Exception as e:         # noqa: BLE001 - best-effort
-                        logger.debug(f"source: enrich task failed: {e}")
-                pool.shutdown(wait=True)
-            # Enrichment has drained, so every candidate now carries its resolved
-            # license — tally the verdicts before valid_only prunes the list.
-            for r in new_rows:
-                funnel.verdict(license_verdict(r.get("License")))
-            if valid_only:
-                new_rows[:] = [r for r in new_rows
-                               if license_verdict(r.get("License")) == "ok"]
+        appended_in_fill, fill_target_reached = _fill_loop(
+            selected, target_per_domain if target_per_domain is not None else float('inf'),
+            target, max_per_domain, csv_path, cursor, seen,
+            per_domain_count, by_keyword_agg, new_rows, _refill, _expired,
+            quality_filter, today, enricher, pool, dry_run, domain_vocab,
+            funnel, valid_only)
     finally:
         if pool is not None:
             pool.shutdown(wait=False)
@@ -500,16 +550,10 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
     _write_csv(new_rows, review_csv)
     logger.info(f"source: wrote {len(new_rows)} candidate rows -> {review_csv}")
 
-    appended = 0
-    if fill:
-        appended = appended_in_fill                # already appended per batch
-        logger.info(f"source: appended {appended} rows to {csv_path}"
-                    if not dry_run else
-                    "source: dry-run, not appending to the catalog")
-    elif new_rows and not dry_run:
-        appended = append_rows(csv_path, new_rows)
+    appended = appended_in_fill
+    if not dry_run:
         logger.info(f"source: appended {appended} rows to {csv_path}")
-    elif dry_run:
+    else:
         logger.info("source: dry-run, not appending to the catalog")
 
     elapsed_s = round(clock() - started, 1)
@@ -521,11 +565,11 @@ def discover(csv_path: str | None = None, *, domains: list[str] | None = None,
                "csv": review_csv, "mode": mode, "domains": selected,
                "target": target, "target_per_domain": target_per_domain,
                "engines": engines_override or default_engines(True),
-               "target_reached": (fill_target_reached if fill
-                                  else (target is None or _reached())),
+               "target_reached": fill_target_reached or _reached() or (target is None and target_per_domain is None),
                "by_domain": by_domain, "by_keyword": by_keyword,
                "elapsed_s": elapsed_s, "max_minutes": max_minutes,
                "license_filled": license_filled,
                "license_rate": round(license_filled / len(new_rows), 3) if new_rows else 0.0}
     _write_summary(summary, os.path.join(LOGS, "discovered", f"summary-{stamp}.json"))
     return summary
+

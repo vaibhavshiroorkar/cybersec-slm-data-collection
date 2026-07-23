@@ -1,10 +1,25 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Heuristic security-hazard scanner for raw ingested records.
 
 A cybersecurity corpus legitimately contains exploit code, shellcode snippets,
-and embedded payloads — so this scanner **flags but never auto-drops**.  Flagged
-records are diverted to ``data/flagged/`` with a ``_stage=hazard`` annotation
-so the Data Annotation Team can review them.
+and embedded payloads — so this scanner **reports and never drops**.
+
+What it does with a finding, precisely, because this docstring used to overstate
+it: :func:`scan_record` returns findings, :func:`scan_source_sample` samples a
+source, and ``light_eda.assess_source`` counts them by type into the ingest
+report's ``flags.security_hazards``, each with its worst severity. That is all.
+Nothing is quarantined and nothing is blocked: the gate's reject paths are the
+volume/quality checks, and a hazard has never influenced them.
+
+(This docstring previously claimed flagged records were "diverted to
+``data/flagged/`` with a ``_stage=hazard`` annotation so the Data Annotation Team
+can review them". No code ever did that — ``data/flagged/`` is written only by
+the *cleaning* stage's anomaly path, always with ``stage="anomaly"``. Describing
+a quarantine that does not exist is worse than describing no quarantine, because
+a reader plans around it.)
+
+Scope: text fields of already-parsed records. Binaries and archive members are a
+different question, and :mod:`.binscan` answers that one.
 
 Checks:
     1. Embedded ``<script>`` / ``<iframe>`` / ``javascript:`` in text fields
@@ -150,3 +165,4 @@ def scan_source_sample(records: list[dict], *, max_records: int = 200) -> list[d
             h["record_index"] = i
             all_hazards.append(h)
     return all_hazards
+

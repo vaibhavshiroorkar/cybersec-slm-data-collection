@@ -1,4 +1,4 @@
-"""Streamlit render tests for the Ingest and Clean inspection pages.
+﻿"""Streamlit render tests for the Ingest and Clean inspection pages.
 
 The pages are the deliverable here, so these assert on what actually reaches the
 screen (the per-source tables and the cleaning counters), not merely that the
@@ -12,6 +12,8 @@ import pytest
 
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
+
+from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _PAGES = os.path.join(_REPO, "src", "cybersec_slm", "dashboard", "pages")
@@ -42,7 +44,7 @@ def clean_page(tmp_path, monkeypatch):
     from cybersec_slm.dashboard import cached
 
     cached.clear_stats()
-    logs = tmp_path / "logs"
+    logs = tmp_path / "logs" / PROFILE
     logs.mkdir(parents=True, exist_ok=True)
     (logs / "clean_report.csv").write_text(_CLEAN_REPORT, encoding="utf-8")
     return AppTest.from_file(os.path.join(_PAGES, "3_Clean.py"), default_timeout=30)
@@ -135,7 +137,7 @@ def ingest_page(tmp_path, monkeypatch):
         encoding="utf-8")
     monkeypatch.setattr(data, "_repo_root", lambda: str(tmp_path))
 
-    raw = tmp_path / "data" / "raw" / "Cloud Security" / "ownerA"
+    raw = tmp_path / "data" / PROFILE / "raw" / "Cloud Security" / "ownerA"
     raw.mkdir(parents=True)
     (raw / "f.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
     return AppTest.from_file(os.path.join(_PAGES, "2_Ingest.py"), default_timeout=30)
@@ -185,3 +187,4 @@ def test_ingest_page_filters_the_table_by_subdomain(ingest_page):
     table = next(df for df in _dataframes(ingest_page)
                  if "status" in df.columns and "license" in df.columns)
     assert list(table["source"]) == ["ownerA"]
+
