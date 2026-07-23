@@ -204,5 +204,5 @@ def test_the_security_page_renders_every_control(tmp_path, monkeypatch):
     assert not at.exception
     rendered = " ".join(str(df.value) for df in at.dataframe)
     for name in ["URL screen", "Licence gate", "Zip-bomb guard", "Binary scan",
-                 "Hazard scan", "PII redaction", "Canary tokens"]:
+                 "Hazard scan", "PII redaction", "Canary tokens", "AV scan"]:
         assert name in rendered, f"{name} missing from the page"

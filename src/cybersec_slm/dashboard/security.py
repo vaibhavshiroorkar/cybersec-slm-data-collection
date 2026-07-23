@@ -219,6 +219,52 @@ def _probe_honeypot_filter() -> Probe:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _probe_av_scan() -> Probe:
+    """Verify that the AV gate refuses to pass when clamd is unreachable.
+
+    The spec says "reject/quarantine, never process anyway".  With no clamd
+    running the gate must raise — if it silently returns True the control is
+    broken.  This exercises the fail-closed path without needing a live clamd.
+    """
+    import shutil
+    import tempfile
+
+    from ..ingestion import av_scan
+
+    # Enforcement must be on for a meaningful probe.
+    if not av_scan._enforced():
+        return Probe("AV scan", False,
+                     "AV scanning is disabled (CYBERSEC_SLM_ENFORCE_AV_SCAN=0); "
+                     "cannot prove the gate works")
+
+    tmp = tempfile.mkdtemp(prefix="secprobe-av-")
+    try:
+        test_file = os.path.join(tmp, "sample.bin")
+        with open(test_file, "wb") as f:
+            f.write(b"harmless test content for av probe")
+
+        try:
+            av_scan.gate_file(test_file)
+            # If we get here, the gate did NOT fail — it passed silently
+            # without a running scanner.  That's the exact fail-open bug.
+            return Probe("AV scan", False,
+                         "gate_file() returned without a running clamd — "
+                         "fail-open: files pass unscanned")
+        except (av_scan.ScanError, RuntimeError):
+            # Good: the gate refused to pass.
+            return Probe("AV scan", True,
+                         "gate correctly refuses when clamd is unreachable "
+                         "(fail-closed)")
+        except av_scan.Quarantined:
+            # Also acceptable — extremely unlikely without clamd, but safe.
+            return Probe("AV scan", True,
+                         "gate quarantined the file (unexpected but safe)")
+    except Exception as e:
+        return Probe("AV scan", False, f"probe failed: {e}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_probes(dataset: str | None = None, sidecar: str | None = None) -> list[Probe]:
     """Exercise every control. Never raises: a probe that breaks is a red row."""
     from . import data
@@ -230,6 +276,7 @@ def run_probes(dataset: str | None = None, sidecar: str | None = None) -> list[P
         _probe_url_screen, _probe_scheme_screen, _probe_zip_bomb,
         _probe_download_cap, _probe_license_gate, _probe_binary_scan,
         _probe_hazard_scan, _probe_pii, _probe_honeypot_filter,
+        _probe_av_scan,
     ]
     out: list[Probe] = []
     for fn in checks:

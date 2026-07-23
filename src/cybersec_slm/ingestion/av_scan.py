@@ -16,6 +16,15 @@ class Quarantined(Exception):
     pass
 
 
+class ScanError(Exception):
+    """Raised when a scan cannot complete (unreadable file, clamd drops, etc.).
+
+    The spec says "reject/quarantine, never process anyway".  A scan that
+    cannot run is *not* a clean bill of health, so callers must treat this
+    as a hard failure — the source must not advance to light-EDA or cleaning.
+    """
+
+
 def _enforced() -> bool:
     """Return True if AV scanning is enforced (default), False if disabled."""
     return os.environ.get("CYBERSEC_SLM_ENFORCE_AV_SCAN", "1") != "0"
@@ -137,14 +146,19 @@ def gate_file(path: str) -> bool:
         with open(path, "rb") as f:
             data = f.read()
     except Exception as e:
-        logger.warning(f"  av scan: could not read {path}: {e}")
-        return False
+        logger.error(f"  av scan: could not read {path}: {e}")
+        raise ScanError(f"could not read {path}: {e}") from e
 
     sock = _client()
     try:
         finding = _scan_stream(sock, data)
         if finding:
             quarantine_file(path, finding)
+    except Quarantined:
+        raise
+    except Exception as e:
+        logger.error(f"  av scan: could not scan {path}: {e}")
+        raise ScanError(f"could not scan {path}: {e}") from e
     finally:
         sock.close()
     return True
@@ -169,7 +183,10 @@ def gate(folder: str) -> bool:
                 except Quarantined:
                     raise
                 except Exception as e:
-                    logger.warning(f"  av scan: could not scan {filepath}: {e}")
+                    logger.error(f"  av scan: could not scan {filepath}: {e}")
+                    raise ScanError(
+                        f"could not scan {filepath}: {e}"
+                    ) from e
     finally:
         sock.close()
     return True
