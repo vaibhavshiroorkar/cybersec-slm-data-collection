@@ -65,7 +65,7 @@ def __getattr__(name: str):
 CATALOG_COLUMNS: tuple[str, ...] = (
     "Name", "Sub-Domain", "Field", "Country", "Description", "Dataset Link", "File Count",
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
-    "Cleaned Size (MB)", "Cleaned Lines", "License", "Credential Ref",
+    "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License", "Credential Ref",
     "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
     "Date Added", "Author", "Popularity", "Tags", "Note",
 )

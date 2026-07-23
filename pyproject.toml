@@ -7,7 +7,7 @@ name = "cybersec-slm-data-pipeline"
 version = "0.1.0"
 description = "Collect, clean, and consolidate cybersecurity text data for SLM training."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 # Everything the pipeline needs to run at full quality, in one place: a plain
 # `uv sync` (or `pip install .`) installs all of it — no extras to remember.
 # The code still degrades gracefully if a package is somehow missing (cleaning

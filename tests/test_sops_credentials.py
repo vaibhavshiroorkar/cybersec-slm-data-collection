@@ -7,8 +7,8 @@ import datetime as dt
 
 def test_sops_decryption_core(monkeypatch):
     """Test that core.py invokes sops and sets environ appropriately."""
-    # We test it by mocking subprocess.run
-    from cybersec_slm import core
+    import importlib
+    import cybersec_slm.core as core
     
     mock_run = mock.Mock()
     mock_run.return_value.returncode = 0
@@ -17,18 +17,8 @@ def test_sops_decryption_core(monkeypatch):
     monkeypatch.setattr(subprocess, "run", mock_run)
     monkeypatch.setattr(os.path, "exists", lambda p: True)
     
-    # Normally this code runs on module import, so we can just simulate the block
-    try:
-        _proc = subprocess.run(["sops", "-d", "dummy.enc.yaml"], capture_output=True, text=True, timeout=10)
-        import yaml
-        _creds = yaml.safe_load(_proc.stdout) or {}
-        for _source, _fields in _creds.items():
-            if isinstance(_fields, dict) and "env" in _fields and "value" in _fields:
-                _env_key = _fields["env"]
-                if _env_key not in os.environ:
-                    os.environ[_env_key] = str(_fields["value"])
-    except Exception:
-        pass
+    # Reload the module to trigger the top-level SOPS code
+    importlib.reload(core)
         
     assert os.environ.get("TEST_KEY") == "secret123"
 
