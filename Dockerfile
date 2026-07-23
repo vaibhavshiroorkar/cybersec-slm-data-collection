@@ -1,4 +1,4 @@
-﻿# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1
 # Container image for the corpus build.
 #
 # Ordered for layer caching: the dependency set and the Chromium browser are
@@ -23,7 +23,9 @@ WORKDIR /app
 # ca-certificates: TLS for httpx (sources / NVD / HuggingFace).  git: the
 # provenance manifest stamps the commit via `git rev-parse`.  Clean apt lists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates git \
+        ca-certificates git curl \
+    && curl -sLo /usr/local/bin/sops https://github.com/getsops/sops/releases/download/v3.9.4/sops-v3.9.4.linux.amd64 \
+    && chmod +x /usr/local/bin/sops \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Phase 1: dependencies only (cached unless pyproject.toml / uv.lock change) ──

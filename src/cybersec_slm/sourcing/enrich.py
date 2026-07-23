@@ -181,12 +181,10 @@ class Enricher:
     value discovery already set.
     """
 
-    def __init__(self, *, client=None, github_token: str | None = None,
-                 timeout: float = 8.0):
+    def __init__(self, *, client=None, timeout: float = 8.0):
         import threading
 
         self._client = client
-        self._token = github_token or os.getenv("GITHUB_TOKEN") or None
         self._timeout = timeout
         self._github_ok = True
         # ``enrich`` is called concurrently from a discovery thread pool; the only
@@ -220,8 +218,10 @@ class Enricher:
                     github_ok = self._github_ok
                 if github_ok:
                     repo = re.sub(r"\.git$", "", gh.group(2))
+                    token_env = row.get("Credential Ref") or "GITHUB_TOKEN"
+                    token = os.environ.get(token_env)
                     meta = _enrich_github(gh.group(1), repo, client=self._client,
-                                          token=self._token, timeout=self._timeout)
+                                          token=token, timeout=self._timeout)
             else:
                 meta = _enrich_url(link, client=self._client, timeout=self._timeout)
         except _RateLimited:
@@ -237,8 +237,7 @@ class Enricher:
         return row
 
 
-def enrich_row(row: dict, *, client=None, github_token: str | None = None,
+def enrich_row(row: dict, *, client=None,
                timeout: float = 8.0) -> dict:
-    """One-shot convenience wrapper around :class:`Enricher` for a single row."""
-    return Enricher(client=client, github_token=github_token,
-                    timeout=timeout).enrich(row)
+    """Enrich one row synchronously (convenience wrapper)."""
+    return Enricher(client=client, timeout=timeout).enrich(row)

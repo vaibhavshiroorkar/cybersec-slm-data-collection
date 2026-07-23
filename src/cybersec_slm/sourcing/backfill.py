@@ -102,7 +102,12 @@ def backfill_licenses(csv_path: str | None = None, *, only_blank: bool = True,
         host = _host(url)
         bucket = by_host.setdefault(host, {"scanned": 0, "found": 0})
         bucket["scanned"] += 1
-        lic = detect_license(url, client=client, github_token=token)
+        
+        cred = str(df.at[i, "Credential Ref"] or "").strip() if "Credential Ref" in df.columns else ""
+        token_env = cred if cred else "GITHUB_TOKEN"
+        row_token = os.getenv(token_env) or token
+        
+        lic = detect_license(url, client=client, github_token=row_token)
         if lic:
             df.at[i, "License"] = lic
             detected += 1

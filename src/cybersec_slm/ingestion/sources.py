@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """CSV-driven source catalog (offline / local file).
 
 Reads a local CSV describing what to fetch and maps each row to a *source
@@ -65,7 +65,7 @@ def __getattr__(name: str):
 CATALOG_COLUMNS: tuple[str, ...] = (
     "Name", "Sub-Domain", "Field", "Country", "Description", "Dataset Link", "File Count",
     "Category", "Original Format", "Original Size (MB)", "JSONL Size (MB)",
-    "Total Lines", "Cleaned Size (MB)", "Cleaned Lines", "License",
+    "Cleaned Size (MB)", "Cleaned Lines", "License", "Credential Ref",
     "Last Updated", "Uploaded?", "Cleaned?", "Verified?", "Is Synthetic?",
     "Date Added", "Author", "Popularity", "Tags", "Note",
 )
@@ -274,6 +274,7 @@ def _row_to_descriptor(row: dict) -> dict | None:
                 default="") or "").lower()
     access = (_val(row, "access_method", "access", default="") or "").lower()
     lic = _val(row, "license", default="to-verify")
+    credential_ref = _val(row, "credential_ref", "credential")
     domain = _domain_for(row)
     desc = _val(row, "description", "notes", default=name)
     slug = _val(row, "slug", default=slugify(name))
@@ -314,23 +315,23 @@ def _row_to_descriptor(row: dict) -> dict | None:
             m = re.search(r"/datasets/([^/]+/[^/?#]+)", url)
             ref = m.group(1) if m else slug
         return dict(kind=kind, ref=ref, domain=domain, description=desc,
-                    license=lic, url=url)
+                    license=lic, url=url, credential_ref=credential_ref)
     if kind in ("url", "github"):
         ref = _val(row, "ref", default=slug)
         return dict(kind=kind, ref=ref, domain=domain, description=desc,
-                    license=lic, url=url)
+                    license=lic, url=url, credential_ref=credential_ref)
     if kind == "pdf":
         return dict(kind="pdf", domain=domain, slug=slug, title=name,
-                    license=lic or GOV_US, url=url)
+                    license=lic or GOV_US, url=url, credential_ref=credential_ref)
     if kind == "api":
         return dict(kind="api", domain=domain, slug=slug, title=name,
-                    license=lic or GOV_US, url=url)
+                    license=lic or GOV_US, url=url, credential_ref=credential_ref)
     if kind == "xml":
         return dict(kind="xml", domain=domain, slug=slug, title=name,
-                    license=lic, url=url)
+                    license=lic, url=url, credential_ref=credential_ref)
     if kind == "feed":
         return dict(kind="feed", domain=domain, slug=slug, title=name,
-                    license=lic, url=url, json_key=_feed_key(slug, row))
+                    license=lic, url=url, json_key=_feed_key(slug, row), credential_ref=credential_ref)
     if kind == "rss":
         # metadata_only stamps the feed as a facts-only index (title/date/URL). Set
         # by a "Metadata Only" catalog column, or forced when the licence is the
@@ -339,7 +340,7 @@ def _row_to_descriptor(row: dict) -> dict | None:
         meta_only = (_bool(_val(row, "metadata_only"))
                      or "metadata index" in (lic or "").lower())
         return dict(kind="rss", domain=domain, slug=slug, title=name,
-                    license=lic, url=url, metadata_only=meta_only)
+                    license=lic, url=url, metadata_only=meta_only, credential_ref=credential_ref)
     if kind == "website":
         prefix = _val(row, "allow_prefix")
         if not prefix:
@@ -348,7 +349,7 @@ def _row_to_descriptor(row: dict) -> dict | None:
         return dict(kind="website", domain=domain, slug=slug, start_url=url,
                     license=lic, use_js=_bool(_val(row, "use_js"), default=True),
                     max_pages=_int(_val(row, "max_pages", default="70"), 70),
-                    allow_prefix=prefix, description=desc)
+                    allow_prefix=prefix, description=desc, credential_ref=credential_ref)
     logger.warning(f"unknown kind {kind!r} for source {name!r}; skipping")
     return None
 

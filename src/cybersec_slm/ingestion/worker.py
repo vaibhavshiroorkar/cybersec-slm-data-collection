@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Per-source ingestion worker: fetch -> JSONL -> light EDA gate.
 
 `process_source` is a top-level (picklable) function so it can run inside a
@@ -55,7 +55,7 @@ def _fetch_one(descriptor: dict, log) -> str:
         # NVD CVE 2.0 — paginated REST API (key only raises the rate limit).
         fetch_nvd.fetch_nvd(domain, slug, descriptor["title"], descriptor["license"],
                             descriptor["url"], log,
-                            api_key=os.environ.get("NVD_API_KEY"))
+                            api_key=os.environ.get(descriptor.get("credential_ref") or "NVD_API_KEY"))
     elif kind == "xml":
         scrape.scrape_cwe(domain, slug, descriptor["title"], descriptor["license"],
                           descriptor["url"], log)

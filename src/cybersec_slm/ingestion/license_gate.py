@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Commercial-only license gate for ingestion.
 
 A source is fetched only if its license clearly permits *unencumbered commercial
@@ -175,8 +175,7 @@ def _fetch_hf_license(ref: str) -> str | None:
     return None
 
 
-def _fetch_github_license(url: str) -> str | None:
-    if not url: return None
+def _github_license_from_api(url: str, credential_ref: str | None = None) -> str | None:
     import requests
     m = re.search(r"github\.com/([^/]+)/([^/]+)", url)
     if m:
@@ -184,7 +183,8 @@ def _fetch_github_license(url: str) -> str | None:
         repo = repo.replace(".git", "")
         api_url = f"https://api.github.com/repos/{owner}/{repo}/license"
         headers = {"Accept": "application/vnd.github.v3+json"}
-        token = os.environ.get("GITHUB_TOKEN")
+        token_env = credential_ref if credential_ref else "GITHUB_TOKEN"
+        token = os.environ.get(token_env)
         if token:
             headers["Authorization"] = f"token {token}"
         try:
@@ -223,7 +223,7 @@ def is_license_ok(descriptor: dict) -> tuple[bool, str]:
     if kind == "hf":
         fetched = _fetch_hf_license(descriptor.get("ref"))
     elif kind == "github":
-        fetched = _fetch_github_license(descriptor.get("url") or descriptor.get("start_url"))
+        fetched = _github_license_from_api(descriptor.get("url") or descriptor.get("start_url"), descriptor.get("credential_ref"))
         
     if fetched:
         logger.info(f"Dynamically fetched missing license: {fetched!r}")
