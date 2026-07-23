@@ -5,6 +5,16 @@
 # Stage 1 "Credential Exposure" + gap "Unmonitored Code"); GitHub server-side
 # secret scanning backs them up for hooks that get bypassed.
 repos:
+  - repo: local
+    hooks:
+      - id: block-plaintext-secrets
+        name: block unencrypted secrets/credentials.yaml
+        language: fail
+        entry: >
+          Refusing to commit plaintext secrets/credentials.yaml -- encrypt it first:
+          cp secrets/credentials.yaml secrets/credentials.enc.yaml && sops -e -i secrets/credentials.enc.yaml && rm secrets/credentials.yaml
+        files: ^secrets/credentials\.yaml$
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
     hooks:

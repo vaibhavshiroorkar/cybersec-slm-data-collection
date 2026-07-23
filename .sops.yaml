@@ -1,0 +1,11 @@
+# SOPS encryption rules. Anything matching path_regex below is transparently
+# encrypted/decrypted by `sops` using the age recipient(s) listed.
+#
+# Generate an operator key once per machine:
+#   age-keygen -o ~/.config/sops/age/keys.txt
+# Replace the placeholder public key below with the one it prints.
+# The private key file NEVER leaves the operator's machine and is NEVER
+# committed -- only the public key belongs in this file.
+creation_rules:
+  - path_regex: 'secrets[/\\].*\.enc\.yaml$'
+    age: age13t863dke47rf6xgqfyexhal4stzw98wt3nshcycm7pxfcr889qeqc6t5xg

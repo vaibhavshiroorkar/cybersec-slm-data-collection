@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Shared core used by every pipeline stage: one place per purpose.
 
 Holds what ingestion and cleaning both need: an optional-dependency loader,
@@ -50,6 +50,30 @@ if _dotenv is not None:
         _repo_env if os.path.exists(_repo_env) else "")
     if _env_path:
         _dotenv.load_dotenv(_env_path)
+
+# ------------------------------------------------------------- SOPS loading ---
+_sops_env = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "secrets", "credentials.enc.yaml")
+
+if os.path.exists(_sops_env):
+    import subprocess
+    import sys
+    try:
+        _proc = subprocess.run(
+            ["sops", "-d", _sops_env], capture_output=True, text=True, timeout=10)
+        if _proc.returncode == 0:
+            import yaml
+            _creds = yaml.safe_load(_proc.stdout) or {}
+            for _source, _fields in _creds.items():
+                if isinstance(_fields, dict) and "env" in _fields and "value" in _fields:
+                    _env_key = _fields["env"]
+                    if _env_key not in os.environ:
+                        os.environ[_env_key] = str(_fields["value"])
+        else:
+            print(f"warning: could not decrypt {_sops_env}: {_proc.stderr.strip()}", file=sys.stderr)
+    except Exception as e:
+        print(f"warning: failed to load SOPS credentials: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------- paths ------

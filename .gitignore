@@ -10,7 +10,9 @@ service-account*.json
 gcp-*.json
 kaggle.json
 access_token
-secrets/
+secrets/*
+!secrets/*.enc.yaml
+!secrets/*.yaml.example
 
 # Python
 __pycache__
