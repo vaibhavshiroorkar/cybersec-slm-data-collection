@@ -14,19 +14,29 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENC_PATH = os.path.join(REPO_ROOT, "secrets", "credentials.enc.yaml")
 
 
+PERMITTED_ROTATORS = {
+    # Add mapped scripts here. They must be absolute paths to trusted local scripts.
+    # e.g., "github_app": [sys.executable, os.path.join(REPO_ROOT, "tools", "rotate_github_app.py")]
+}
+
 def rotate_credential(source: str, fields: dict) -> bool:
     """Attempt to programmatically rotate a credential.
-    Executes an external command or script if provided in 'rotation_cmd'.
+    Executes a pre-approved script if provided in 'rotation_handler'.
     Returns True if successfully rotated and fields were updated in-place.
     """
-    cmd = fields.get("rotation_cmd")
-    if not cmd:
-        print(f"[{source}] No rotation_cmd configured, skipping auto-rotation.", file=sys.stderr)
+    handler = fields.get("rotation_handler")
+    if not handler:
+        print(f"[{source}] No rotation_handler configured, skipping auto-rotation.", file=sys.stderr)
         return False
         
-    print(f"[{source}] Initiating credential rotation via '{cmd}'...", file=sys.stderr)
+    cmd = PERMITTED_ROTATORS.get(handler)
+    if not cmd:
+        print(f"[{source}] Unknown or forbidden rotation_handler '{handler}'.", file=sys.stderr)
+        return False
+        
+    print(f"[{source}] Initiating credential rotation via handler '{handler}'...", file=sys.stderr)
     try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if proc.returncode == 0:
             new_val = proc.stdout.strip()
             if new_val:

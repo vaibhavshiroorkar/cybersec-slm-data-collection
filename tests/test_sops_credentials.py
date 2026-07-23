@@ -15,7 +15,13 @@ def test_sops_decryption_core(monkeypatch):
     mock_run.return_value.stdout = "test_source:\n  env: TEST_KEY\n  value: 'secret123'"
     
     monkeypatch.setattr(subprocess, "run", mock_run)
-    monkeypatch.setattr(os.path, "exists", lambda p: True)
+    orig_exists = os.path.exists
+    def mock_exists(p):
+        if "credentials.enc.yaml" in str(p) or "dummy.enc.yaml" in str(p):
+            return True
+        return orig_exists(p)
+        
+    monkeypatch.setattr(os.path, "exists", mock_exists)
     
     # Reload the module to trigger the top-level SOPS code
     importlib.reload(core)
