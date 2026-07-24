@@ -1,12 +1,13 @@
-"""Seeing the executables an archive shipped, instead of silently deleting them.
+"""Seeing the executables an archive shipped, and rejecting the source.
 
 Ingestion keeps only EXT_PRIORITY files out of an extracted archive; everything
-else was dropped with no log line and no ledger entry, then rmtree'd. A repo
-could ship a malicious binary and the pipeline reported nothing. Nothing is
-executed either way; the gap is that nothing was ever *reported*.
+else was silently dropped with no log line. A repo could ship a malicious binary
+and the pipeline reported nothing. Nothing is executed either way; the gap is
+that a source shipping malware must be rejected outright.
 """
 
 import os
+import pytest
 
 from cybersec_slm.core import DEFAULT_PROFILE as PROFILE
 from cybersec_slm.ingestion import binscan
@@ -176,3 +177,26 @@ def test_report_never_fails_the_fetch(tmp_path, monkeypatch):
 
 def test_findings_of_a_missing_report_is_empty(tmp_path):
     assert binscan.findings(str(tmp_path / "nope.jsonl")) == []
+
+
+# ------------------------------------------------------------- gate -----------
+def test_gate_raises_binary_found_and_logs(tmp_path, monkeypatch):
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
+    root = tmp_path / "z"
+    _write(root, "bin/tool.exe", b"MZ\x90\x00" + b"\x00" * 64)
+
+    with pytest.raises(binscan.BinaryFound) as e:
+        binscan.gate(str(root), source="evil-repo")
+
+    assert "ships 1 executable" in str(e.value)
+    # The report is still written even though it raised
+    assert binscan.findings(binscan.report_path())[0]["source"] == "evil-repo"
+
+
+def test_gate_passes_silently_for_clean_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(binscan, "LOGS", str(tmp_path / "logs" / PROFILE))
+    root = tmp_path / "z"
+    _write(root, "data.csv", b"col\n1\n")
+
+    binscan.gate(str(root), source="clean")  # should not raise
+    assert binscan.findings(binscan.report_path()) == []

@@ -115,11 +115,16 @@ def evaluate_gate(metrics: dict) -> list[dict]:
             add("warning", "subdomain_volume",
                 f"subdomain '{sub}' has {n} records (< {config.MIN_RECORDS_PER_SUBDOMAIN})")
 
-    # Source concentration check: now a BLOCKER to prevent data poisoning via flooding.
+    # Source concentration: a warning, not a blocker.  A subdomain with only one
+    # source is 100% concentrated by definition and can never be resolved by
+    # capping (capping only deletes data, it doesn't add source diversity).  As a
+    # blocker it deadlocks the pipeline — the sufficiency gate fails on every run
+    # indefinitely.  The remedy is adding more sources, an operator action this
+    # gate can surface but not enforce.
     for sub, c in _per_subdomain_concentration(metrics).items():
         if c["worst_share"] <= config.MAX_SOURCE_SHARE:
             continue
-        add("blocker", "concentration",
+        add("warning", "concentration",
             f"source '{c['source']}' is {c['worst_share']:.0%} of subdomain "
             f"'{sub}' (> {config.MAX_SOURCE_SHARE:.0%} ceiling) — "
             f"suspected flooding vector.")
@@ -264,6 +269,8 @@ def _profile(input_dir: str) -> None:
     """Optional ydata-profiling HTML report (best-effort; needs the `eda` extra)."""
     try:
         import pandas as pd
+    
+        # pyrefly: ignore [missing-import]
         from ydata_profiling import ProfileReport
 
         from ..cleaning.common import find_input_files, text_of

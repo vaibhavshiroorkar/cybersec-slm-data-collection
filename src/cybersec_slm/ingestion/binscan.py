@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Report the executables an archive shipped, rather than deleting them unseen.
+"""Detect executables in fetched archives and reject the source.
 
 Ingestion keeps only :data:`common.EXT_PRIORITY` files out of an extracted
 archive. Everything else -- ``.exe``, ``.dll``, ``.so``, nested archives, Office
-documents -- was dropped with no log line and no ledger entry, and then the
-extraction directory was ``rmtree``'d. A repo could ship a malicious binary and
-the pipeline would report nothing at all.
-
-Note what the gap is and is not. Nothing here is ever executed: the readers parse
-CSV/JSON/Parquet and a binary matches no reader. So the risk is not that the
-pipeline runs it; the risk is that a corpus built from a repo carrying malware
-looks, in every artifact, identical to one built from a clean repo. This module
-makes the difference visible. It reports; it does not sandbox, and it does not
-block -- deciding what to do about a flagged source is an operator's call.
+documents -- was silently dropped with no log line. A repo could ship a malicious
+binary and the pipeline would report nothing at all.
 
 Detection is on magic bytes, not the extension, because the extension is the
 attacker's to choose: an ``innocent.csv`` that starts with ``MZ`` is exactly the
 case a name-based check waves through.
+
+The spec requires "reject or quarantine anything that fails a scan; never process
+anyway with a warning". :func:`gate` enforces this: when it finds executables it
+logs the report **and** raises :class:`BinaryFound` so the worker rejects the
+source before any further processing. The report is still written to
+``logs/binary_scan.jsonl`` for operator visibility.
 """
 
 from __future__ import annotations
@@ -26,6 +24,15 @@ import os
 import time
 
 from ..core import LOGS, logger
+
+
+class BinaryFound(RuntimeError):
+    """Raised when a source's archive contains executables.
+
+    The spec says "reject or quarantine, never process anyway".  A source
+    shipping executables is rejected: this exception propagates to the worker
+    which sets ``status="rejected"``.
+    """
 
 # One line per source that shipped a binary. A sidecar rather than a column on the
 # ingest ledger: IngestLog.COLS is a fixed schema several readers depend on, and
@@ -157,6 +164,22 @@ def report(root: str, *, source: str, url: str = "", domain: str = "") -> dict |
     except Exception as e:                       # noqa: BLE001 - best-effort
         logger.debug(f"binscan: {source}: {type(e).__name__}: {e}")
         return None
+
+
+def gate(root: str, *, source: str, url: str = "", domain: str = "") -> None:
+    """Scan ``root`` for executables; raise :class:`BinaryFound` if any exist.
+
+    Calls :func:`report` first so the finding is always logged, then raises so
+    the source is rejected.  Clean archives pass silently.
+    """
+    entry = report(root, source=source, url=url, domain=domain)
+    if entry is not None:
+        total = entry.get("total", len(entry.get("findings", [])))
+        kinds = ", ".join(f"{k}x{n}" for k, n
+                          in sorted((entry.get("by_kind") or {}).items()))
+        raise BinaryFound(
+            f"source '{source}' ships {total} executable(s) ({kinds}); "
+            f"rejected per policy — see logs/{REPORT_NAME}")
 
 
 def _by_kind(root: str) -> dict[str, int]:

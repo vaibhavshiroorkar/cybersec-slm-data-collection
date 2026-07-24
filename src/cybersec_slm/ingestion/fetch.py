@@ -255,11 +255,10 @@ def fetch_url(url, domain, desc, lic, folder, log, kind="url"):
         # it declares are a claim. safe_extract checks them before writing a byte.
         archive.safe_extract(orig, zdir)
         os.remove(orig)
-        # Report the executables before the filter below drops them and the
-        # rmtree deletes the evidence. Nothing here runs them; the point is that a
-        # corpus built from a repo carrying malware used to look identical, in
-        # every artifact, to one built from a clean repo.
-        binscan.report(zdir, source=stem, url=url, domain=domain)
+        # Scan the extracted archive for executables (magic-byte check).
+        # The spec requires rejecting any source that ships them, rather than
+        # silently dropping the files and ingesting the rest.
+        binscan.gate(zdir, source=stem, url=url, domain=domain)
         data = [os.path.join(r, f) for r, _d, fs in os.walk(zdir) for f in fs
                 if f.lower().endswith(EXT_PRIORITY)
                 and not any(s in f.lower() for s in SKIP_SUBSTRINGS)]

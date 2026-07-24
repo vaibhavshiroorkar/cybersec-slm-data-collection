@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 
 from ..core import RAW_DATA, logger
-from . import fetch, fetch_nvd, light_eda, rss, scrape, scrape_html, av_scan
+from . import fetch, fetch_nvd, light_eda, rss, scrape, scrape_html, av_scan, binscan
 from .common import _Collector
 from .license_gate import is_license_ok
 from .sources import descriptor_key, synthetic_identities
@@ -168,6 +168,11 @@ def process_source(
     except av_scan.Quarantined as ex:
         result["status"] = "rejected"
         result["error"] = f"quarantined: {ex}"
+        result["ingest_rows"] = collector.rows
+        logger.error(f"  FAILED {label}: {result['error']}")
+    except binscan.BinaryFound as ex:
+        result["status"] = "rejected"
+        result["error"] = f"rejected (binary found): {ex}"
         result["ingest_rows"] = collector.rows
         logger.error(f"  FAILED {label}: {result['error']}")
     except Exception as ex:  # isolate: never crash the pool over one source
